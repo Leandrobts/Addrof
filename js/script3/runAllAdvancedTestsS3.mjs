@@ -2,47 +2,78 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypedArrayVictimAddrofTest_FixProbeCapture,   // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V17_FPC    // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFinalFocus,   // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF    // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_FixProbeCapture";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (FixProbeCapture) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_CorrectedCaptureLogAndFinalFocus";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (CorrectedCaptureLogAndFinalFocus) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_FixProbeCapture(); 
+    const result = await executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFinalFocus(); 
 
-    // O log do total de chamadas da sonda já está dentro de executeTypedArrayVictimAddrofTest_FixProbeCapture
-    // e o result.total_probe_calls será 0 devido ao reset no finally.
+    // O log do total de chamadas da sonda já está dentro de execute...
+    // result.total_probe_calls será 0 aqui devido ao reset no finally do execute...
 
     if (result.errorOccurred) {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        document.title = `Heisenbug (TypedArray-FPC) ERR: ${result.errorOccurred.name}`;
+        document.title = `Heisenbug (TypedArray-CLFF) ERR: ${result.errorOccurred.name}`;
     } else if (result.potentiallyCrashed) { 
          logS3(`   RESULTADO: POTENCIAL ESTOURO DE PILHA. Detalhes da sonda: ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "critical", FNAME_RUNNER);
-         document.title = `Heisenbug (TypedArray-FPC) StackOverflow?`;
+         document.title = `Heisenbug (TypedArray-CLFF) StackOverflow?`;
     } else {
         logS3(`   RESULTADO: Completou. Detalhes da ÚLTIMA chamada da sonda (capturados externamente): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
         
+        let heisenbugConfirmedByLastProbe = false;
+        if (result.toJSON_details && result.toJSON_details.probe_called && 
+            result.toJSON_details.this_type_in_toJSON === "[object Object]") {
+            heisenbugConfirmedByLastProbe = true;
+        }
+
+        if (result.addrof_A_attempt_result && result.addrof_A_attempt_result.success) {
+             logS3(`     ADDROF A SUCESSO! ${result.addrof_A_attempt_result.message}`, "vuln", FNAME_RUNNER);
+        } else if (result.addrof_A_attempt_result) {
+             logS3(`     ADDROF A FALHOU: ${result.addrof_A_attempt_result.message}`, heisenbugConfirmedByLastProbe ? "warn" : "error", FNAME_RUNNER);
+        }
+        if (result.addrof_B_attempt_result && result.addrof_B_attempt_result.success) {
+             logS3(`     ADDROF B SUCESSO! ${result.addrof_B_attempt_result.message}`, "vuln", FNAME_RUNNER);
+        } else if (result.addrof_B_attempt_result) {
+             logS3(`     ADDROF B FALHOU: ${result.addrof_B_attempt_result.message}`, heisenbugConfirmedByLastProbe ? "warn" : "error", FNAME_RUNNER);
+        }
+
         if (result.toJSON_details && result.toJSON_details.error_in_toJSON) {
             logS3(`     ERRO INTERNO NA ÚLTIMA SONDA: ${result.toJSON_details.error_in_toJSON}`, "warn", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-FPC) toJSON_ERR`;
-        } else if (result.heisenbug_confirmed_via_capture) {
-            logS3(`     !!!! HEISENBUG CONFIRMADA EXTERNAMENTE !!!! 'this' type na última sonda capturada: ${result.toJSON_details.this_type_in_toJSON}`, "vuln", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-FPC) TC Confirmed`;
-        } else {
-            logS3(`     Heisenbug NÃO confirmada externamente. Último tipo de 'this' capturado: ${result.toJSON_details ? result.toJSON_details.this_type_in_toJSON : 'N/A'}`, "warn", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-FPC) TC Not Confirmed`;
+            document.title = `Heisenbug (TypedArray-CLFF) toJSON_ERR`;
+        } else if (heisenbugConfirmedByLastProbe) {
+            logS3(`     !!!! TYPE CONFUSION NO 'this' DA ÚLTIMA SONDA CAPTURADA EXTERNAMENTE !!!! Call #${result.toJSON_details.call_number}, Tipo: ${result.toJSON_details.this_type_in_toJSON}`, "critical", FNAME_RUNNER);
+            if (result.toJSON_details.this_is_victim_ref !== undefined) { 
+                logS3(`       Na última sonda ('this' confuso), 'this' === victim? ${result.toJSON_details.this_is_victim_ref}`, "info");
+            }
+            if (result.toJSON_details.this_is_prev_probe_return_marker !== undefined) {
+                 logS3(`       Na última sonda ('this' confuso), 'this' era o retorno da sonda anterior (call #${result.toJSON_details.prev_probe_call_marker_val})? ${result.toJSON_details.this_is_prev_probe_return_marker}`, "info");
+            }
+            if (result.toJSON_details.writes_attempted_on_this) { 
+                 logS3(`       Escritas addrof tentadas no 'this' confuso: ${result.toJSON_details.writes_attempted_on_this}`, "info");
+                 logS3(`       Chaves do 'this' confuso após escritas: ${result.toJSON_details.this_keys_after_write ? result.toJSON_details.this_keys_after_write.join(',') : 'N/A'}`, "leak");
+            }
+
+            if (!document.title.includes("SUCESSO") && !document.title.includes("Addr Falhou")) {
+                 document.title = `Heisenbug (TypedArray-CLFF) Sonda OK, Addr Falhou`;
+            }
+        } else if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF) || document.title.includes("Probing")) {
+            if (!document.title.includes("SUCESSO") && !document.title.includes("Addr Falhou")) {
+                 document.title = `Heisenbug (TypedArray-CLFF) Test OK`;
+            }
         }
     }
     logS3(`   Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug (FixProbeCapture) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (CorrectedCaptureLogAndFinalFocus) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V17_FPC}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -50,18 +81,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Corrigindo Captura de Detalhes da Sonda ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Heisenbug com TypedArray (CorrectedCaptureLogAndFinalFocus) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V17_FPC)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && 
-            !document.title.includes("Confirmed") && // Abrange "TC Confirmed" e "TC NOT Confirmed"
-            !document.title.includes("ERR")) { 
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V17_FPC} Concluído`;
+            !document.title.includes("SUCESSO") && !document.title.includes("Addr Falhou") && 
+            !document.title.includes("ERR") && !document.title.includes("Sonda OK")) { 
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF} Concluído`;
         }
     }
 }
