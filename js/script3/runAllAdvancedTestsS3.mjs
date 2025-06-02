@@ -2,13 +2,13 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypedArrayVictimAddrofTest_ReliableLogging,
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL
-} from './testArrayBufferVictimCrash.mjs';
+    executeTypedArrayVictimAddrofTest_ReliableLogging,   // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL    // NOME DO MÓDULO ATUALIZADO
+} from './testArrayBufferVictimCrash.mjs';     // O NOME DO ARQUIVO É MANTIDO CONFORME SEU USO
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_ReliableLogging";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (ReliableLogging) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_ReliableLogging"; // Nome do runner atualizado
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (ReliableLogging) ====`, 'test', FNAME_RUNNER);  // Mensagem atualizada
 
     const result = await executeTypedArrayVictimAddrofTest_ReliableLogging(); 
 
@@ -16,7 +16,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
         if (result.errorOccurred.name === 'RangeError') {
             logS3(`     RangeError: Maximum call stack size exceeded OCORREU!`, "vuln", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-RL) RangeError!`;
+            document.title = `Heisenbug (TypedArray-RL) RangeError!`; // RL para ReliableLogging
          } else {
             document.title = `Heisenbug (TypedArray-RL) ERR: ${result.errorOccurred.name}`;
          }
@@ -31,7 +31,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         } else if (result.toJSON_details && result.toJSON_details.probe_called && 
                     result.toJSON_details.this_type_in_toJSON === "[object Object]") {
             logS3(`     !!!! TYPE CONFUSION DETECTADA !!!! Tipo de 'this' na última sonda: ${result.toJSON_details.this_type_in_toJSON}`, "critical", FNAME_RUNNER);
-             if (result.toJSON_details.this_was_victim_ref_when_confused !== null) {
+             if (result.toJSON_details.this_was_victim_ref_when_confused !== null) { // Nome da propriedade atualizado
                 logS3(`       Na última sonda confusa, 'this' === victim_typed_array_ref_v5? ${result.toJSON_details.this_was_victim_ref_when_confused}`, "info");
             }
             if (result.toJSON_details.writes_attempted_on_confused_this) {
