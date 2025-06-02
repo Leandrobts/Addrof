@@ -7,8 +7,8 @@ import {
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_SepDeets_Debug";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_SepDeets_Debug"; // Mantido para DebugLog
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog_Fix1) ====`, 'test', FNAME_RUNNER); // Atualizado para Fix1
 
     const result = await executeTypedArrayVictimAddrofTest_SeparateDetails_DebugLog(); 
 
@@ -31,10 +31,10 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         } else if (result.toJSON_details && result.toJSON_details.probe_called && 
                     result.toJSON_details.this_type_in_toJSON === "[object Object]") {
             logS3(`     !!!! TYPE CONFUSION DETECTADA !!!! Tipo de 'this' na última sonda: ${result.toJSON_details.this_type_in_toJSON}`, "critical", FNAME_RUNNER);
-             if (result.toJSON_details.this_was_victim_ref_at_confusion !== null) { // Ajustado para o nome da v4
+             if (result.toJSON_details.this_was_victim_ref_at_confusion !== null) { 
                 logS3(`       Na última sonda confusa, 'this' === victim_typed_array_ref? ${result.toJSON_details.this_was_victim_ref_at_confusion}`, "info");
             }
-             if (result.toJSON_details.writes_attempted) {
+             if (result.toJSON_details.writes_attempted) { // nome da propriedade atualizado
                  logS3(`       Escritas addrof tentadas no 'this' confuso: ${result.toJSON_details.writes_attempted}`, "info");
             }
             document.title = `Heisenbug (TypedArray-SD-Debug) TYPE CONFUSION!`;
@@ -45,11 +45,11 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
     logS3(`   Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog_Fix1) CONCLUÍDA ====`, 'test', FNAME_RUNNER); // Atualizado para Fix1
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG}_MainOrchestrator_Fix1`; // Atualizado para Fix1
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -57,7 +57,7 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (SeparateDetails_DebugLog_Fix1) ====`, 'test', FNAME_ORCHESTRATOR); // Atualizado para Fix1
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
@@ -66,7 +66,7 @@ export async function runAllAdvancedTestsS3() {
 
     if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && !document.title.includes("SUCCESS") && !document.title.includes("ERR") && !document.title.includes("TYPE CONFUSION")) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG} Concluído`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS_DEBUG} Concluído (Fix1)`; // Atualizado para Fix1
         }
     }
 }
