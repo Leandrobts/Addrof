@@ -3,7 +3,7 @@ import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeArrayBufferVictimCrashTest,
-    FNAME_MODULE_V28 // Importado de testArrayBufferVictimCrash.mjs
+    FNAME_MODULE_V28
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_ABVictim() {
@@ -26,25 +26,24 @@ async function runHeisenbugReproStrategy_ABVictim() {
     } else {
         logS3(`   RESULTADO: Completou. Detalhes da sonda (toJSON_details): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
 
-        // Usar a estrutura de toJSON_details da V1.2
-        if (result.toJSON_details && result.toJSON_details.error_in_probe_for_victim) {
-            logS3(`     ERRO NA SONDA (processando victim_ab): ${result.toJSON_details.error_in_probe_for_victim}`, "warn", FNAME_RUNNER);
-            document.title = `Heisenbug (AB) ProbeVictimERR`;
-        } else if (result.toJSON_details && result.toJSON_details.probe_called_on_victim && result.toJSON_details.type_of_victim_ab_in_probe === "[object Object]") {
+        // Usar a estrutura de toJSON_details da V1.3
+        if (result.toJSON_details && result.toJSON_details.error_in_probe) { // Mudado de error_in_probe_for_victim
+            logS3(`     ERRO NA SONDA: ${result.toJSON_details.error_in_probe}`, "warn", FNAME_RUNNER);
+            document.title = `Heisenbug (AB) ProbeERR`;
+        } else if (result.toJSON_details && result.toJSON_details.victim_ab_seen_by_probe && result.toJSON_details.type_of_victim_ab_last_seen === "[object Object]") {
             // Esta é a condição que esperamos replicar do "Log de Referência"
-            logS3(`     !!!! TYPE CONFUSION ([object Object]) NO 'victim_ab' DETECTADA PELA SONDA !!!! Tipo: ${result.toJSON_details.type_of_victim_ab_in_probe}`, "critical", FNAME_RUNNER);
+            logS3(`     !!!! TYPE CONFUSION ([object Object]) NO 'victim_ab' DETECTADA PELA SONDA !!!! Último tipo obs no victim_ab: ${result.toJSON_details.type_of_victim_ab_last_seen}`, "critical", FNAME_RUNNER);
             if (result.addrof_attempt_result && result.addrof_attempt_result.success) {
                 document.title = `Heisenbug (AB) Addrof SUCCESS!`;
             } else {
-                 // TC detectada, mas addrof falhou ou não foi tentado a tempo (se addrof_write_attempted_on_victim for false)
                 document.title = `Heisenbug (AB) TYPE CONFUSION!`;
             }
-        } else if (result.toJSON_details && result.toJSON_details.probe_called_on_victim) {
-            logS3(`     Sonda chamada no victim_ab. Tipo observado: ${result.toJSON_details.type_of_victim_ab_in_probe}. Escrita tentada: ${result.toJSON_details.addrof_write_attempted_on_victim}`, "info", FNAME_RUNNER);
+        } else if (result.toJSON_details && result.toJSON_details.victim_ab_seen_by_probe) {
+            logS3(`     Sonda viu victim_ab. Último tipo obs: ${result.toJSON_details.type_of_victim_ab_last_seen}. Escrita tentada: ${result.toJSON_details.addrof_write_attempted_on_victim}`, "info", FNAME_RUNNER);
             if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V28.substring(0,10))) {
                  document.title = `Heisenbug (AB) NoConf`;
             }
-        } else { // Sonda não chamada no victim_ab ou outros casos
+        } else { 
             if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_V28.substring(0,10))) {
                 document.title = `Heisenbug (AB) Test OK`;
             }
