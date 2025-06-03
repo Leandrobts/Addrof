@@ -21,7 +21,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
              logS3(`     NOTA: TypeError de estrutura circular.`, "info");
         }
     } else {
-        logS3(`   RESULTADO: Completou. Detalhes da sonda onde C1 foi 'this' e confuso: ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A (C1 não foi 'this' confuso ou erro)'}`, "good", FNAME_RUNNER);
+        logS3(`   RESULTADO: Completou. Detalhes da sonda onde C1 foi 'this' e confuso: ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : "N/A (C1 não foi 'this' confuso ou erro)"}`, "good", FNAME_RUNNER);
         logS3(`   Stringify Output Final (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
         
         let heisenbugOnC1Confirmed = false;
