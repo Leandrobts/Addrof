@@ -2,28 +2,26 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypedArrayVictimAddrofTest_SprayAndCorruptPrimitiveArray,   // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA    // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_SprayAndCorruptPrimitiveArray_FixRefError,   // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE    // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runHeisenbugReproStrategy_TypedArrayVictim() { // Nome da função runner pode ser mais genérico agora
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_SprayAndCorruptPrimitiveArray"; // Atualizado
+async function runHeisenbugReproStrategy_TypedArrayVictim() { // Nome da função runner mantido por enquanto
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_SprayAndCorruptPrimitiveArray_FixRefError"; // Atualizado
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_SprayAndCorruptPrimitiveArray(); // Atualizado
+    const result = await executeTypedArrayVictimAddrofTest_SprayAndCorruptPrimitiveArray_FixRefError(); // Atualizado
 
-    logS3(`   Total de chamadas da sonda toJSON durante o teste: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER); 
+    // O log do total_probe_calls interno do execute... é mais preciso
+    // logS3(`   (Runner) Total de chamadas da sonda toJSON (do result): ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER); 
     
     if (result.errorOccurred) { 
         logS3(`   RUNNER: Teste principal capturou ERRO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}: MainTest ERR!`; 
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}: MainTest ERR!`; 
     } else {
         logS3(`   RUNNER: Teste Completou. Stringify Output Final (Parseado Array): ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "good", FNAME_RUNNER);
-        // result.toJSON_details agora é um array de todos os detalhes de chamadas da sonda
         if (result.toJSON_details && Array.isArray(result.toJSON_details)) {
             logS3(`   RUNNER: Detalhes de todas as ${result.toJSON_details.length} chamadas da sonda: ${JSON.stringify(result.toJSON_details)}`, "dev_verbose");
-        } else {
-            logS3(`   RUNNER: Detalhes das chamadas da sonda não capturados ou não é array.`, "warn");
         }
 
         let anyAddrofSuccess = false;
@@ -39,17 +37,16 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() { // Nome da funçã
         }
         
         if (anyAddrofSuccess) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}: AddrInArray SUCCESS!`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}: AddrInArray SUCCESS!`;
         } else {
-            // Verificar se a sonda foi chamada para os objetos de leak
-            let objectLeakAttempted = false;
+            let objectLeakAttemptedInProbe = false;
             if (result.toJSON_details && Array.isArray(result.toJSON_details)) {
-                objectLeakAttempted = result.toJSON_details.some(d => d.this_is_victim_array_el && d.this_type === '[object Object]');
+                objectLeakAttemptedInProbe = result.toJSON_details.some(d => d.this_is_victim_array_el && d.this_type === '[object Object]');
             }
-            if(objectLeakAttempted) {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}: ObjInArray Processed, Addr Fail`;
+            if(objectLeakAttemptedInProbe) {
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}: ObjInArrayProcessed, AddrFail`;
             } else {
-                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}: Test OK, No Clear TC/Addr`;
+                 document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}: Test OK`;
             }
         }
     }
@@ -60,7 +57,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() { // Nome da funçã
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}_MainOrchestrator`; // Atualizado
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -68,18 +65,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Heisenbug (${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA}) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Heisenbug (${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE}) ====`, 'test', FNAME_ORCHESTRATOR); // Atualizado
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE)) { // Atualizado
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && 
-            !document.title.includes("SUCCESS") && !document.title.includes("Addr Fail") && 
+            !document.title.includes("SUCCESS") && !document.title.includes("AddrFail") && // Corrigido para AddrFail
             !document.title.includes("ERR") && !document.title.includes("Processed")) { 
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85_SACPA} Test Done`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V85A_FRE} Test Done`; // Atualizado
         }
     }
 }
