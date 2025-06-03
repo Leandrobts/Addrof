@@ -2,15 +2,15 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_FixInitialization, // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_StabilizeCall2, // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2 // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_FixInitialization";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (FixInitialization) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_StabilizeCall2";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (StabilizeCall2) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_FixInitialization();
+    const result = await executeTypedArrayVictimAddrofTest_StabilizeCall2();
 
     logS3(`  Total de chamadas da sonda toJSON: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER);
     if (result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0) {
@@ -19,7 +19,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
 
     if (result.errorOccurred) {
         logS3(`  RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        document.title = `Heisenbug (TypedArray-FI) ERR: ${result.errorOccurred.name}`;
+        document.title = `Heisenbug (TypedArray-SC2) ERR: ${result.errorOccurred.name}`;
         if (result.errorOccurred.name === 'TypeError' && result.errorOccurred.message.includes("circular structure")) {
             logS3(`    NOTA: TypeError de estrutura circular. Isso é um SINAL MUITO BOM de controle profundo!`, "good", FNAME_RUNNER);
         }
@@ -52,25 +52,25 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
             lastCallProbeDetails = result.all_probe_calls_for_analysis[result.all_probe_calls_for_analysis.length-1];
         }
         if (lastCallProbeDetails && lastCallProbeDetails.error_in_probe) {
-            logS3(`    ERRO INTERNO NA ÚLTIMA SONDA REGISTRADA: ${lastCall_probe_details.error_in_probe}`, "warn", FNAME_RUNNER);
+            logS3(`    ERRO INTERNO NA ÚLTIMA SONDA REGISTRADA: ${lastCallProbeDetails.error_in_probe}`, "warn", FNAME_RUNNER);
         }
 
         if (anyAddrofSuccess) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI}: Addr SUCCESS!`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2}: Addr SUCCESS!`;
         } else if (heisenbugConfirmed) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI}: Heisenbug OK, Addr Fail`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2}: Heisenbug OK, Addr Fail`;
         } else {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI}: No Heisenbug?`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2}: No Heisenbug?`;
         }
     }
     logS3(`  Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug (FixInitialization) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (StabilizeCall2) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI}_MainOrchestrator`;
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2}_MainOrchestrator`;
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -78,18 +78,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (FixInitialization) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (StabilizeCall2) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") &&
             !document.title.includes("SUCCESS") && !document.title.includes("Addr Fail") &&
             !document.title.includes("ERR") && !document.title.includes("Heisenbug OK")) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V49_FI} Concluído`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V50_SC2} Concluído`;
         }
     }
 }
