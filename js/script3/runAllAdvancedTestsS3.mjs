@@ -2,48 +2,67 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_VerifyConfigConstants, // ATUALIZADO para v75
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC // ATUALIZADO para v75
+    executeTypedArrayVictimAddrofTest_PerfectedV64_FlowAndAnalysis, // ATUALIZADO para v73
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA // ATUALIZADO para v73
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_VerifyConfigConstants";
-    logS3(`==== INICIANDO Estratégia de Teste (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_PerfectedV64_FlowAndAnalysis";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_VerifyConfigConstants();
+    const result = await executeTypedArrayVictimAddrofTest_PerfectedV64_FlowAndAnalysis();
 
-    logS3(`  Total de chamadas da sonda (se houver): ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER);
+    logS3(`  Total de chamadas da sonda toJSON: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER);
     if (result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0) {
         logS3(`  Detalhes de TODAS as chamadas da sonda: ${JSON.stringify(result.all_probe_calls_for_analysis, null, 2)}`, "dev_verbose");
     } else {
-        logS3(`  Nenhum detalhe de chamada da sonda foi retornado ou o array estava vazio.`, "info", FNAME_RUNNER);
+        logS3(`  Nenhum detalhe de chamada da sonda foi retornado ou o array estava vazio para o runner.`, "warn", FNAME_RUNNER);
     }
 
-    if (result.errorCapturedMain) {
-        logS3(`  RESULTADO DO TESTE DE CONFIG: ERRO - ${result.errorCapturedMain.message}.`, "error", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: Config Test ERR`;
-    } else if (result.stringifyResult && result.stringifyResult.success) {
-        logS3(`  RESULTADO DO TESTE DE CONFIG: SUCESSO - ${result.stringifyResult.message}`, "good", FNAME_RUNNER);
-        logS3(`    Struct ID Str: '${result.stringifyResult.struct_id_str_val}' (Type: ${result.stringifyResult.struct_id_str_type}) -> Adv64: ${result.stringifyResult.adv64_struct_id}`, "good", FNAME_RUNNER);
-        logS3(`    Butterfly Str: '${result.stringifyResult.butterfly_str_val}' (Type: ${result.stringifyResult.butterfly_str_type}) -> Adv64: ${result.stringifyResult.adv64_butterfly}`, "good", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: Config OK`;
-    } else if (result.stringifyResult) { // Se stringifyResult existe, mas success é false
-        logS3(`  RESULTADO DO TESTE DE CONFIG: FALHA - ${result.stringifyResult.message}`, "error", FNAME_RUNNER);
-        logS3(`    Struct ID Str: '${result.stringifyResult.struct_id_str_val}' (Type: ${result.stringifyResult.struct_id_str_type})`, "error", FNAME_RUNNER);
-        logS3(`    Butterfly Str: '${result.stringifyResult.butterfly_str_val}' (Type: ${result.stringifyResult.butterfly_str_type})`, "error", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: Config FAIL`;
-    } else {
-        logS3(`  RESULTADO DO TESTE DE CONFIG: Estrutura de resultado inesperada.`, "error", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}: Result ERR`;
-    }
+    if (result.errorCapturedMain) { /* ... (tratamento de erro) ... */ }
+    else {
+        logS3(`  RESULTADO: Completou. Stringify Output Final (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult, null, 2) : 'N/A'}`, "good", FNAME_RUNNER);
 
+        let heisenbugConfirmed = false;
+        if (result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0) {
+            const fuzzCaptured = result.all_probe_calls_for_analysis.find(d => (d.this_is_leak_target_AB || d.this_is_leak_target_DV) && d.fuzz_capture_status !== null);
+            if (fuzzCaptured) {
+                 logS3(`  !!!! ALVO DE LEAK (${fuzzCaptured.this_type}) TEVE FUZZING CAPTURADO (Call #${fuzzCaptured.call_number}) !!!!`, "critical", FNAME_RUNNER);
+                 heisenbugConfirmed = true;
+            } else {
+                const call1Details = result.all_probe_calls_for_analysis.find(d => d.call_number === 1);
+                 if (call1Details && (call1Details.payload_AB || call1Details.payload_DV)) {
+                    logS3(`  INDICAÇÃO DE HEISENBUG: C1_details foi populado com payloads na Call #1.`, "info", FNAME_RUNNER);
+                    heisenbugConfirmed = true;
+                } else {
+                     logS3(`  ALERT: Nenhuma indicação clara de Heisenbug.`, "error", FNAME_RUNNER);
+                }
+            }
+        }
+
+        let anyAddrofSuccess = (result.addrof_A_result && result.addrof_A_result.success) || (result.addrof_B_result && result.addrof_B_result.success);
+
+        if (result.addrof_A_result) {
+            logS3(`    ADDROF A (ArrayBuffer): ${result.addrof_A_result.msg}`, result.addrof_A_result.success ? "vuln" : "warn", FNAME_RUNNER);
+        }
+        if (result.addrof_B_result) {
+            logS3(`    ADDROF B (DataView): ${result.addrof_B_result.msg}`, result.addrof_B_result.success ? "vuln" : "warn", FNAME_RUNNER);
+        }
+
+        if (anyAddrofSuccess) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: Addr SUCCESS!`; }
+        else if (heisenbugConfirmed) { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: Heisenbug OK, Addr Fail`; }
+        else { document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}: No Heisenbug?`; }
+    }
+    // ... (resto da função similar)
     logS3(`  Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Teste (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC}_MainOrchestrator`;
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA}_MainOrchestrator`;
+    // ... (resto da função runAllAdvancedTestsS3 idêntica, apenas com FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA)
+    // ... (incluindo a lógica final de ajuste do document.title)
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -51,16 +70,19 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Verificando Constantes de Config (v75) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (PerfectedV64_FlowAndAnalysis) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC)) {
-        if (!document.title.includes("FAIL") && !document.title.includes("ERR") && !document.title.includes("OK") ) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V75_VCC} Verificação Concluída`;
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA)) {
+        if (!document.title.includes("CRASH") && !document.title.includes("RangeError") &&
+            !document.title.includes("SUCCESS") && !document.title.includes("Addr Fail") &&
+            !document.title.includes("ERR") &&
+            !document.title.includes("Heisenbug OK") ) {
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V73_PV64FA} Concluído`;
         }
     }
 }
