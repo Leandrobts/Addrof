@@ -7,50 +7,49 @@ import {
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43"; // Pode manter R43 aqui, pois a estrutura é a mesma
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43";
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    // Chama a função de teste (que agora é R43b internamente, mas exportada como R43)
     const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
 
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R43(b): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R43(c): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
     } else if (result) {
-        logS3(`  RUNNER R43(b): Completou. Melhor OOB usado: ${result.oob_value_of_best_result || 'N/A'}`, "good", FNAME_RUNNER);
-        logS3(`  RUNNER R43(b): Detalhes Sonda TC (Best): ${result.tc_probe_details ? JSON.stringify(result.tc_probe_details) : 'N/A'}`, "leak", FNAME_RUNNER);
+        logS3(`  RUNNER R43(c): Completou. Melhor OOB usado: ${result.oob_value_of_best_result || 'N/A'}`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R43(c): Detalhes Sonda TC (Best): ${result.tc_probe_details ? JSON.stringify(result.tc_probe_details) : 'N/A'}`, "leak", FNAME_RUNNER);
 
         const heisenbugSuccessfullyDetected = result.heisenbug_on_M2_in_best_result;
         const addrofResult = result.addrof_result;
         const webkitLeakResult = result.webkit_leak_result;
 
-        logS3(`  RUNNER R43(b): Heisenbug TC Sonda (Best): ${heisenbugSuccessfullyDetected ? "CONFIRMADA" : "NÃO CONFIRMADA"}`, heisenbugSuccessfullyDetected ? "vuln" : "warn", FNAME_RUNNER);
+        logS3(`  RUNNER R43(c): Heisenbug TC Sonda (Best): ${heisenbugSuccessfullyDetected ? "CONFIRMADA" : "NÃO CONFIRMADA"}`, heisenbugSuccessfullyDetected ? "vuln" : "warn", FNAME_RUNNER);
 
         if (addrofResult) {
-            logS3(`  RUNNER R43(b): Teste Addrof (Best): ${addrofResult.msg} (Endereço vazado: ${addrofResult.leaked_object_addr || 'N/A'})`, addrofResult.success ? "vuln" : "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R43(c): Teste Addrof (Best): ${addrofResult.msg} (Endereço vazado: ${addrofResult.leaked_object_addr || addrofResult.leaked_object_addr_candidate_str || 'N/A'})`, addrofResult.success ? "vuln" : "warn", FNAME_RUNNER);
         } else {
-            logS3(`  RUNNER R43(b): Teste Addrof não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R43(c): Teste Addrof não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
 
         if (webkitLeakResult) {
-            logS3(`  RUNNER R43(b): Teste WebKit Base Leak (Best): ${webkitLeakResult.msg} (Base Candidata: ${webkitLeakResult.webkit_base_candidate || 'N/A'}, Ponteiro Interno Etapa2: ${webkitLeakResult.internal_ptr_stage2 || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R43(c): Teste WebKit Base Leak (Best): ${webkitLeakResult.msg} (Base Candidata: ${webkitLeakResult.webkit_base_candidate || 'N/A'}, Ponteiro Interno Etapa2: ${webkitLeakResult.internal_ptr_stage2 || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
         } else {
-            logS3(`  RUNNER R43(b): Teste WebKit Base Leak não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R43(c): Teste WebKit Base Leak não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
 
         if (webkitLeakResult?.success) {
-            document.title = `${module_name_for_title}: WebKitLeak SUCCESS!`;
+            document.title = `${module_name_for_title}_R43c: WebKitLeak SUCCESS!`;
         } else if (addrofResult?.success) {
-            document.title = `${module_name_for_title}: Addrof OK, WebKitLeak Fail`;
+            document.title = `${module_name_for_title}_R43c: Addrof OK, WebKitLeak Fail`;
         } else if (heisenbugSuccessfullyDetected) {
-            document.title = `${module_name_for_title}: TC OK, Addrof/WebKitLeak Fail`;
+            document.title = `${module_name_for_title}_R43c: TC OK, Addrof/WebKitLeak Fail`;
         } else {
-            document.title = `${module_name_for_title}: No TC Confirmed`;
+            document.title = `${module_name_for_title}_R43c: No TC Confirmed`;
         }
 
         if (result.iteration_results_summary && result.iteration_results_summary.length > 0) {
-            logS3(`  RUNNER R43(b): Sumário completo das iterações:`, "info", FNAME_RUNNER);
+            logS3(`  RUNNER R43(c): Sumário completo das iterações:`, "info", FNAME_RUNNER);
             result.iteration_results_summary.forEach((iter_sum, index) => {
                 const tcSuccess = iter_sum.heisenbug_on_M2_confirmed_by_tc_probe;
                 const addrofSuccess = iter_sum.addrof_result_this_iter?.success ?? 'N/A';
@@ -65,7 +64,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
             });
         }
     } else {
-        document.title = `${module_name_for_title}: Invalid Result Obj`;
+        document.title = `${module_name_for_title}_R43c: Invalid Result Obj`;
     }
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
@@ -74,11 +73,11 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R43b (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR); // R43b no log para clareza
+    logS3(`==== INICIANDO Script 3 R43c (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     await runHeisenbugReproStrategy_TypedArrayVictim_R43();
-    logS3(`\n==== Script 3 R43b (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR); // R43b no log
+    logS3(`\n==== Script 3 R43c (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
     if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43b Done`; // R43b no título
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43c Done`;
     }
 }
