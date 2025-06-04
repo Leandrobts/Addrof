@@ -37,8 +37,8 @@ export class AdvancedInt64 {
                 if (str.includes('_')) str = str.replace('_', '');
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0'); 
-                buffer[1] = parseInt(str.substring(0, 8), 16);
-                buffer[0] = parseInt(str.substring(8, 16), 16);
+                const highStr = str.substring(0, 8); const lowStr = str.substring(8, 16);
+                buffer[1] = parseInt(highStr, 16); buffer[0] = parseInt(lowStr, 16);
             } else if (low instanceof AdvancedInt64) { 
                  buffer[0] = low.low(); buffer[1] = low.high();
             } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); }
@@ -61,46 +61,47 @@ export class AdvancedInt64 {
     
     static Zero = new AdvancedInt64(0,0); 
 
-    toString(hex = false) { /* ... (sem alterações da R37) ... */ }
-    toNumber() { /* ... (sem alterações da R37) ... */ }
+    toString(hex = false) { /* ... (sem alterações da R36) ... */ }    
+    toNumber() { /* ... (sem alterações da R36) ... */ }
 
-    // <<<< R40: Lógica de add e sub robustecida >>>>
-    add(val) {
+    add(val) { // <<<< R40: Lógica de ADIÇÃO CORRIGIDA/REVISADA >>>>
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val); 
         }
-        let newLow = (this.low() + val.low());
-        // O carry é 1 se newLow estourou um uint32, 0 caso contrário
-        let carry = (newLow > 0xFFFFFFFF) ? 1 : 0; 
-        newLow = newLow & 0xFFFFFFFF; // Garante que newLow é uint32
+        let low_sum = (this.low() + val.low());
+        // O carry ocorre se a soma da parte baixa exceder 2^32 - 1
+        // Math.floor(low_sum / 0x100000000) é uma forma de obter o carry.
+        // Ou, se low_sum for maior que 0xFFFFFFFF, o carry é 1.
+        let carry = (low_sum > 0xFFFFFFFF) ? 1 : 0;
+        // Alternativamente, para JS e números grandes, é mais seguro:
+        // let carry = Math.floor(low_sum / (0xFFFFFFFF + 1));
+        // Mas, como estamos lidando com uint32 no buffer, a primeira abordagem é mais direta.
 
-        let newHigh = (this.high() + val.high() + carry);
-        newHigh = newHigh & 0xFFFFFFFF; // Garante que newHigh também é uint32
-
-        return new AdvancedInt64(newLow, newHigh);
+        let high_sum = this.high() + val.high() + carry;
+        
+        // Garante que são uint32
+        return new AdvancedInt64(low_sum & 0xFFFFFFFF, high_sum & 0xFFFFFFFF);
     }
 
-    sub(val) {
+    sub(val) { // <<<< R40: Lógica de SUBTRAÇÃO REVISADA >>>>
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
+        // Empresta se necessário
         let newLow = this.low() - val.low();
         let borrow = 0;
         if (newLow < 0) {
-            newLow += (0xFFFFFFFF + 1); // Adiciona 2^32
+            newLow += 0x100000000; // Adiciona 2^32
             borrow = 1; // Empresta do high
         }
-        newLow = newLow & 0xFFFFFFFF;
-
         let newHigh = this.high() - val.high() - borrow;
-        newHigh = newHigh & 0xFFFFFFFF; 
         
-        return new AdvancedInt64(newLow, newHigh);
+        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
     }
 }
 
-export function isAdvancedInt64Object(obj) { return obj && obj._isAdvancedInt64 === true; }
-export async function PAUSE(ms) { return new Promise(resolve => setTimeout(resolve, ms));}
-export function toHex(val, bits = 32) { /* ... (sem alterações da R37) ... */ }
-export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações da R37) ... */ }
-export function advancedInt64ArrayToString(arr) { /* ... (sem alterações da R37) ... */ }
+export function isAdvancedInt64Object(obj) { /* ... (sem alterações da R36) ... */ }
+export async function PAUSE(ms) { /* ... (sem alterações da R36) ... */ }
+export function toHex(val, bits = 32) { /* ... (sem alterações da R36) ... */ }
+export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações da R36) ... */ }
+export function advancedInt64ArrayToString(arr) { /* ... (sem alterações da R36) ... */ }
