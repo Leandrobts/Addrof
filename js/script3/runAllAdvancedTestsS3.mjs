@@ -1,52 +1,52 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 27)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 28)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R27, // <<<< NOME DA FUNÇÃO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R28, // <<<< NOME DA FUNÇÃO ATUALIZADO
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R27"; 
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R28"; 
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R27(); 
+    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R28(); 
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R27: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27: MainTest ERR!`;
+        logS3(`  RUNNER R28: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28: MainTest ERR!`;
     } else if (result) {
-        logS3(`  RUNNER R27: Completou. Melhor OOB: ${result.oob_value_of_best_result||'N/A'}`,"good",FNAME_RUNNER);
-        logS3(`  RUNNER R27: Detalhes Sonda TC (Best): ${result.tc_probe_details?JSON.stringify(result.tc_probe_details):'N/A'}`,"leak",FNAME_RUNNER);
+        logS3(`  RUNNER R28: Completou. Melhor OOB: ${result.oob_value_of_best_result||'N/A'}`,"good",FNAME_RUNNER);
+        logS3(`  RUNNER R28: Detalhes Sonda TC (Best): ${result.tc_probe_details?JSON.stringify(result.tc_probe_details):'N/A'}`,"leak",FNAME_RUNNER);
         
-        // <<<< CORRIGIDO: Usar o nome da propriedade correto do objeto result >>>>
         const heisenbugSuccessfullyDetected = result.heisenbug_on_M2_in_best_result; 
-        const memScanResult = result.memory_scan_result; // Resultado do novo teste
+        const memScanResult = result.memory_scan_result;
 
-        logS3(`  RUNNER R27: Heisenbug TC Sonda (Best): ${heisenbugSuccessfullyDetected ? "CONFIRMADA" : "NÃO CONFIRMADA"}`, heisenbugSuccessfullyDetected ? "vuln" : "warn", FNAME_RUNNER);
+        // <<<< CORRIGIDO: Usar heisenbugSuccessfullyDetected para o log da TC >>>>
+        logS3(`  RUNNER R28: Heisenbug TC Sonda (Best): ${heisenbugSuccessfullyDetected ? "CONFIRMADA" : "NÃO CONFIRMADA"}`, heisenbugSuccessfullyDetected ? "vuln" : "warn", FNAME_RUNNER);
 
         if (memScanResult) {
-            logS3(`  RUNNER R27: Teste Memory Scan: ${memScanResult.msg} (Encontrado em: ${memScanResult.found_at_address || 'N/A'}, Base OOB: ${memScanResult.oob_buffer_base_addr || 'N/A'})`, memScanResult.success ? "vuln" : "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R28: Teste Memory Scan: ${memScanResult.msg} (Encontrado em: ${memScanResult.found_at_address || 'N/A'}, Base OOB: ${memScanResult.oob_buffer_base_addr || 'N/A'})`, memScanResult.success ? "vuln" : "warn", FNAME_RUNNER);
         } else {
-            logS3(`  RUNNER R27: Teste Memory Scan não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R28: Teste Memory Scan não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
         
-        if (memScanResult?.success) { // Se o scan funcionou, é o maior sucesso
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27: MemScan SUCCESS!`;
+        if (memScanResult?.success) {
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28: MemScan SUCCESS!`;
         } else if (heisenbugSuccessfullyDetected) {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27: TC OK, Scan Fail`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28: TC OK, Scan Fail`;
         } else {
-            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27: No TC Confirmed`;
+            document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28: No TC Confirmed`;
         }
         
         if(result.iteration_results_summary && result.iteration_results_summary.length > 0){
-            logS3(`  RUNNER R27: Sumário completo das iterações:`, "info", FNAME_RUNNER);
+            logS3(`  RUNNER R28: Sumário completo das iterações:`, "info", FNAME_RUNNER);
             result.iteration_results_summary.forEach((iter_sum, index) => { 
                 // <<<< CORRIGIDO: Usar o nome da propriedade correto para TC_Probe no sumário da iteração >>>>
                 logS3(`    Iter ${index + 1} (OOB ${iter_sum.oob_value}): TC_Probe=${iter_sum.heisenbug_on_M2_confirmed_by_tc_probe}, MemScanOK=${iter_sum.memory_scan_result_this_iter?.success ?? 'N/A'}${iter_sum.error ? `, Err: ${iter_sum.error}` : ''}`, "info", FNAME_RUNNER);
             });
         }
     } else {
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27: Invalid Result Obj`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28: Invalid Result Obj`;
     }
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
@@ -54,10 +54,10 @@ async function runHeisenbugReproStrategy_TypedArrayVictim() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R27`; 
-    logS3(`==== INICIANDO Script 3 R27 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R28`; 
+    logS3(`==== INICIANDO Script 3 R28 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     await runHeisenbugReproStrategy_TypedArrayVictim();
-    logS3(`\n==== Script 3 R27 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R28 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if(runBtn) runBtn.disabled = false;
-    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL)&&!document.title.includes("SUCCESS")&&!document.title.includes("Fail")&&!document.title.includes("OK")&&!document.title.includes("Confirmed")){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R27 Done`;}
+    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL)&&!document.title.includes("SUCCESS")&&!document.title.includes("Fail")&&!document.title.includes("OK")&&!document.title.includes("Confirmed")){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R28 Done`;}
 }
