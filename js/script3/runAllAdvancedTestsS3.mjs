@@ -1,28 +1,28 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 36)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 37)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R36, // <<<< NOME DA FUNÇÃO ATUALIZADO
+    executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R37, // <<<< NOME DA FUNÇÃO ATUALIZADO
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL
 } from './testArrayBufferVictimCrash.mjs';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R36"; 
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R37"; 
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R36(); 
-    // ... (lógica de processamento de resultado como na R31, adaptando logs para R36) ...
-    if(result.errorOccurred){logS3(` RUNNER R36: ERRO: ${String(result.errorOccurred)}.`,"critical",FNAME_RUNNER);document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R36: ERR!`;}
-    else if(result){/* ... logs como R31 ... */} else{document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R36: Invalid Res`;}
+    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R37(); 
+    // ... (lógica de processamento de resultado como na R32, adaptando logs para R37) ...
+    if(result.errorOccurred){logS3(` RUNNER R37: ERRO: ${String(result.errorOccurred)}.`,"critical",FNAME_RUNNER);document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R37: ERR!`;}
+    else if(result){/* ... logs como R32 ... */} else{document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R37: Invalid Res`;}
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
     logS3(`==== Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R36`; 
-    logS3(`==== INICIANDO Script 3 R36 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R37`; 
+    logS3(`==== INICIANDO Script 3 R37 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     await runHeisenbugReproStrategy_TypedArrayVictim();
-    logS3(`\n==== Script 3 R36 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R37 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if(runBtn) runBtn.disabled = false;
-    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL)&&!document.title.includes("SUCCESS")&&!document.title.includes("Fail")&&!document.title.includes("OK")&&!document.title.includes("Confirmed")){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R36 Done`;}
+    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL)&&!document.title.includes("SUCCESS")&&!document.title.includes("Fail")&&!document.title.includes("OK")&&!document.title.includes("Confirmed")){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R37 Done`;}
 }
