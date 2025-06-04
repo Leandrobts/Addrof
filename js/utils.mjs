@@ -1,4 +1,4 @@
-// js/utils.mjs (R34)
+// js/utils.mjs (R31)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -16,40 +16,31 @@ export class AdvancedInt64 {
         }
 
         if (!is_one_arg) {
-            // <<<< R34: Tornar o construtor mais robusto a entradas inválidas >>>>
-            if (typeof low !== 'number' || isNaN(low)) {
-                // console.warn(`AdvancedInt64: low part is not a number (${typeof low}:${low}), defaulting to 0.`);
+            // R31: Tornar o construtor mais robusto a entradas inválidas
+            if (typeof low !== 'number' || isNaN(low) || !isFinite(low)) {
+                // console.warn(`AdvancedInt64: low part (${low}) is not a valid number, defaulting to 0.`);
                 low = 0;
             }
-            if (typeof high !== 'number' || isNaN(high)) {
-                // console.warn(`AdvancedInt64: high part is not a number (${typeof high}:${high}), defaulting to 0.`);
+            if (typeof high !== 'number' || isNaN(high) || !isFinite(high)) {
+                // console.warn(`AdvancedInt64: high part (${high}) is not a valid number, defaulting to 0.`);
                 high = 0;
             }
-            // <<<< FIM DA MODIFICAÇÃO R34 >>>>
-
-            if (low instanceof AdvancedInt64 && high === undefined) { // Ainda permite construção a partir de outro AdvancedInt64
-                buffer[0] = low.low();
-                buffer[1] = low.high();
-                this.buffer = buffer;
-                return;
-            }
-            // A checagem de tipo já foi feita, agora checa o range após default para 0 se necessário.
-            // A exceção original "low/high must be uint32 numbers" ainda pode ser lançada se, APÓS o default para 0 (se eram NaN/undefined),
-            // eles ainda não estiverem no range (o que não acontecerá se defaultamos para 0).
-            // A checagem de range é importante para valores numéricos que estão fora de uint32.
+             // Garantir que são inteiros após o default, se necessário
+            low = Math.trunc(low);
+            high = Math.trunc(high);
         }
         
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
         if (is_one_arg) {
             if (typeof (low) === 'number') {
-                if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
+                if (!Number.isSafeInteger(low)) { throw TypeError('Number argument must be a safe integer for single-arg constructor'); }
                 buffer[0] = low & 0xFFFFFFFF;
                 buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
             } else if (typeof (low) === 'string') {
                 let str = low;
                 if (str.startsWith('0x')) { str = str.slice(2); } 
-                if (str.includes('_')) str = str.replace('_', ''); // Remove separador opcional
+                if (str.includes('_')) str = str.replace(/_/g, ''); 
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0'); 
@@ -59,19 +50,20 @@ export class AdvancedInt64 {
 
                 buffer[1] = parseInt(highStr, 16);
                 buffer[0] = parseInt(lowStr, 16);
+                if (isNaN(buffer[0]) || isNaN(buffer[1])) {
+                    // console.warn(`AdvancedInt64: string parsing resulted in NaN, defaulting to 0.`);
+                    buffer[0] = 0; buffer[1] = 0;
+                }
 
             } else if (low instanceof AdvancedInt64) { 
                  buffer[0] = low.low();
                  buffer[1] = low.high();
             } else {
-                throw TypeError('single arg must be number, hex string or AdvancedInt64');
+                throw TypeError('Single argument must be number, hex string, or AdvancedInt64');
             }
         } else { 
-            // Para dois argumentos, low e high já foram validados/defaultados para números.
-            // Agora checa o range. Se o default para 0 ocorreu, check_range(0) passará.
             if (!check_range(low) || !check_range(high)) {
-                // Este erro só deve ocorrer se números válidos, mas fora do range uint32, forem passados.
-                throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`);
+                throw RangeError(`Low/high parts (${toHex(low)}, ${toHex(high)}) must be valid uint32 numbers after initial type check.`);
             }
             buffer[0] = low;
             buffer[1] = high;
@@ -83,7 +75,7 @@ export class AdvancedInt64 {
     high() { return this.buffer[1]; }
 
     equals(other) {
-        if (!isAdvancedInt64Object(other)) { return false; } // Alterado para usar a função helper
+        if (!isAdvancedInt64Object(other)) { return false; } 
         return this.low() === other.low() && this.high() === other.high();
     }
     
@@ -91,10 +83,9 @@ export class AdvancedInt64 {
 
     toString(hex = false) {
         if (!hex) { 
-            if (this.high() === 0) return String(this.low());
-            // Para valores grandes, usar BigInt para conversão decimal correta se disponível
+            if (this.high() === 0 && this.low() >= 0) return String(this.low()); // Para positivos < 2^32
             if (typeof BigInt !== 'undefined') {
-                const val = (BigInt(this.high()) << BigInt(32)) + BigInt(this.low());
+                const val = (BigInt(this.high()) << BigInt(32)) | BigInt(this.low() >>> 0); // low() >>> 0 para tratar como unsigned
                 return val.toString();
             }
             return `(H:0x${this.high().toString(16).padStart(8,'0')}, L:0x${this.low().toString(16).padStart(8,'0')})`;
@@ -103,21 +94,63 @@ export class AdvancedInt64 {
     }
     
     toNumber() { 
-        return this.high() * (0x100000000) + this.low(); // Usar 0x100000000 para 2^32
+        return this.high() * (0x100000000) + (this.low() >>> 0); // low() >>> 0 para tratar como unsigned
     }
 
-    add(val) { /* ... (sem alterações) ... */ }
-    sub(val) { /* ... (sem alterações) ... */ }
+    add(val) {
+        if (!(val instanceof AdvancedInt64)) { 
+            val = new AdvancedInt64(val); 
+        }
+        let low = (this.low() >>> 0) + (val.low() >>> 0); // Tratar como unsigned para a soma
+        let high = this.high() + val.high() + Math.floor(low / 0x100000000); // 2^32
+        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
+    }
+
+    sub(val) {
+        if (!(val instanceof AdvancedInt64)) { 
+            val = new AdvancedInt64(val);
+        }
+        let newLow = (this.low() >>> 0) - (val.low() >>> 0); // Tratar como unsigned
+        let newHigh = this.high() - val.high();
+        if (newLow < 0) {
+            newLow += 0x100000000; // Adiciona 2^32
+            newHigh -= 1; 
+        }
+        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+    }
 }
 
 export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
 }
 
-export async function PAUSE_S3(ms) { // Renomeado para PAUSE_S3 para consistência com o que é usado
+// Padronizando para pauseAsync
+export async function pauseAsync(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function toHex(val, bits = 32) { /* ... (sem alterações) ... */ }
+export function toHex(val, bits = 32) {
+    if (isAdvancedInt64Object(val)) {
+        return val.toString(true);
+    }
+    if (typeof val !== 'number') {
+        return `NonNumeric(${typeof val}:${String(val)})`;
+    }
+    if (isNaN(val)) { 
+        return 'ValIsNaN';
+    }
+
+    let hexStr;
+    if (val < 0) {
+        if (bits === 32) { hexStr = (val >>> 0).toString(16); }
+        else if (bits === 16) { hexStr = ((val & 0xFFFF) >>> 0).toString(16); }
+        else if (bits === 8) { hexStr = ((val & 0xFF) >>> 0).toString(16); }
+        else { hexStr = val.toString(16); }
+    } else { hexStr = val.toString(16); }
+    
+    const numChars = Math.ceil(bits / 4);
+    return '0x' + hexStr.padStart(numChars, '0');
+}
+
 export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações) ... */ }
 export function advancedInt64ArrayToString(arr) { /* ... (sem alterações) ... */ }
