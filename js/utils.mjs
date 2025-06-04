@@ -1,4 +1,4 @@
-// js/utils.mjs (R36)
+// js/utils.mjs (R37)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -17,11 +17,9 @@ export class AdvancedInt64 {
 
         if (!is_one_arg) {
             if (typeof low !== 'number' || isNaN(low)) {
-                // console.warn(`AdvancedInt64: low part is not a number (${typeof low}:${low}), defaulting to 0.`);
                 low = 0;
             }
             if (typeof high !== 'number' || isNaN(high)) {
-                // console.warn(`AdvancedInt64: high part is not a number (${typeof high}:${high}), defaulting to 0.`);
                 high = 0;
             }
             if (low instanceof AdvancedInt64 && high === undefined) {
@@ -95,13 +93,13 @@ export class AdvancedInt64 {
         return this.high() * (0x100000000) + this.low();
     }
 
-    add(val) { /* ... (sem alterações) ... */ 
+    add(val) { 
         if (!(val instanceof AdvancedInt64)) { val = new AdvancedInt64(val); }
         let low = this.low() + val.low();
         let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
         return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
     }
-    sub(val) { /* ... (sem alterações) ... */ 
+    sub(val) { 
         if (!(val instanceof AdvancedInt64)) { val = new AdvancedInt64(val);}
         let newLow = this.low() - val.low(); let newHigh = this.high() - val.high();
         if(newLow < 0){newLow += (0xFFFFFFFF + 1); newHigh -= 1;}
@@ -113,11 +111,11 @@ export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
 }
 
-// <<<< R36: Nome da função de pausa padronizado e exportado de utils.mjs >>>>
-export async function genericPause_R36(ms) {
+// <<<< R37: Renomeado de volta para PAUSE e exportado >>>>
+export async function PAUSE(ms) { 
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function toHex(val, bits = 32) { /* ... (sem alterações) ... */ }
-export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações) ... */ }
-export function advancedInt64ArrayToString(arr) { /* ... (sem alterações) ... */ }
+export function toHex(val, bits = 32) { /* ... (sem alterações da R36) ... */ }
+export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações da R36) ... */ }
+export function advancedInt64ArrayToString(arr) { /* ... (sem alterações da R36) ... */ }
