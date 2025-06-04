@@ -8,9 +8,20 @@ import {
 
 async function runHeisenbugReproStrategy_TypedArrayVictim() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R18"; 
-    // ... (resto como na R17, atualizando nomes/logs para R18) ...
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+    const result = await executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R18(); 
+    // ... (lógica de processamento de resultado como na R16, adaptando logs para R18) ...
+    if(result.errorOccurred){logS3(` RUNNER R18: ERRO: ${result.errorOccurred}.`,"critical",FNAME_RUNNER);document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R18: ERR!`;}
+    else if(result){/* ... logs como R16 ... */} else{document.title=`${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R18: Invalid Res`;}
+    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
+
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_MainOrchestrator_R18`; 
-    // ... (resto como na R17, atualizando nomes/logs para R18) ...
+    logS3(`==== INICIANDO Script 3 R18 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    await runHeisenbugReproStrategy_TypedArrayVictim();
+    logS3(`\n==== Script 3 R18 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    // ...
 }
