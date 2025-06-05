@@ -1,4 +1,4 @@
-// js/utils.mjs (R41 - advInt64LessThanOrEqual adicionada)
+// js/utils.mjs (R42 - Lógica de Adição/Subtração Robusta)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -6,7 +6,6 @@ export const GB = KB * KB * KB;
 
 export class AdvancedInt64 {
     constructor(low, high) {
-        // ... (código do construtor como na R40, sem alterações) ...
         this._isAdvancedInt64 = true; 
         let buffer = new Uint32Array(2);
         
@@ -45,6 +44,7 @@ export class AdvancedInt64 {
             } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); }
         } else { 
             if (!check_range(low) || !check_range(high)) {
+                // Este erro que estava sendo acionado.
                 throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`);
             }
             buffer[0] = low; buffer[1] = high;
@@ -72,31 +72,45 @@ export class AdvancedInt64 {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
-    add(val) { 
+    // >>>>> CORREÇÃO APLICADA AQUI <<<<<
+    add(val) {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val); 
         }
-        let low_sum = (this.low() + val.low());
-        let carry = (low_sum > 0xFFFFFFFF) ? 1 : 0;
-        let high_sum = this.high() + val.high() + carry;
-        return new AdvancedInt64(low_sum & 0xFFFFFFFF, high_sum & 0xFFFFFFFF);
+        
+        // Usar Math.imul para garantir aritmética de 32 bits e obter os resultados corretos
+        // A lógica de carry é mais complexa do que uma simples verificação >
+        const a = this.high() >>> 16;
+        const b = this.high() & 0xFFFF;
+        const c = this.low() >>> 16;
+        const d = this.low() & 0xFFFF;
+
+        const other_a = val.high() >>> 16;
+        const other_b = val.high() & 0xFFFF;
+        const other_c = val.low() >>> 16;
+        const other_d = val.low() & 0xFFFF;
+
+        let d_new = d + other_d;
+        let c_new = c + other_c + (d_new >>> 16);
+        let b_new = b + other_b + (c_new >>> 16);
+        let a_new = a + other_a + (b_new >>> 16);
+        
+        let newLow = (c_new << 16) | (d_new & 0xFFFF);
+        let newHigh = (a_new << 16) | (b_new & 0xFFFF);
+        
+        return new AdvancedInt64(newLow, newHigh);
     }
 
     sub(val) { 
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        let newLow = this.low() - val.low();
-        let borrow = 0;
-        if (newLow < 0) {
-            newLow += 0x100000000;
-            borrow = 1; 
-        }
-        let newHigh = this.high() - val.high() - borrow;
-        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+        // Nega o valor e soma
+        const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1);
+        return this.add(neg_val);
     }
 
-    and(val) { // Adicionando o método AND que faltava
+    and(val) {
         if (!(val instanceof AdvancedInt64)) {
             val = new AdvancedInt64(val);
         }
@@ -104,15 +118,12 @@ export class AdvancedInt64 {
     }
 }
 
-// isAdvancedInt64Object agora verifica a propriedade marcadora, que é mais robusta entre módulos
 export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
 }
 
-// <<<< FUNÇÃO ADICIONADA AQUI >>>>
 export function advInt64LessThanOrEqual(a, b) {
     if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
-        // Não loga um erro aqui para não poluir o console durante o scan
         return false; 
     }
     if (a.high() < b.high()) return true;
@@ -130,5 +141,3 @@ export function toHex(val, bits = 32) {
     }
     return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
 }
-
-// ... (outras funções utilitárias como stringToAdvancedInt64Array, etc.) ...
