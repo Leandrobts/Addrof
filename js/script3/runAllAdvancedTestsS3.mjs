@@ -19,14 +19,14 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43s() {
     } else if (result) {
         logS3(`  RUNNER R43s: Teste completado.`, "good", FNAME_RUNNER);
         
-        const { heap_scan, primitives, webkit_leak } = result;
+        const { heap_scan, addrof_setup, webkit_leak } = result;
         
         if (heap_scan) {
             logS3(`  RUNNER R43s: Fase 2 - Memory Scan: ${heap_scan.msg}`, heap_scan.success ? "vuln" : "warn", FNAME_RUNNER);
         }
         
-        if (primitives) {
-            logS3(`  RUNNER R43s: Fase 3 - Construção de Primitivas: ${primitives.msg}`, primitives.success ? "vuln" : "warn", FNAME_RUNNER);
+        if (addrof_setup) {
+            logS3(`  RUNNER R43s: Fase 3 - Construção de Primitivas: ${addrof_setup.msg}`, addrof_setup.success ? "vuln" : "warn", FNAME_RUNNER);
         }
 
         if (webkit_leak) {
@@ -35,7 +35,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43s() {
 
         if (webkit_leak?.success) {
             document.title = `${module_name_for_title}_R43s: WebKitLeak SUCCESS!`;
-        } else if (primitives?.success) {
+        } else if (addrof_setup?.success) {
             document.title = `${module_name_for_title}_R43s: Primitives OK`;
         } else if (heap_scan?.success) {
             document.title = `${module_name_for_title}_R43s: HeapScan OK`;
