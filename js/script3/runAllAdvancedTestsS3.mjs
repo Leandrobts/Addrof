@@ -1,15 +1,13 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Runner para R48 - Varredura OOB)
+// js/script3/runAllAdvancedTestsS3.mjs (Runner para R49 - Corrupção de View Adjacente)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    // CORRIGIDO: Renomear a função importada para corresponder ao novo nome do teste
-    executeTypedArrayVictimAddrofAndWebKitLeak_R48 as executeTest, 
-    // CORRIGIDO: Usar a constante simplificada FNAME_MODULE
+    executeTypedArrayVictimAddrofAndWebKitLeak_R49 as executeTest,
     FNAME_MODULE
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runHeisenbugReproStrategy_OOBScan_R48() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_OOBScan_R48";
+async function runHeisenbugReproStrategy_AdjacentView_R49() {
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_AdjacentView_R49";
     logS3(`==== INICIANDO Estratégia (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
     const result = await executeTest();
@@ -17,7 +15,7 @@ async function runHeisenbugReproStrategy_OOBScan_R48() {
 
     if (!result) {
         document.title = `${module_name_for_title}: Invalid Result Obj`;
-        logS3(`  RUNNER R48(OOBScan): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R49(AdjView): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
         return;
     }
 
@@ -44,11 +42,11 @@ async function runHeisenbugReproStrategy_OOBScan_R48() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R48_OOBScan (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator_AdjView`;
+    logS3(`==== INICIANDO Script 3 R49_AdjView (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runHeisenbugReproStrategy_OOBScan_R48();
+    await runHeisenbugReproStrategy_AdjacentView_R49();
     
-    logS3(`\n==== Script 3 R48_OOBScan (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R49_AdjView (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
