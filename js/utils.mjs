@@ -1,4 +1,4 @@
-// js/utils.mjs (R42 - Lógica de Adição/Subtração Robusta)
+// js/utils.mjs (R42 - Lógica de Aritmética e Comparação robustecida)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -44,7 +44,6 @@ export class AdvancedInt64 {
             } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); }
         } else { 
             if (!check_range(low) || !check_range(high)) {
-                // Este erro que estava sendo acionado.
                 throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`);
             }
             buffer[0] = low; buffer[1] = high;
@@ -62,8 +61,8 @@ export class AdvancedInt64 {
     
     toString(hex = false) { 
         if (hex) {
-            let high_str = this.high().toString(16).padStart(8, '0');
-            let low_str = this.low().toString(16).padStart(8, '0');
+            const high_str = this.high().toString(16).padStart(8, '0');
+            const low_str = this.low().toString(16).padStart(8, '0');
             return `0x${high_str}${low_str}`;
         }
         return this.toNumber().toString();
@@ -72,14 +71,11 @@ export class AdvancedInt64 {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
-    // >>>>> CORREÇÃO APLICADA AQUI <<<<<
     add(val) {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val); 
         }
         
-        // Usar Math.imul para garantir aritmética de 32 bits e obter os resultados corretos
-        // A lógica de carry é mais complexa do que uma simples verificação >
         const a = this.high() >>> 16;
         const b = this.high() & 0xFFFF;
         const c = this.low() >>> 16;
@@ -105,7 +101,7 @@ export class AdvancedInt64 {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        // Nega o valor e soma
+        // Negação por complemento de dois e adição
         const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1);
         return this.add(neg_val);
     }
@@ -119,11 +115,14 @@ export class AdvancedInt64 {
 }
 
 export function isAdvancedInt64Object(obj) {
+    // Verificação baseada na propriedade marcadora é mais robusta entre módulos
     return obj && obj._isAdvancedInt64 === true;
 }
 
+// <<<< FUNÇÃO MOVIDA PARA CÁ PARA CONSISTÊNCIA >>>>
 export function advInt64LessThanOrEqual(a, b) {
     if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
+        // Silencioso para não poluir o console durante o scan
         return false; 
     }
     if (a.high() < b.high()) return true;
@@ -137,7 +136,11 @@ export async function PAUSE(ms) {
 
 export function toHex(val, bits = 32) { 
     if (isAdvancedInt64Object(val)) {
-        return val.toString(true);
+        try {
+            return val.toString(true);
+        } catch(e) {
+            return `AdvInt64(Error)`;
+        }
     }
     return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
 }
