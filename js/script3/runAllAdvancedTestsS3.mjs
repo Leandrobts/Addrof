@@ -1,4 +1,4 @@
-﻿// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43m)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43m)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
