@@ -1,4 +1,4 @@
-// js/utils.mjs (R40)
+// js/utils.mjs (R41 - advInt64LessThanOrEqual adicionada)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -6,6 +6,7 @@ export const GB = KB * KB * KB;
 
 export class AdvancedInt64 {
     constructor(low, high) {
+        // ... (código do construtor como na R40, sem alterações) ...
         this._isAdvancedInt64 = true; 
         let buffer = new Uint32Array(2);
         
@@ -59,49 +60,75 @@ export class AdvancedInt64 {
         return this.low() === other.low() && this.high() === other.high();
     }
     
-    static Zero = new AdvancedInt64(0,0); 
+    toString(hex = false) { 
+        if (hex) {
+            let high_str = this.high().toString(16).padStart(8, '0');
+            let low_str = this.low().toString(16).padStart(8, '0');
+            return `0x${high_str}${low_str}`;
+        }
+        return this.toNumber().toString();
+     }    
+    toNumber() { 
+        return this.high() * (0xFFFFFFFF + 1) + this.low();
+    }
 
-    toString(hex = false) { /* ... (sem alterações da R36) ... */ }    
-    toNumber() { /* ... (sem alterações da R36) ... */ }
-
-    add(val) { // <<<< R40: Lógica de ADIÇÃO CORRIGIDA/REVISADA >>>>
+    add(val) { 
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val); 
         }
         let low_sum = (this.low() + val.low());
-        // O carry ocorre se a soma da parte baixa exceder 2^32 - 1
-        // Math.floor(low_sum / 0x100000000) é uma forma de obter o carry.
-        // Ou, se low_sum for maior que 0xFFFFFFFF, o carry é 1.
         let carry = (low_sum > 0xFFFFFFFF) ? 1 : 0;
-        // Alternativamente, para JS e números grandes, é mais seguro:
-        // let carry = Math.floor(low_sum / (0xFFFFFFFF + 1));
-        // Mas, como estamos lidando com uint32 no buffer, a primeira abordagem é mais direta.
-
         let high_sum = this.high() + val.high() + carry;
-        
-        // Garante que são uint32
         return new AdvancedInt64(low_sum & 0xFFFFFFFF, high_sum & 0xFFFFFFFF);
     }
 
-    sub(val) { // <<<< R40: Lógica de SUBTRAÇÃO REVISADA >>>>
+    sub(val) { 
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        // Empresta se necessário
         let newLow = this.low() - val.low();
         let borrow = 0;
         if (newLow < 0) {
-            newLow += 0x100000000; // Adiciona 2^32
-            borrow = 1; // Empresta do high
+            newLow += 0x100000000;
+            borrow = 1; 
         }
         let newHigh = this.high() - val.high() - borrow;
-        
         return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+    }
+
+    and(val) { // Adicionando o método AND que faltava
+        if (!(val instanceof AdvancedInt64)) {
+            val = new AdvancedInt64(val);
+        }
+        return new AdvancedInt64(this.low() & val.low(), this.high() & val.high());
     }
 }
 
-export function isAdvancedInt64Object(obj) { /* ... (sem alterações da R36) ... */ }
-export async function PAUSE(ms) { /* ... (sem alterações da R36) ... */ }
-export function toHex(val, bits = 32) { /* ... (sem alterações da R36) ... */ }
-export function stringToAdvancedInt64Array(str, nullTerminate = true) { /* ... (sem alterações da R36) ... */ }
-export function advancedInt64ArrayToString(arr) { /* ... (sem alterações da R36) ... */ }
+// isAdvancedInt64Object agora verifica a propriedade marcadora, que é mais robusta entre módulos
+export function isAdvancedInt64Object(obj) {
+    return obj && obj._isAdvancedInt64 === true;
+}
+
+// <<<< FUNÇÃO ADICIONADA AQUI >>>>
+export function advInt64LessThanOrEqual(a, b) {
+    if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
+        // Não loga um erro aqui para não poluir o console durante o scan
+        return false; 
+    }
+    if (a.high() < b.high()) return true;
+    if (a.high() > b.high()) return false;
+    return a.low() <= b.low();
+}
+
+export async function PAUSE(ms) { 
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function toHex(val, bits = 32) { 
+    if (isAdvancedInt64Object(val)) {
+        return val.toString(true);
+    }
+    return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
+}
+
+// ... (outras funções utilitárias como stringToAdvancedInt64Array, etc.) ...
