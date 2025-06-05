@@ -1,13 +1,13 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Runner para R59 - Heap Churn Agressivo)
+// js/script3/runAllAdvancedTestsS3.mjs (Runner para R58 - All-In com Fake String)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R59 as executeTest,
+    executeTypedArrayVictimAddrofAndWebKitLeak_R58 as executeTest,
     FNAME_MODULE
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runStrategy_AggressiveGroom_R59() {
-    const FNAME_RUNNER = "runStrategy_AggressiveGroom_R59";
+async function runStrategy_AllInFakeString_R58() {
+    const FNAME_RUNNER = "runStrategy_AllInFakeString_R58";
     logS3(`==== INICIANDO Estratégia (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
     const result = await executeTest();
@@ -15,7 +15,7 @@ async function runStrategy_AggressiveGroom_R59() {
 
     if (!result) {
         document.title = `${module_name_for_title}: Invalid Result Obj`;
-        logS3(`  RUNNER R59(AggressiveGroom): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R58(AllIn): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
         return;
     }
 
@@ -43,10 +43,10 @@ async function runStrategy_AggressiveGroom_R59() {
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R59_AggressiveGroom (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 R58_AllInFakeString (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runStrategy_AggressiveGroom_R59();
+    await runStrategy_AllInFakeString_R58();
     
-    logS3(`\n==== Script 3 R59_AggressiveGroom (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R58_AllInFakeString (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
