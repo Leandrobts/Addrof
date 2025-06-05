@@ -1,13 +1,13 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Runner para R51 - Heap Grooming)
+// js/script3/runAllAdvancedTestsS3.mjs (Runner para R52 - Heap Churn Agressivo)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R51 as executeTest,
+    executeTypedArrayVictimAddrofAndWebKitLeak_R52 as executeTest,
     FNAME_MODULE
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runStrategy_HeapGrooming_R51() {
-    const FNAME_RUNNER = "runStrategy_HeapGrooming_R51";
+async function runStrategy_AggressiveGroom_R52() {
+    const FNAME_RUNNER = "runStrategy_AggressiveGroom_R52";
     logS3(`==== INICIANDO Estratégia (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
     const result = await executeTest();
@@ -15,7 +15,7 @@ async function runStrategy_HeapGrooming_R51() {
 
     if (!result) {
         document.title = `${module_name_for_title}: Invalid Result Obj`;
-        logS3(`  RUNNER R51(HeapGroom): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R52(AggressiveGroom): Objeto de resultado inválido ou nulo.`, "critical", FNAME_RUNNER);
         return;
     }
 
@@ -42,11 +42,11 @@ async function runStrategy_HeapGrooming_R51() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator_HeapGroom`;
-    logS3(`==== INICIANDO Script 3 R51_HeapGroom (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R52_AggressiveGroom (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runStrategy_HeapGrooming_R51();
+    await runStrategy_AggressiveGroom_R52();
     
-    logS3(`\n==== Script 3 R51_HeapGroom (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R52_AggressiveGroom (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
