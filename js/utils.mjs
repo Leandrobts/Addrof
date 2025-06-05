@@ -1,4 +1,4 @@
-// js/utils.mjs (R42 - Lógica de Aritmética e Comparação robustecida)
+// js/utils.mjs (R43 - Lógica de Aritmética e Comparação Corrigida)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -71,28 +71,20 @@ export class AdvancedInt64 {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
+    // >>>>> CORREÇÃO APLICADA AQUI <<<<<
     add(val) {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val); 
         }
         
-        const a = this.high() >>> 16;
-        const b = this.high() & 0xFFFF;
-        const c = this.low() >>> 16;
-        const d = this.low() & 0xFFFF;
-
-        const other_a = val.high() >>> 16;
-        const other_b = val.high() & 0xFFFF;
-        const other_c = val.low() >>> 16;
-        const other_d = val.low() & 0xFFFF;
-
-        let d_new = d + other_d;
-        let c_new = c + other_c + (d_new >>> 16);
-        let b_new = b + other_b + (c_new >>> 16);
-        let a_new = a + other_a + (b_new >>> 16);
+        // Realiza a soma em 64 bits para obter o carry corretamente
+        const low_sum_64 = (this.low() & 0xFFFFFFFF) + (val.low() & 0xFFFFFFFF);
+        const carry = low_sum_64 > 0xFFFFFFFF ? 1 : 0;
+        const high_sum_64 = (this.high() & 0xFFFFFFFF) + (val.high() & 0xFFFFFFFF) + carry;
         
-        let newLow = (c_new << 16) | (d_new & 0xFFFF);
-        let newHigh = (a_new << 16) | (b_new & 0xFFFF);
+        // Garante que ambos os resultados são uint32
+        const newLow = low_sum_64 >>> 0;
+        const newHigh = high_sum_64 >>> 0;
         
         return new AdvancedInt64(newLow, newHigh);
     }
@@ -101,6 +93,7 @@ export class AdvancedInt64 {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
+        // Negação por complemento de dois e adição
         const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1);
         return this.add(neg_val);
     }
