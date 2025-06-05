@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Runner para Testes Massivos Finais - Correção Escopo)
+// js/script3/runAllAdvancedTestsS3.mjs (Runner para Base Melhorada com TC Estável)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
@@ -13,8 +13,8 @@ function safeToHexRunner(value, length = 8) { /* ... (como na versão anterior) 
     return String(value);
 }
 
-async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeFix() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeFix";
+async function runHeisenbugReproStrategy_TypedArrayVictim_R43_ImprovedBase() {
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43_ImprovedBase";
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
     const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
@@ -22,10 +22,10 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
     if (result.errorOccurred && !result.oob_params_of_best_result) {
-        logS3(`  RUNNER R43(MassiveScopeFix): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R43(ImprovedBase): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
     } else if (result) {
-        logS3(`  RUNNER R43(MassiveScopeFix): Teste principal completado. Analisando resultados...`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R43(ImprovedBase): Teste principal completado. Analisando resultados...`, "good", FNAME_RUNNER);
 
         logS3(`  --- MELHOR RESULTADO GERAL ENCONTRADO ---`, "info_emphasis", FNAME_RUNNER);
         let bestParamsMsg = 'N/A';
@@ -40,18 +40,12 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
             logS3(`    Detalhes Sonda TC (Melhor): ${JSON.stringify(result.tc_probe_details)}`, "leak_detail", FNAME_RUNNER);
         }
 
-        if (result.best_victim_analysis) {
-            const va = result.best_victim_analysis;
-            logS3(`    Análise do Victim_TA (Melhor Iteração - Off ${va.offset_tested} Val ${va.value_written}):`, "info_emphasis", FNAME_RUNNER);
-            logS3(`      Notas: ${va.notes}`, "info", FNAME_RUNNER);
-            logS3(`      Addrof via Corrupção da Vítima: ${va.addrof_achieved_via_victim_corruption}`, va.addrof_achieved_via_victim_corruption ? "success_major" : "info", FNAME_RUNNER);
-            if (va.found_pointers_in_victim_ta && va.found_pointers_in_victim_ta.length > 0) {
-                logS3(`      Ponteiros Encontrados na Vítima:`, "leak", FNAME_RUNNER);
-                va.found_pointers_in_victim_ta.slice(0, 5).forEach(p => {
-                    logS3(`        Index ${p.index}: ${p.addr_str}`, "leak_detail");
-                });
-                if (va.found_pointers_in_victim_ta.length > 5) logS3("        ...", "leak_detail");
-            }
+        if (result.best_iter_addrof_details) { // Detalhes da tentativa de addrof da melhor iteração
+            const ad = result.best_iter_addrof_details;
+            logS3(`    Detalhes Addrof (Melhor Iteração):`, "info_emphasis", FNAME_RUNNER);
+            logS3(`      Tentativa: ${ad.attempted}, Sucesso: ${ad.success}`, ad.success ? "success_major" : "info", FNAME_RUNNER);
+            logS3(`      Notas: ${ad.notes}`, "info", FNAME_RUNNER);
+            if (ad.leaked_address_str) logS3(`      Endereço Vazado: ${ad.leaked_address_str}`, "leak", FNAME_RUNNER);
         }
 
         if (result.addrof_result) {
@@ -60,7 +54,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
         if (result.webkit_leak_result) {
             logS3(`    Resultado WebKitLeak (Global): ${result.webkit_leak_result.msg} (Base: ${result.webkit_leak_result.webkit_base_candidate || 'N/A'})`, result.webkit_leak_result.success ? "success_major" : "info", FNAME_RUNNER);
         }
-        if (result.errorOccurred && result.oob_params_of_best_result) { // Se o melhor resultado ainda teve um erro primário
+        if (result.errorOccurred) {
              logS3(`    Erro no Melhor Resultado Reportado: ${result.errorOccurred}`, "error", FNAME_RUNNER);
         }
 
@@ -70,15 +64,16 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
                 let logMsg = `    Iter ${index + 1} (Off ${iter_sum.oob_offset} Val ${iter_sum.oob_value}): `;
                 let highlights = [];
                 if (iter_sum.heisenbug_on_M2_confirmed_by_tc_probe) highlights.push("TC_OK");
-                if (iter_sum.victim_ta_analysis?.addrof_achieved_via_victim_corruption) highlights.push("ADDROF_VictimOK");
-                // Adicionar mais highlights conforme necessário
-                
+                if (iter_sum.addrof_success_this_iter) highlights.push("ADDROF_ITER_OK");
+                if (iter_sum.webkit_leak_success_this_iter) highlights.push("WKLeak_ITER_OK");
+                                
                 if (highlights.length > 0) { logMsg += highlights.join(", "); }
                 else { logMsg += "Sem Efeitos Notáveis"; }
                 if(iter_sum.error) logMsg += `, Err: ${iter_sum.error}`;
                 
                 let logLevel = "info";
-                if (iter_sum.victim_ta_analysis?.addrof_achieved_via_victim_corruption) logLevel = "success_major";
+                if (iter_sum.webkit_leak_success_this_iter) logLevel = "success_major";
+                else if (iter_sum.addrof_success_this_iter) logLevel = "vuln_potential";
                 else if (iter_sum.heisenbug_on_M2_confirmed_by_tc_probe) logLevel = "vuln";
                 logS3(logMsg, logLevel, FNAME_RUNNER);
             });
@@ -89,8 +84,8 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
         document.title = result.final_title_page || `${module_name_for_title} Final: Done`;
 
     } else {
-        document.title = `${module_name_for_title}_R43_MassiveScopeFix: Invalid Result Obj`;
-        logS3(`  RUNNER R43(MassiveScopeFix): Objeto de resultado inválido ou nulo recebido do teste.`, "critical", FNAME_RUNNER);
+        document.title = `${module_name_for_title}_R43_ImprovedBase: Invalid Result Obj`;
+        logS3(`  RUNNER R43(ImprovedBase): Objeto de resultado inválido ou nulo recebido do teste.`, "critical", FNAME_RUNNER);
     }
 
     logS3(`  Título da página final (definido pelo teste): ${document.title}`, "info", FNAME_RUNNER);
@@ -99,12 +94,12 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeF
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator_MassiveScopeFix`;
-    logS3(`==== INICIANDO Script 3 R43_MassiveScopeFix (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator_ImprovedBase`;
+    logS3(`==== INICIANDO Script 3 R43_ImprovedBase (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalScopeFix();
+    await runHeisenbugReproStrategy_TypedArrayVictim_R43_ImprovedBase();
     
-    logS3(`\n==== Script 3 R43_MassiveScopeFix (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R43_ImprovedBase (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 
     if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) &&
@@ -113,6 +108,6 @@ export async function runAllAdvancedTestsS3() {
         !document.title.toUpperCase().includes("SUCCESS") &&
         !document.title.includes("ERR") && 
         !document.title.includes("Invalid")) {
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43_MassiveScopeFix_Done`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43_ImprovedBase_Done`;
     }
 }
