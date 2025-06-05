@@ -1,62 +1,143 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43s)
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R43, 
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
-} from './testArrayBufferVictimCrash.mjs';
+// js/utils.mjs (R42 - Lógica de Adição/Subtração Robusta)
 
-async function runHeisenbugReproStrategy_TypedArrayVictim_R43s() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43s"; 
-    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
+export const KB = 1024;
+export const MB = KB * KB;
+export const GB = KB * KB * KB;
 
-    const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-
-    if (result.errorOccurred) {
-        logS3(`  RUNNER R43s: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
-        document.title = `${module_name_for_title}_R43s: MainTest ERR!`;
-    } else if (result) {
-        logS3(`  RUNNER R43s: Teste completado.`, "good", FNAME_RUNNER);
+export class AdvancedInt64 {
+    constructor(low, high) {
+        this._isAdvancedInt64 = true; 
+        let buffer = new Uint32Array(2);
         
-        const { heap_scan, primitives, webkit_leak } = result;
-        
-        if (heap_scan) {
-            logS3(`  RUNNER R43s: Fase 2 - Memory Scan: ${heap_scan.msg}`, heap_scan.success ? "vuln" : "warn", FNAME_RUNNER);
-        }
-        
-        if (primitives) {
-            logS3(`  RUNNER R43s: Fase 3 - Construção de Primitivas: ${primitives.msg}`, primitives.success ? "vuln" : "warn", FNAME_RUNNER);
+        let is_one_arg = false;
+        if (arguments.length === 1) { is_one_arg = true; }
+        if (arguments.length === 0) { 
+            low = 0; high = 0; is_one_arg = false; 
         }
 
-        if (webkit_leak) {
-            logS3(`  RUNNER R43s: Fase 4 - Vazamento da Base do WebKit: ${webkit_leak.msg}`, webkit_leak.success ? "vuln" : "warn", FNAME_RUNNER);
+        if (!is_one_arg) {
+            if (typeof low !== 'number' || isNaN(low)) { low = 0; }
+            if (typeof high !== 'number' || isNaN(high)) { high = 0; }
+            if (low instanceof AdvancedInt64 && high === undefined) {
+                buffer[0] = low.low(); buffer[1] = low.high();
+                this.buffer = buffer; return;
+            }
         }
+        
+        const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
-        if (webkit_leak?.success) {
-            document.title = `${module_name_for_title}_R43s: WebKitLeak SUCCESS!`;
-        } else if (primitives?.success) {
-            document.title = `${module_name_for_title}_R43s: Primitives OK`;
-        } else if (heap_scan?.success) {
-            document.title = `${module_name_for_title}_R43s: HeapScan OK`;
-        } else {
-            document.title = `${module_name_for_title}_R43s: Test Fail`;
+        if (is_one_arg) {
+            if (typeof (low) === 'number') {
+                if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
+                buffer[0] = low & 0xFFFFFFFF;
+                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
+            } else if (typeof (low) === 'string') {
+                let str = low;
+                if (str.startsWith('0x')) { str = str.slice(2); } 
+                if (str.includes('_')) str = str.replace('_', '');
+                if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
+                str = str.padStart(16, '0'); 
+                const highStr = str.substring(0, 8); const lowStr = str.substring(8, 16);
+                buffer[1] = parseInt(highStr, 16); buffer[0] = parseInt(lowStr, 16);
+            } else if (low instanceof AdvancedInt64) { 
+                 buffer[0] = low.low(); buffer[1] = low.high();
+            } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); }
+        } else { 
+            if (!check_range(low) || !check_range(high)) {
+                // Este erro que estava sendo acionado.
+                throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`);
+            }
+            buffer[0] = low; buffer[1] = high;
         }
-    } else {
-        document.title = `${module_name_for_title}_R43s: Invalid Result Obj`;
+        this.buffer = buffer;
     }
-    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
-    await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+
+    low() { return this.buffer[0]; }
+    high() { return this.buffer[1]; }
+
+    equals(other) {
+        if (!isAdvancedInt64Object(other)) { return false; }
+        return this.low() === other.low() && this.high() === other.high();
+    }
+    
+    toString(hex = false) { 
+        if (hex) {
+            let high_str = this.high().toString(16).padStart(8, '0');
+            let low_str = this.low().toString(16).padStart(8, '0');
+            return `0x${high_str}${low_str}`;
+        }
+        return this.toNumber().toString();
+     }    
+    toNumber() { 
+        return this.high() * (0xFFFFFFFF + 1) + this.low();
+    }
+
+    // >>>>> CORREÇÃO APLICADA AQUI <<<<<
+    add(val) {
+        if (!(val instanceof AdvancedInt64)) { 
+            val = new AdvancedInt64(val); 
+        }
+        
+        // Usar Math.imul para garantir aritmética de 32 bits e obter os resultados corretos
+        // A lógica de carry é mais complexa do que uma simples verificação >
+        const a = this.high() >>> 16;
+        const b = this.high() & 0xFFFF;
+        const c = this.low() >>> 16;
+        const d = this.low() & 0xFFFF;
+
+        const other_a = val.high() >>> 16;
+        const other_b = val.high() & 0xFFFF;
+        const other_c = val.low() >>> 16;
+        const other_d = val.low() & 0xFFFF;
+
+        let d_new = d + other_d;
+        let c_new = c + other_c + (d_new >>> 16);
+        let b_new = b + other_b + (c_new >>> 16);
+        let a_new = a + other_a + (b_new >>> 16);
+        
+        let newLow = (c_new << 16) | (d_new & 0xFFFF);
+        let newHigh = (a_new << 16) | (b_new & 0xFFFF);
+        
+        return new AdvancedInt64(newLow, newHigh);
+    }
+
+    sub(val) { 
+        if (!(val instanceof AdvancedInt64)) { 
+            val = new AdvancedInt64(val);
+        }
+        // Nega o valor e soma
+        const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1);
+        return this.add(neg_val);
+    }
+
+    and(val) {
+        if (!(val instanceof AdvancedInt64)) {
+            val = new AdvancedInt64(val);
+        }
+        return new AdvancedInt64(this.low() & val.low(), this.high() & val.high());
+    }
 }
 
-export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R43s (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
-    await runHeisenbugReproStrategy_TypedArrayVictim_R43s();
-    logS3(`\n==== Script 3 R43s (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
-    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK")) {
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43s Done`;
+export function isAdvancedInt64Object(obj) {
+    return obj && obj._isAdvancedInt64 === true;
+}
+
+export function advInt64LessThanOrEqual(a, b) {
+    if (!isAdvancedInt64Object(a) || !isAdvancedInt64Object(b)) {
+        return false; 
     }
+    if (a.high() < b.high()) return true;
+    if (a.high() > b.high()) return false;
+    return a.low() <= b.low();
+}
+
+export async function PAUSE(ms) { 
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function toHex(val, bits = 32) { 
+    if (isAdvancedInt64Object(val)) {
+        return val.toString(true);
+    }
+    return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
 }
