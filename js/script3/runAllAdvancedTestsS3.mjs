@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Runner para Testes Massivos Finais CORRIGIDO)
+// js/script3/runAllAdvancedTestsS3.mjs (Runner para Testes Massivos Finais Revisados - Fix)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
@@ -13,8 +13,8 @@ function safeToHexRunner(value, length = 8) { /* ... (como na versão anterior) 
     return String(value);
 }
 
-async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() { // Nome da função do runner atualizado
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArray_R43_MassiveFinalCor"; // Nome do runner atualizado
+async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalFix() { // Nome atualizado
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalFix";
     logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
     const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
@@ -22,10 +22,10 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
     if (result.errorOccurred && !result.oob_params_of_best_result) {
-        logS3(`  RUNNER R43(MassiveFinalCor): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R43(MassiveFinalFix): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
     } else if (result) {
-        logS3(`  RUNNER R43(MassiveFinalCor): Teste principal completado. Analisando resultados...`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R43(MassiveFinalFix): Teste principal completado. Analisando resultados...`, "good", FNAME_RUNNER);
 
         logS3(`  --- MELHOR RESULTADO GERAL ENCONTRADO ---`, "info_emphasis", FNAME_RUNNER);
         let bestParamsMsg = 'N/A';
@@ -34,7 +34,6 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
         }
         logS3(`    Melhores Parâmetros OOB: ${bestParamsMsg}`, "info", FNAME_RUNNER);
         
-        // CORRIGIDO: Usar result.heisenbug_on_M2_confirmed_by_tc_probe que está no objeto 'result' principal
         const heisenbugInBest = result.heisenbug_on_M2_confirmed_by_tc_probe;
         logS3(`    TC Confirmada no Melhor Resultado: ${heisenbugInBest}`, heisenbugInBest ? "vuln" : "info", FNAME_RUNNER);
         if (result.tc_probe_details) {
@@ -65,7 +64,6 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
              logS3(`    Erro no Melhor Resultado Reportado: ${result.errorOccurred}`, "error", FNAME_RUNNER);
         }
 
-
         if (result.iteration_results_summary && result.iteration_results_summary.length > 0) {
             logS3(`  --- SUMÁRIO DE TODAS AS ITERAÇÕES (${result.iteration_results_summary.length} testadas) ---`, "info_emphasis", FNAME_RUNNER);
             result.iteration_results_summary.forEach((iter_sum, index) => {
@@ -73,7 +71,6 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
                 let highlights = [];
                 if (iter_sum.heisenbug_on_M2_confirmed_by_tc_probe) highlights.push("TC_OK");
                 if (iter_sum.victim_ta_analysis?.addrof_achieved_via_victim_corruption) highlights.push("ADDROF_VictimOK");
-                // Adicionar mais flags de sucesso da iteração se necessário
                 if (iter_sum.webkit_leak_success_this_iter) highlights.push("WKLeak_IterOK");
                                 
                 if (highlights.length > 0) { logMsg += highlights.join(", "); }
@@ -81,20 +78,20 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
                 if(iter_sum.error) logMsg += `, Err: ${iter_sum.error}`;
                 
                 let logLevel = "info";
-                if (iter_sum.webkit_leak_success_this_iter || iter_sum.addrof_success_this_iter || iter_sum.victim_ta_analysis?.addrof_achieved_via_victim_corruption) logLevel = "success_major";
+                if (iter_sum.webkit_leak_success_this_iter) logLevel = "success_major";
+                else if (iter_sum.addrof_success_this_iter || iter_sum.victim_ta_analysis?.addrof_achieved_via_victim_corruption) logLevel = "vuln_potential";
                 else if (iter_sum.heisenbug_on_M2_confirmed_by_tc_probe) logLevel = "vuln";
                 logS3(logMsg, logLevel, FNAME_RUNNER);
             });
         } else {
             logS3(`  Sumário de iterações não disponível ou vazio.`, "warn", FNAME_RUNNER);
         }
-        
-        // Título final da página (usando o título já definido pelo script de teste)
-        document.title = document.title; // Apenas para garantir que não haja redefinição indesejada aqui
+
+        document.title = result.final_title_page || `${module_name_for_title} Final: Done`;
 
     } else {
-        document.title = `${module_name_for_title}_R43_MassiveFinalCor: Invalid Result Obj`;
-        logS3(`  RUNNER R43(MassiveFinalCor): Objeto de resultado inválido ou nulo recebido do teste.`, "critical", FNAME_RUNNER);
+        document.title = `${module_name_for_title}_R43_MassiveFinalFix: Invalid Result Obj`;
+        logS3(`  RUNNER R43(MassiveFinalFix): Objeto de resultado inválido ou nulo recebido do teste.`, "critical", FNAME_RUNNER);
     }
 
     logS3(`  Título da página final (definido pelo teste): ${document.title}`, "info", FNAME_RUNNER);
@@ -103,12 +100,12 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor() 
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator_MassiveFinalCor`;
-    logS3(`==== INICIANDO Script 3 R43_MassiveFinalCor (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator_MassiveFinalFix`;
+    logS3(`==== INICIANDO Script 3 R43_MassiveFinalFix (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalCor();
+    await runHeisenbugReproStrategy_TypedArrayVictim_R43_MassiveFinalFix();
     
-    logS3(`\n==== Script 3 R43_MassiveFinalCor (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R43_MassiveFinalFix (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 
     if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) &&
@@ -117,6 +114,6 @@ export async function runAllAdvancedTestsS3() {
         !document.title.toUpperCase().includes("SUCCESS") &&
         !document.title.includes("ERR") && 
         !document.title.includes("Invalid")) {
-        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43_MassiveFinalCor_Done`;
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43_MassiveFinalFix_Done`;
     }
 }
