@@ -17,7 +17,7 @@ const MEMCPY_IN_LIBC_OFFSET = new AdvancedInt64(0x26AD0); // Validado de lib c m
 const MEMCPY_GOT_IN_WEBKIT_OFFSET = new AdvancedInt64(0x3CBCBB8); // Validado de memcpy libSceNkWebKit.txt 
 
 // Faixa de memória para procurar a base do WebKit.
-const WEBKIT_SEARCH_START = new AdvancedInt64(0x800000000); // Começa em 32GB
+const WEBKIT_SEARCH_START = new AdvancedInt64(0x200000000); // Começa em 32GB
 const WEBKIT_SEARCH_SIZE = 0x40000000; // Varre 1GB
 const SEARCH_STEP = 0x100000; // Pula de 1MB em 1MB
 
