@@ -1,9 +1,8 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Final Corrigido)
+// js/script3/runAllAdvancedTestsS3.mjs (Final)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// Importa a função principal e a constante de nome do script de exploit
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43 as runUltimateExploit,
     FNAME_MODULE_ULTIMATE
