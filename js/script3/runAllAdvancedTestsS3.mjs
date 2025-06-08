@@ -1,9 +1,9 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para UltimateExploit.mjs)
+// js/script3/runAllAdvancedTestsS3.mjs (Final Corrigido)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// Importa a função principal e a constante de nome do nosso script de ataque final
+// Importa a função principal e a constante de nome do script de exploit
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43 as runUltimateExploit,
     FNAME_MODULE_ULTIMATE
@@ -13,7 +13,6 @@ async function runFinalBypassStrategy() {
     const FNAME_RUNNER = "runFinalBypassStrategy"; 
     logS3(`==== INICIANDO ESTRATÉGIA DE BYPASS DE ASLR ====`, 'test', FNAME_RUNNER);
     
-    // Chama a função que tentará todas as estratégias
     const result = await runUltimateExploit();
 
     if (result && result.success) {
