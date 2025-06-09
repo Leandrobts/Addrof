@@ -15,6 +15,12 @@ export const JSC_OFFSETS = {
         // para evitar confusão com os *_FLATTENED_OFFSET, que parecem mais detalhados
         // da sua análise do construtor de Structure.
     },
+    CallFrame: { // Offsets baseados na análise de CallFrame.txt
+        CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee() 
+        ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis() 
+        THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue() 
+        ARGUMENTS_POINTER_OFFSET: 0x28 // De JSC::ProtoCallFrame::argument(ulong) 
+    },
     Structure: { // Offsets DENTRO da estrutura Structure
         CELL_SPECIFIC_FLAGS_OFFSET: 0x8,
         TYPE_INFO_TYPE_OFFSET: 0x9,
