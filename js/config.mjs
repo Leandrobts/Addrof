@@ -128,7 +128,7 @@ export const WEBKIT_LIBRARY_INFO = {
 };
 
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 32768, // Para o teste v10.36, você aumentou para 1MB. Mantenha o valor desejado.
+    ALLOCATION_SIZE: 1048576, // Para o  v10.36, você aumentou para 1MB. Mantenha o valor desejado.
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
