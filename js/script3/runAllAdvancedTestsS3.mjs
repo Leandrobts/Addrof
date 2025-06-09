@@ -1,34 +1,35 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 45 - Estratégia em Estágios)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 46 - Escaneador de Heap)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    // NOVO: Importa a nova função de teste R45 e seu nome de módulo.
-    executeStagedLeak_R45,
-    FNAME_MODULE_STAGED_LEAK_R45
+    // NOVO: Importa a nova função de diagnóstico R46.
+    executeHeapScan_R46,
+    FNAME_MODULE_HEAP_SCANNER_R46
 } from './testArrayBufferVictimCrash.mjs';
 
-// Runner para a nova estratégia R45 (Exploit em Estágios)
-async function runStagedExploitStrategy_R45() {
-    const FNAME_RUNNER = "runStagedExploitStrategy_R45";
-    logS3(`==== INICIANDO Estratégia de Exploit em Estágios (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+// Runner para a nova estratégia de diagnóstico R46
+async function runHeapScannerStrategy_R46() {
+    const FNAME_RUNNER = "runHeapScannerStrategy_R46";
+    logS3(`==== INICIANDO Estratégia de Escaneamento de Heap (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
-    const result = await executeStagedLeak_R45();
-    const module_name_for_title = FNAME_MODULE_STAGED_LEAK_R45;
+    const result = await executeHeapScan_R46();
+    const module_name_for_title = FNAME_MODULE_HEAP_SCANNER_R46;
 
     if (!result) {
-        logS3(`  RUNNER R45: Teste principal retornou um objeto de resultado inválido.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R46: Teste principal retornou um objeto de resultado inválido.`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: ERR-InvalidResult`;
         return;
     }
     
-    logS3(`  RUNNER R45: Teste principal concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
+    logS3(`  RUNNER R46: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
 
     if (result.success) {
-        document.title = `${module_name_for_title}: WebKitLeak SUCCESS!`;
-        logS3(`  RUNNER R45: ENDEREÇO BASE DO WEBKIT ENCONTRADO: ${result.webkit_base}`, "vuln_major");
+        document.title = `${module_name_for_title}: Scan Found Objects!`;
+        logS3(`  RUNNER R46: OBJETOS ENCONTRADOS:`, "vuln");
+        console.log(result.found_objects); // Loga o objeto no console para fácil visualização
     } else {
-        document.title = `${module_name_for_title}: Fail at Stage '${result.stage}'`;
+        document.title = `${module_name_for_title}: Scan Found Nothing.`;
     }
 
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
@@ -37,16 +38,12 @@ async function runStagedExploitStrategy_R45() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_STAGED_LEAK_R45}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R45 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_HEAP_SCANNER_R46}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R46 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runStagedExploitStrategy_R45();
+    await runHeapScannerStrategy_R46();
     
-    logS3(`\n==== Script 3 R45 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R46 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); 
     if (runBtn) runBtn.disabled = false;
-    
-    if (document.title.includes(FNAME_MODULE_STAGED_LEAK_R45) && !document.title.includes("SUCCESS") && !document.title.includes("Fail")) {
-        document.title = `${FNAME_MODULE_STAGED_LEAK_R45}_R45 Done`;
-    }
 }
