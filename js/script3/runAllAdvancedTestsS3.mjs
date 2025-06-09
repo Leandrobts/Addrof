@@ -1,16 +1,13 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 44 - Estratégia CallFrame)
+// js/script3/runAllAdvancedTestsS3.mjs (Revisão 44.2 - Correção de Import)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import {
-    // A função original é mantida importada, mas não será a principal chamada.
-    executeTypedArrayVictimAddrofAndWebKitLeak_R43, 
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT,
 
-    // NOVO: Importa a nova função e seu nome de módulo
+// ALTERADO: A importação do módulo antigo (R43) foi removida,
+// pois o orquestrador agora usa apenas a nova estratégia (R44).
+import {
     executeCallFrameVictimAddrofAndWebKitLeak_R44,
     FNAME_MODULE_CALLFRAME_ADDROF_R44
-
 } from './testArrayBufferVictimCrash.mjs';
 
 // Runner para a nova estratégia R44 (CallFrame Victim)
@@ -18,6 +15,7 @@ async function runNewCallFrameStrategy_R44() {
     const FNAME_RUNNER = "runNewCallFrameStrategy_R44";
     logS3(`==== INICIANDO Estratégia de Addrof via CallFrame (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
+    // O nome do módulo foi ajustado para refletir a nova estratégia.
     const result = await executeCallFrameVictimAddrofAndWebKitLeak_R44();
     const module_name_for_title = FNAME_MODULE_CALLFRAME_ADDROF_R44;
 
@@ -54,7 +52,6 @@ async function runNewCallFrameStrategy_R44() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    // ALTERADO: O orquestrador agora chama a nova estratégia R44 por padrão.
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_CALLFRAME_ADDROF_R44}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 R44 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
