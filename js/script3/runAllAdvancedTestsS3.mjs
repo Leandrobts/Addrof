@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para o Ataque R64)
+// js/script3/runAllAdvancedTestsS3.mjs (Sem alterações necessárias)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
@@ -9,7 +9,7 @@ import {
     FNAME_MODULE_ULTIMATE
 } from './UltimateExploit.mjs';
 
-async function runFinalBypassStrategy() {
+async function runFinalAttackStrategy() {
     const FNAME_RUNNER = "runFinalAttackStrategy";
     const moduleName = FNAME_MODULE_ULTIMATE || 'Final_Attack';
     logS3(`==== INICIANDO ESTRATÉGIA FINAL (${moduleName}) ====`, 'test', FNAME_RUNNER);
@@ -35,7 +35,7 @@ export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_ULTIMATE}_MainOrchestrator`;
     logS3(`==== INICIANDO Script Final (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runFinalBypassStrategy();
+    await runFinalAttackStrategy();
     
     logS3(`\n==== Script Final (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3();
