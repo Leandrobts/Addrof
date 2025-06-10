@@ -1,9 +1,7 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para UltimateExploit.mjs R61)
+// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador com melhor log de erro)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-
-// Importa a função principal e a constante de nome do nosso script de ataque final
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43 as runUltimateExploit,
     FNAME_MODULE_ULTIMATE
@@ -20,9 +18,9 @@ async function runFinalBypassStrategy() {
         logS3(`  > Mensagem Final: ${result.message}`, "vuln_major", FNAME_RUNNER);
         document.title = `SUCESSO!`;
     } else {
-        logS3(`  RUNNER: FALHA. Não foi possível construir as primitivas.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER: FALHA. Não foi possível construir as primitivas ou a cadeia de exploração falhou.`, "critical", FNAME_RUNNER);
         logS3(`  > Mensagem de Erro: ${result?.error || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_ULTIMATE}: Primitives FAIL!`;
+        document.title = `${FNAME_MODULE_ULTIMATE}: Exploit FAIL!`;
     }
     
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
