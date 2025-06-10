@@ -1,34 +1,42 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 55)
+// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para UltimateExploit.mjs)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+
+// Importa a função principal e a constante de nome do nosso script de ataque final
 import {
-    executeDestructorHijack_R55,
-    FNAME_MODULE_DESTRUCTOR_HIJACK_R55
-} from './testArrayBufferVictimCrash.mjs';
+    executeTypedArrayVictimAddrofAndWebKitLeak_R43 as runUltimateExploit,
+    FNAME_MODULE_ULTIMATE
+} from './UltimateExploit.mjs';
 
-async function runDestructorHijack_R55() {
-    const FNAME_RUNNER = "runDestructorHijack_R55";
-    logS3(`==== INICIANDO Estratégia de Ataque ao Destruidor (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+async function runFinalBypassStrategy() {
+    const FNAME_RUNNER = "runFinalBypassStrategy"; 
+    logS3(`==== INICIANDO ESTRATÉGIA DE BYPASS DE ASLR ====`, 'test', FNAME_RUNNER);
     
-    const result = await executeDestructorHijack_R55();
-    const module_name_for_title = FNAME_MODULE_DESTRUCTOR_HIJACK_R55;
+    // Chama a função que tentará todas as estratégias
+    const result = await runUltimateExploit();
 
-    logS3(`  RUNNER R55: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
-
-    if (result.success) {
-        document.title = `${module_name_for_title}: Corruption Attempted.`;
+    if (result && result.success) {
+        logS3(`  RUNNER: SUCESSO! Uma das estratégias de bypass funcionou.`, "good", FNAME_RUNNER);
+        logS3(`  > Mensagem de Sucesso: ${result.message}`, "vuln", FNAME_RUNNER);
+        document.title = `SUCESSO! ${result.message}`;
     } else {
-        document.title = `${module_name_for_title}: Fail at Stage '${result.stage}'`;
+        logS3(`  RUNNER: FALHA. Todas as estratégias de bypass falharam.`, "critical", FNAME_RUNNER);
+        logS3(`  > Mensagem Final: ${result?.error || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE_ULTIMATE}: Bypass FAIL!`;
     }
-
-    logS3(`  RUNNER R55: Se o navegador travou, o ataque foi bem-sucedido em corromper o heap.`, "info_major");
+    
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== ESTRATÉGIA DE BYPASS CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_DESTRUCTOR_HIJACK_R55}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R55 (${FNAME_ORCHESTRATOR}) ... ====`, 'test');
-    await runDestructorHijack_R55();
-    logS3(`\n==== Script 3 R55 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test');
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_ULTIMATE}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script Final (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    
+    await runFinalBypassStrategy();
+    
+    logS3(`\n==== Script Final (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
