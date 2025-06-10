@@ -1,54 +1,51 @@
-// NOME DO ARQUIVO: runJsonRecursionTest.mjs
+// js/script3/runAllAdvancedTestsS3.mjs
 
-import { executeJsonRecursionTest, FNAME_MODULE_JSON_RECURSION } from './testJsonRecursionCrash.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { getRunBtnAdvancedS3, getOutputAdvancedS3 } from '../dom_elements.mjs';
+import {
+    executeJsonRecursionCrashTest,
+    FNAME_MODULE
+} from './testJsonRecursionCrash.mjs';
 
-// Função de log simples para a interface
-const logToDiv = (message, type = 'info') => {
-    const outputDiv = document.getElementById('output');
-    if (outputDiv) {
-        const timestamp = `[${new Date().toLocaleTimeString()}]`;
-        const logClass = type;
-        outputDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${String(message).replace(/</g, "&lt;")}\n</span>`;
-        outputDiv.scrollTop = outputDiv.scrollHeight;
+async function runTestStrategy() {
+    const FNAME_RUNNER = `${FNAME_MODULE}_Runner`;
+    logS3(`==== INICIANDO Estratégia de Teste: ${FNAME_MODULE} ====`, 'test', FNAME_RUNNER);
+    logS3("O objetivo é replicar o crash 'idx < size()' ou 'lento/sem memória'.", "info", FNAME_RUNNER);
+    logS3("Abra o console do navegador (F12) com 'Preserve Log' ATIVADO para ver os logs da sonda.", "warn", FNAME_RUNNER);
+
+    // Pausa para dar tempo de ler a mensagem
+    await PAUSE_S3(1000);
+
+    const result = await executeJsonRecursionCrashTest();
+
+    logS3(`==== Estratégia de Teste ${FNAME_MODULE} CONCLUÍDA (do ponto de vista do runner) ====`, 'test', FNAME_RUNNER);
+
+    if (result.error) {
+        document.title = `${FNAME_MODULE}: ERRO CAPTURADO`;
+        logS3(`Resultado: Teste finalizou com um erro explícito: ${result.error}`, "error", FNAME_RUNNER);
+    } else if (result.completed) {
+        document.title = `${FNAME_MODULE}: SUCESSO (Inesperado)`;
+        logS3("Resultado: Teste completou sem travar. A condição para o crash não foi atingida com este objeto.", "good", FNAME_RUNNER);
+    } else {
+        // Se a função retornou, mas 'completed' é false, algo estranho ocorreu.
+        // No entanto, o mais provável é que o script pare antes de chegar aqui.
+        document.title = `${FNAME_MODULE}: TRAVAMENTO PROVÁVEL`;
+        logS3("Resultado: O runner continuou, mas o teste não foi marcado como concluído. Verifique o console para os últimos logs antes do provável travamento.", "critical", FNAME_RUNNER);
     }
-};
+}
 
-/**
- * Runner que gerencia a execução do teste e a UI.
- */
-export async function runJsonRecursionTestRunner() {
-    const runBtn = document.getElementById('runBtn');
+export async function runAllAdvancedTestsS3() {
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
+    const runBtn = getRunBtnAdvancedS3();
+    const outputDiv = getOutputAdvancedS3();
+
     if (runBtn) runBtn.disabled = true;
-
-    // Limpa o log da tela
-    const outputDiv = document.getElementById('output');
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logToDiv(`==== INICIANDO TESTE: ${FNAME_MODULE_JSON_RECURSION} ====`, 'test');
-    logToDiv("O objetivo é replicar o crash/lentidão. Foco no console do navegador (F12)!", 'warn');
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
 
-    try {
-        const result = await executeJsonRecursionTest();
+    await runTestStrategy();
 
-        // Análise do resultado
-        if (result.errorCaptured) {
-            logToDiv(`ERRO DE SCRIPT CAPTURADO: ${result.errorCaptured}`, 'critical');
-            document.title = "JSON Bug: Erro Capturado!";
-        } else if (result.didComplete) {
-            logToDiv(`TESTE CONCLUÍDO INESPERADAMENTE. Profundidade final: ${result.finalCallCount}.`, 'warn');
-            document.title = "JSON Bug: Não Crashou";
-        } else {
-             logToDiv(`TESTE FINALIZADO. Profundidade final: ${result.finalCallCount}. Verifique o console para crash/lentidão.`, 'good');
-             document.title = "JSON Bug: Teste Finalizado";
-        }
-
-    } catch (e) {
-        // Erro inesperado no próprio runner
-        logToDiv(`ERRO CRÍTICO NO RUNNER: ${e.message}`, 'critical');
-        console.error("ERRO CRÍTICO NO RUNNER:", e);
-        document.title = "JSON Bug: Erro no Runner";
-    } finally {
-        logToDiv("Runner concluído.", 'test');
-        if (runBtn) runBtn.disabled = false;
-    }
+    logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    if (runBtn) runBtn.disabled = false;
 }
