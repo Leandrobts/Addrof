@@ -1,25 +1,28 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 58)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 59)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    execute_json_uaf_attack_R58 as runUltimateExploit,
+    executeChainedUAF_R59 as runUltimateExploit,
     FNAME_MODULE_ULTIMATE
 } from './UltimateExploit.mjs';
 
 async function runFinalBypassStrategy() {
-    const FNAME_RUNNER = "runUAFStrategy_R58"; 
-    logS3(`==== INICIANDO ESTRATÉGIA DE ATAQUE UAF (${FNAME_RUNNER}) ====`, 'test');
+    const FNAME_RUNNER = "runChainedUAF_R59"; 
+    logS3(`==== INICIANDO ESTRATÉGIA DE ATAQUE ENCADEADO (${FNAME_RUNNER}) ====`, 'test');
     
     const result = await runUltimateExploit();
 
-    // Para este teste, não há um resultado de "sucesso" no código, pois o sucesso é um crash.
-    // O log apenas reflete que o teste foi executado.
-    logS3(`  RUNNER R58: Teste concluído.`, "info", FNAME_RUNNER);
-    logS3(`  > Mensagem Final: ${result.message}`, "warn", FNAME_RUNNER);
-    document.title = `${FNAME_MODULE_ULTIMATE}: UAF Test Finished.`;
-
-    logS3(`  RUNNER R58: O resultado esperado deste teste é um CRASH. Se o navegador não travou, a mitigação do GC é eficaz.`, "info_major");
+    logS3(`  RUNNER R59: Teste concluído.`, "info", FNAME_RUNNER);
+    
+    if (result.success) {
+        document.title = `${FNAME_MODULE_ULTIMATE}: Partial Success!`;
+        logS3(`  > Resultado: ${result.message}`, "vuln");
+    } else {
+        document.title = `${FNAME_MODULE_ULTIMATE}: No Crash Detected.`;
+        logS3(`  > Resultado: ${result.message}`, "warn");
+    }
+    logS3(`  RUNNER R59: O resultado ideal deste teste é um CRASH do navegador.`, "info_major");
 }
 
 export async function runAllAdvancedTestsS3() {
@@ -29,5 +32,4 @@ export async function runAllAdvancedTestsS3() {
     await runFinalBypassStrategy();
     
     logS3(`\n==== Script Final (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test');
-    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
