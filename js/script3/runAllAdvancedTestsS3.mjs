@@ -1,49 +1,48 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 49 - Diagnóstico de DataView)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 50 - Dumper Interativo)
 
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import { logS3 } from './s3_utils.mjs';
+import { getRunBtnAdvancedS3 } from '../dom_elements.mjs'; // Botão antigo não é mais usado aqui
 import {
-    executeDataViewScan_R49,
-    FNAME_MODULE_DATAVIEW_SCANNER_R49
+    executeMemoryDump_R50,
+    FNAME_MODULE_MEMORY_DUMPER_R50
 } from './testArrayBufferVictimCrash.mjs';
 
-// Runner para a nova estratégia de diagnóstico R49
-async function runDataViewScanner_R49() {
-    const FNAME_RUNNER = "runDataViewScanner_R49";
-    logS3(`==== INICIANDO Estratégia de Diagnóstico de DataView (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    
-    const result = await executeDataViewScan_R49();
-    const module_name_for_title = FNAME_MODULE_DATAVIEW_SCANNER_R49;
+function setupMemoryDumperListener() {
+    const FNAME_SETUP = "setupMemoryDumperListener";
+    const runBtn = document.getElementById('runDumperBtn');
+    const startAddrEl = document.getElementById('startAddr');
+    const dumpSizeEl = document.getElementById('dumpSize');
+    const outputEl = document.getElementById('dumpOutput');
 
-    if (!result) {
-        logS3(`  RUNNER R49: Teste principal retornou um objeto de resultado inválido.`, "critical", FNAME_RUNNER);
-        document.title = `${module_name_for_title}: ERR-InvalidResult`;
+    if (!runBtn || !startAddrEl || !dumpSizeEl || !outputEl) {
+        logS3(`[${FNAME_SETUP}] ERRO: Elementos da UI do dumper não encontrados.`, "critical");
         return;
     }
-    
-    logS3(`  RUNNER R49: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn", FNAME_RUNNER);
 
-    if (result.success) {
-        document.title = `${module_name_for_title}: DataView Found!`;
-        logS3(`  RUNNER R49: O OFFSET CORRETO É: 0x${result.dataview_offset.toString(16)}`, "vuln_major");
-        logS3(`  RUNNER R49: Próximo passo: Atualize a constante 'OOB_DV_METADATA_BASE_IN_OOB_BUFFER' em core_exploit.mjs para este valor e execute a estratégia R48 novamente.`, "info_major");
-    } else {
-        document.title = `${module_name_for_title}: DataView NOT Found.`;
-        logS3(`  RUNNER R49: O objeto DataView não está sendo alocado dentro do ArrayBuffer. A premissa do exploit é inválida para este ambiente e uma nova abordagem será necessária.`, "critical");
-    }
+    runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        outputEl.textContent = "Preparando...";
+        try {
+            await executeMemoryDump_R50(startAddrEl.value, dumpSizeEl.value, outputEl);
+        } catch (e) {
+            outputEl.textContent += `\n\nERRO INESPERADO: ${e.message}`;
+        } finally {
+            runBtn.disabled = false;
+        }
+    });
 
-    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
-    await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`[${FNAME_SETUP}] Ouvinte de eventos para o dumper de memória configurado.`, "good");
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_DATAVIEW_SCANNER_R49}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R49 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_MEMORY_DUMPER_R50}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R50 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runDataViewScanner_R49();
+    // Em vez de executar um teste, agora configuramos a interface do usuário.
+    setupMemoryDumperListener();
     
-    logS3(`\n==== Script 3 R49 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-    const runBtn = getRunBtnAdvancedS3(); 
-    if (runBtn) runBtn.disabled = false;
+    logS3(`\n==== Script 3 R50 (${FNAME_ORCHESTRATOR}) CONCLUÍDO e PRONTO PARA USO ====`, 'test', FNAME_ORCHESTRATOR);
+    // Habilita o botão antigo, caso ainda exista na página.
+    const oldRunBtn = getRunBtnAdvancedS3();
+    if (oldRunBtn) oldRunBtn.disabled = false;
 }
