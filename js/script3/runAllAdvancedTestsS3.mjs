@@ -1,45 +1,52 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Revisão 59.1 - Corrigido)
+// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para o Ataque R60)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-
-// CORREÇÃO: Importa a função correta do nosso script de ataque final
-import {
-    executeChainedUAF_R59 as runUltimateExploit,
+import { 
+    executeChainedUAFExploit as runUltimateExploit,
     FNAME_MODULE_ULTIMATE
 } from './UltimateExploit.mjs';
 
-async function runFinalBypassStrategy() {
-    const FNAME_RUNNER = "runChainedUAF_R59";
-    const moduleName = FNAME_MODULE_ULTIMATE;
-    logS3(`==== INICIANDO ESTRATÉGIA DE ATAQUE ENCADEADO (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    
+/**
+ * Executa a estratégia principal do teste, agora com tratamento de exceções.
+ */
+async function runFinalAttackStrategy() {
+    const FNAME_RUNNER = "runFinalAttackStrategy";
+    const moduleName = FNAME_MODULE_ULTIMATE || 'UltimateAttack';
+    logS3(`==== INICIANDO Estratégia Final (${moduleName}) ====`, 'test', FNAME_RUNNER);
+    document.title = `Iniciando ${moduleName}...`;
+
     let result;
     try {
         result = await runUltimateExploit();
     } catch (e) {
-        logS3(`ERRO CRÍTICO IRRECUPERÁVEL: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
-        result = { success: false, error: { message: e.message } };
+        logS3(`ERRO CRÍTICO IRRECUPERÁVEL durante a execução do teste: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
+        result = { success: false, error: e.message };
     }
 
-    logS3(`  RUNNER R59: Teste concluído.`, "info", FNAME_RUNNER);
-    
-    if (result.success) {
-        document.title = `${moduleName}: Partial Success!`;
-        logS3(`  > SUCESSO PARCIAL: ${result.message}`, "vuln", FNAME_RUNNER);
+    if (result && result.success) {
+        logS3(`  RUNNER: SUCESSO PARCIAL DETECTADO! A corrupção causou um erro de script controlado.`, "good", FNAME_RUNNER);
+        logS3(`  > Mensagem de Sucesso: ${result.message}`, "vuln", FNAME_RUNNER);
+        document.title = `SUCCESS! ${moduleName}`;
     } else {
-        document.title = `${moduleName}: No Crash Detected.`;
-        logS3(`  > Resultado: ${result.message}`, "warn", FNAME_RUNNER);
+        logS3(`  RUNNER: FALHA. O ataque foi executado, mas o navegador não travou.`, "warn", FNAME_RUNNER);
+        logS3(`  > Mensagem Final: ${result?.message || 'Nenhum erro de script capturado.'}`, "warn", FNAME_RUNNER);
+        document.title = `${moduleName}: No Crash`;
     }
-    logS3(`  RUNNER R59: O resultado ideal deste teste é um CRASH do navegador.`, "info_major", FNAME_RUNNER);
+    
+    logS3(`  RUNNER: O resultado ideal deste teste era um CRASH. Se o navegador não travou, a mitigação do GC foi eficaz.`, "info_major", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== ESTRATÉGIA FINAL CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
+
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_ULTIMATE}_MainOrchestrator`;
     logS3(`==== INICIANDO Script Final (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runFinalBypassStrategy();
+    await runFinalAttackStrategy();
     
     logS3(`\n==== Script Final (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-    const runBtn = getRunBtnAdvancedS3(); if(runBtn) runBtn.disabled = false;
+    const runBtn = getRunBtnAdvancedS3();
+    if(runBtn) runBtn.disabled = false;
 }
