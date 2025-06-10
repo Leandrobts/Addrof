@@ -1,31 +1,25 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 53)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 54)
 
 import { logS3 } from './s3_utils.mjs';
 import {
-    executeBruteForceOffset_R53,
-    FNAME_MODULE_BRUTEFORCE_R53
+    executeVtableHijack_R54,
+    FNAME_MODULE_VTABLE_HIJACK_R54
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runBruteForceStrategy_R53() {
-    const FNAME_RUNNER = "runBruteForceStrategy_R53";
-    logS3(`==== INICIANDO Estratégia de Brute-Force de Offset (${FNAME_RUNNER}) ====`, 'test');
+async function runVtableHijack_R54() {
+    const FNAME_RUNNER = "runVtableHijack_R54";
+    logS3(`==== INICIANDO Estratégia de Sequestro de Vtable (${FNAME_RUNNER}) ====`, 'test');
     
-    const result = await executeBruteForceOffset_R53();
-    const module_name_for_title = FNAME_MODULE_BRUTEFORCE_R53;
+    const result = await executeVtableHijack_R54();
+    const module_name_for_title = FNAME_MODULE_VTABLE_HIJACK_R54;
 
-    logS3(`  RUNNER R53: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn");
-
-    if (result.success) {
-        document.title = `${module_name_for_title}: SUCCESS!`;
-        logS3(`  RUNNER R53: ENDEREÇO BASE DO WEBKIT: ${result.webkit_base}`, "vuln_major");
-    } else {
-        document.title = `${module_name_for_title}: Fail at Stage '${result.stage}'`;
-    }
+    logS3(`  RUNNER R54: Teste concluído. Mensagem: ${result.msg}`, result.success ? "good" : "warn");
+    document.title = `${module_name_for_title}: Fail at Stage '${result.stage}'`;
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_BRUTEFORCE_R53}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R53 (${FNAME_ORCHESTRATOR}) ... ====`, 'test');
-    await runBruteForceStrategy_R53();
-    logS3(`\n==== Script 3 R53 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test');
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_VTABLE_HIJACK_R54}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R54 (${FNAME_ORCHESTRATOR}) ... ====`, 'test');
+    await runVtableHijack_R54();
+    logS3(`\n==== Script 3 R54 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test');
 }
