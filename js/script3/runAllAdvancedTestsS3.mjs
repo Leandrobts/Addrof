@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para UltimateExploit.mjs)
+// js/script3/runAllAdvancedTestsS3.mjs (Final - Orquestrador para UltimateExploit.mjs R61)
 
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
@@ -11,19 +11,18 @@ import {
 
 async function runFinalBypassStrategy() {
     const FNAME_RUNNER = "runFinalBypassStrategy"; 
-    logS3(`==== INICIANDO ESTRATÉGIA DE BYPASS DE ASLR ====`, 'test', FNAME_RUNNER);
+    logS3(`==== INICIANDO ESTRATÉGIA DE CONSTRUÇÃO DE PRIMITIVAS ====`, 'test', FNAME_RUNNER);
     
-    // Chama a função que tentará todas as estratégias
     const result = await runUltimateExploit();
 
     if (result && result.success) {
-        logS3(`  RUNNER: SUCESSO! Uma das estratégias de bypass funcionou.`, "good", FNAME_RUNNER);
-        logS3(`  > Mensagem de Sucesso: ${result.message}`, "vuln", FNAME_RUNNER);
-        document.title = `SUCESSO! ${result.message}`;
+        logS3(`  RUNNER: SUCESSO!`, "good", FNAME_RUNNER);
+        logS3(`  > Mensagem Final: ${result.message}`, "vuln_major", FNAME_RUNNER);
+        document.title = `SUCESSO!`;
     } else {
-        logS3(`  RUNNER: FALHA. Todas as estratégias de bypass falharam.`, "critical", FNAME_RUNNER);
-        logS3(`  > Mensagem Final: ${result?.error || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE_ULTIMATE}: Bypass FAIL!`;
+        logS3(`  RUNNER: FALHA. Não foi possível construir as primitivas.`, "critical", FNAME_RUNNER);
+        logS3(`  > Mensagem de Erro: ${result?.error || 'Erro desconhecido.'}`, "critical", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE_ULTIMATE}: Primitives FAIL!`;
     }
     
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
