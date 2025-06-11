@@ -2,22 +2,22 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// Importa a nova função de teste UAF
-import { testUafExploit } from './testMemoryLeakViaJsonTC.mjs';
+// Importa a nova função focada em reproduzir o crash.
+import { reproduceInitialCrash } from './testMemoryLeakViaJsonTC.mjs';
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `MainOrchestrator_UafStrategy`;
-    logS3(`==== INICIANDO ESTRATÉGIA DE EXPLORAÇÃO: USE-AFTER-FREE (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `MainOrchestrator_CrashRepro`;
+    logS3(`==== INICIANDO ESTRATÉGIA: REPRODUÇÃO DE CRASH (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
 
     const runBtn = getRunBtnAdvancedS3();
     if (runBtn) runBtn.disabled = true;
 
     await PAUSE_S3(MEDIUM_PAUSE_S3);
 
-    // Chama a função principal do novo exploit
-    await testUafExploit();
+    // Chama a função principal do novo teste
+    await reproduceInitialCrash();
 
-    logS3(`\n==== ESTRATÉGIA DE EXPLORAÇÃO CONCLUÍDA (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== ESTRATÉGIA DE REPRODUÇÃO CONCLUÍDA (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
     if (runBtn) runBtn.disabled = false;
-    document.title = `UAFExploit: Done`;
+    document.title = `CrashRepro: Done`;
 }
