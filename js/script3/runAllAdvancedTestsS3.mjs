@@ -1,11 +1,13 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak e Teste JSON UAF)
+// js/script3/runAllAdvancedTestsS3.mjs (CORRIGIDO)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R43,
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
-} from './testArrayBufferVictimCrash.mjs';
-import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAFSpeculative.mjs'; // <-- NOVA IMPORTAÇÃO
+    executeTypedArrayVictimAddrofAndWebKitLeak_R43
+} from './testArrayBufferVictimCrash.mjs'; // <-- CORREÇÃO: Removida a importação que causava o erro
+import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAFSpeculative.mjs';
+
+// --- CORREÇÃO: Definir a constante localmente, já que não é exportada pelo módulo de teste ---
+const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = 'testTypedArrayAddrof_v82_AGL_R43_WebKit';
 
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43";
@@ -82,7 +84,7 @@ export async function runAllAdvancedTestsS3() {
     // --- Executa a segunda suíte de testes (JSON UAF/TC Especulativo) ---
     logS3(`\n==== ORQUESTRADOR: Pausando antes de iniciar a próxima suíte de testes... ====`, 'test', FNAME_ORCHESTRATOR);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    await testJsonTypeConfusionUAFSpeculative(); // <-- NOVA CHAMADA DE TESTE
+    await testJsonTypeConfusionUAFSpeculative();
 
     // --- Finalização ---
     logS3(`\n==== Script 3 R43L (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
