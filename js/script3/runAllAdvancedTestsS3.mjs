@@ -2,7 +2,7 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// Importa a nova função focada em reproduzir o crash.
+// Importa a função focada em reproduzir o crash.
 import { reproduceInitialCrash } from './testMemoryLeakViaJsonTC.mjs';
 
 export async function runAllAdvancedTestsS3() {
@@ -18,6 +18,7 @@ export async function runAllAdvancedTestsS3() {
     await reproduceInitialCrash();
 
     logS3(`\n==== ESTRATÉGIA DE REPRODUÇÃO CONCLUÍDA (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3("Se o navegador não travou, a tentativa de reprodução falhou.", "info", FNAME);
     if (runBtn) runBtn.disabled = false;
     document.title = `CrashRepro: Done`;
 }
