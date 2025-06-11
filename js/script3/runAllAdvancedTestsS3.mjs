@@ -1,70 +1,50 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3, getOutputAdvancedS3 } from '../dom_elements.mjs';
 import {
-    testJsonTypeConfusionUAFSpeculative,
+    executeSpeculativeAddrofTest,
     FNAME_MODULE
-} from './testJsonTypeConfusionUAFSpeculative.mjs'; // <--- IMPORT CORRETO
+} from './testSpeculativeAddrof.mjs';
 
 /**
- * Executa a estratégia de teste especulativo.
+ * Executa a nova estratégia de Addrof Especulativo.
  */
-async function runSpeculativeUAFStrategy() {
-    const FNAME_RUNNER = "runSpeculativeUAFStrategy";
-    logS3(`==== INICIANDO Estratégia de Teste: ${FNAME_MODULE} ====`, 'test', FNAME_RUNNER);
+async function runSpeculativeAddrofStrategy() {
+    const FNAME_RUNNER = `${FNAME_MODULE}_Runner`;
+    logS3(`==== INICIANDO Estratégia de Teste (${FNAME_MODULE}) ====`, 'test', FNAME_RUNNER);
+    document.title = `Iniciando ${FNAME_MODULE}...`;
 
     let result;
     try {
-        result = await testJsonTypeConfusionUAFSpeculative();
+        result = await executeSpeculativeAddrofTest();
     } catch (e) {
-        logS3(`ERRO CRÍTICO IRRECUPERÁVEL no runner: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
-        console.error("Erro capturado em runSpeculativeUAFStrategy:", e);
-        result = { success: false, details: { error: "Erro do Runner: " + e.message } };
+        logS3(`ERRO CRÍTICO IRRECUPERÁVEL durante a execução do teste: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
+        console.error("Erro capturado em runSpeculativeAddrofStrategy:", e);
+        result = { success: false, message: `Erro fatal no runner: ${e.message}` };
     }
 
-    logS3(`==== Estratégia de Teste ${FNAME_MODULE} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
-
-    if (result.success) {
-        document.title = `${FNAME_MODULE}: SUCESSO!`;
-        logS3(`[+] SUCESSO! Combinação vulnerável encontrada.`, "vuln", FNAME_RUNNER);
-        logS3(`    Offset Vencedor: ${result.details.offset}`, "vuln", FNAME_RUNNER);
-        logS3(`    Valor Vencedor: ${result.details.value}`, "vuln", FNAME_RUNNER);
-        logS3(`    Erro Desencadeado: "${result.details.error}"`, "vuln", FNAME_RUNNER);
-    } else {
-        document.title = `${FNAME_MODULE}: FALHA`;
-        logS3(`[-] FALHA. Nenhuma combinação vulnerável óbvia foi encontrada com os parâmetros atuais.`, "error", FNAME_RUNNER);
-        logS3("    Tente ajustar os 'corruption_offsets' e 'values_to_write' em 'testJsonTypeConfusionUAFSpeculative.mjs' e tente novamente.", "info", FNAME_RUNNER);
-    }
+    logS3(`==== RESULTADO FINAL (${FNAME_MODULE}): ${result.message}`, result.success ? "vuln" : "error", FNAME_RUNNER);
+    document.title = result.success ? `${FNAME_MODULE}: SUCESSO!` : `${FNAME_MODULE}: Falha`;
+    logS3(`==== Estratégia de Teste (${FNAME_MODULE}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 /**
- * Função principal que inicializa o listener do botão para executar os testes avançados.
+ * Função principal que inicializa e executa os testes.
  */
-export function initializeAdvancedTestRunner() {
-    const FNAME_ORCHESTRATOR = `AdvancedTestOrchestrator`;
+export async function runAllAdvancedTestsS3() {
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
     const runBtn = getRunBtnAdvancedS3();
+    const outputDiv = getOutputAdvancedS3();
 
-    if (!runBtn) {
-        console.warn("Botão 'runAdvancedBtnS3' não encontrado. O runner avançado não será inicializado.");
-        return;
-    }
+    if (runBtn) runBtn.disabled = true;
+    if (outputDiv) outputDiv.innerHTML = '';
 
-    runBtn.addEventListener('click', async () => {
-        if (runBtn.disabled) return;
-        
-        const outputDiv = getOutputAdvancedS3();
-        runBtn.disabled = true;
-        if (outputDiv) outputDiv.innerHTML = '';
+    logS3(`==== User Agent: ${navigator.userAgent} ====`, 'info', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) / Teste (${FNAME_MODULE}) ====`, 'test', FNAME_ORCHESTRATOR);
 
-        logS3(`==== User Agent: ${navigator.userAgent} ====`, 'info', FNAME_ORCHESTRATOR);
-        logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) / Teste (${FNAME_MODULE}) ====`, 'test', FNAME_ORCHESTRATOR);
-
-        await runSpeculativeUAFStrategy();
-        
-        logS3(`\n==== Script (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-        if (runBtn) runBtn.disabled = false;
-    });
-
-    logS3("Runner de Testes Avançados (S3) inicializado e pronto.", "info", FNAME_ORCHESTRATOR);
+    await runSpeculativeAddrofStrategy();
+    
+    logS3(`\n==== Script (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    if (runBtn) runBtn.disabled = false;
 }
