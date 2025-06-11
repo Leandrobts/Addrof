@@ -3,37 +3,60 @@
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import { 
-    executeArrayBufferVictimCrashTest, // O nome da função exportada é mantido
+    executeArrayBufferVictimCrashTest,
     FNAME_MODULE_V28 
-} from './final_exploit_chain.mjs'; // APONTA PARA O NOVO ARQUIVO DE EXPLORAÇÃO
+} from './testArrayBufferVictimCrash.mjs';
 
+/**
+ * Executa a estratégia principal do teste, agora com tratamento de exceções.
+ */
 async function runHeisenbugReproStrategy_ABVictim() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_ABVictim";
-    const moduleName = FNAME_MODULE_V28 || 'FinalExploitChain';
+    const moduleName = FNAME_MODULE_V28 || 'Teste Avançado';
     logS3(`==== INICIANDO Estratégia de Teste (${moduleName}) ====`, 'test', FNAME_RUNNER);
     document.title = `Iniciando ${moduleName}...`;
 
     let result;
     try {
+        // A chamada crítica que pode lançar uma exceção (como ReferenceError)
         result = await executeArrayBufferVictimCrashTest();
     } catch (e) {
-        logS3(`ERRO CRÍTICO IRRECUPERÁVEL: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
-        result = { arb_read_success: false, message: e.message };
+        logS3(`ERRO CRÍTICO IRRECUPERÁVEL durante a execução do teste: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
+        logS3("   -> Isso geralmente indica um erro de programação (como uma variável não definida) dentro do módulo de teste importado.", "error", FNAME_RUNNER);
+        console.error("Erro capturado em runHeisenbugReproStrategy_ABVictim:", e);
+        
+        // Simula um objeto de resultado de erro para que o resto da função possa lidar com ele
+        result = {
+            errorOccurred: { name: e.name, message: e.message },
+            toJSON_details: null,
+            addrof_attempt_result: null
+        };
     }
-    
-    let finalLogMessage = result.message;
+
+    // O restante da lógica para processar o objeto 'result' permanece o mesmo.
+    // Esta parte agora funcionará mesmo que a função de teste falhe catastroficamente.
+    let finalLogMessage = "Resultado do teste não determinado.";
     let finalLogType = "info";
     let finalDocumentTitle = `${moduleName} Concluído`;
 
-    if (result.arb_read_success) {
-        finalLogType = "vuln";
-        finalDocumentTitle = `${moduleName}: SUCESSO TOTAL!`;
-    } else if (result.addrof) {
-        finalLogType = "warn";
-        finalDocumentTitle = `${moduleName}: Addrof OK, Read Fail`;
-    } else {
+    if (result.errorOccurred) {
+        finalLogMessage = `ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`;
         finalLogType = "error";
-        finalDocumentTitle = `${moduleName}: FALHA`;
+        finalDocumentTitle = `${moduleName} ERR JS: ${result.errorOccurred.name}`;
+    } else if (result.addrof_attempt_result) {
+        const addrofRes = result.addrof_attempt_result;
+        finalLogMessage = `Resultado Addrof: ${addrofRes.message || "Mensagem não especificada."}`;
+        if (addrofRes.success) {
+            finalLogType = "good";
+            finalDocumentTitle = `${moduleName} Addrof PARECE OK!`;
+        } else {
+            finalLogType = "warn";
+            finalDocumentTitle = `${moduleName} Addrof FALHOU`;
+        }
+    } else {
+        finalLogMessage = "Estrutura de resultado (addrof_attempt_result) não encontrada no retorno.";
+        finalLogType = "error";
+        finalDocumentTitle = `${moduleName} Concluído (Res. Ausente)`;
     }
 
     logS3(`==== RESULTADO FINAL (${moduleName}): ${finalLogMessage}`, finalLogType, FNAME_RUNNER);
@@ -41,10 +64,18 @@ async function runHeisenbugReproStrategy_ABVictim() {
     logS3(`==== Estratégia de Teste (${moduleName}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
+/**
+ * Função principal que inicializa o listener do botão para executar os testes avançados.
+ * Você pode chamar esta função a partir do seu script principal (main.mjs).
+ */
 export function initializeAdvancedTestRunner() {
     const FNAME_ORCHESTRATOR = `AdvancedTestOrchestrator`;
     const runBtn = getRunBtnAdvancedS3();
-    if (!runBtn) return;
+
+    if (!runBtn) {
+        console.warn("Botão 'runAdvancedBtnS3' não encontrado. O runner avançado não será inicializado.");
+        return;
+    }
 
     runBtn.addEventListener('click', async () => {
         if (runBtn.disabled) return;
@@ -52,16 +83,20 @@ export function initializeAdvancedTestRunner() {
         const outputDiv = getOutputAdvancedS3();
         runBtn.disabled = true;
         if (outputDiv) outputDiv.innerHTML = '';
-        
-        logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
+
+        const moduleName = FNAME_MODULE_V28 || 'Teste Avançado';
+        logS3(`==== User Agent: ${navigator.userAgent} ====`, 'info', FNAME_ORCHESTRATOR);
+        logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) / Teste (${moduleName}) ====`, 'test', FNAME_ORCHESTRATOR);
+
         await runHeisenbugReproStrategy_ABVictim();
-        logS3(`\n==== Script (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
         
-        runBtn.disabled = false;
+        logS3(`\n==== Script (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+        if (runBtn) runBtn.disabled = false;
+
+        if (document.title.startsWith("Iniciando")) {
+            document.title = `${moduleName} Teste Finalizado`;
+        }
     });
 
-    logS3("Runner de Testes Avançados pronto.", "info", FNAME_ORCHESTRATOR);
+    logS3("Runner de Testes Avançados (S3) inicializado e pronto.", "info", FNAME_ORCHESTRATOR);
 }
-
-// Inicializa o runner automaticamente se desejado, ou chame de main.mjs
-// initializeAdvancedTestRunner();
