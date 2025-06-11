@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para R52 - Type Confusion no JSC Heap)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para R52 - Type Confusion no JSC Heap - Corrigido)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
@@ -43,7 +43,8 @@ async function runJSCHeapTCStrategy_R52() {
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V91_TC_R52_webkit}_MainOrchestrator`;
+    // --- CORREÇÃO: Usar o nome da variável com 'WEBKIT' em maiúsculas, como foi importado. ---
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V91_TC_R52_WEBKIT}_MainOrchestrator`;
     logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
     await runJSCHeapTCStrategy_R52();
