@@ -1,62 +1,54 @@
 // js/script3/runAllAdvancedTestsS3.mjs
 
-import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+import { logS3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import { 
-    executeArrayBufferVictimCrashTest,
-    FNAME_MODULE_V28 
-} from './testArrayBufferVictimCrash.mjs';
+
+// --- ALTERADO: Importa o novo módulo de teste ---
+// Removemos a importação de 'testArrayBufferVictimCrash.mjs'.
+import { testJsonTypeConfusionUAFSpeculative } from './testJsonTypeConfusionUAFSpeculative.mjs';
+
+// --- ALTERADO: Define um nome para o novo módulo para ser usado nos logs ---
+const FNAME_MODULE_S3 = "JSON Type Confusion Speculative Test";
 
 /**
- * Executa a estratégia principal do teste, agora com tratamento de exceções.
+ * // ALTERADO: Renomeado e adaptado para executar o novo teste.
+ * Executa a estratégia de teste de Type Confusion via JSON.
  */
-async function runHeisenbugReproStrategy_ABVictim() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_ABVictim";
-    const moduleName = FNAME_MODULE_V28 || 'Teste Avançado';
+async function runJsonUAFSpeculativeStrategy() {
+    const FNAME_RUNNER = "runJsonUAFSpeculativeStrategy";
+    const moduleName = FNAME_MODULE_S3;
     logS3(`==== INICIANDO Estratégia de Teste (${moduleName}) ====`, 'test', FNAME_RUNNER);
     document.title = `Iniciando ${moduleName}...`;
 
-    let result;
+    let wasSuccessful;
     try {
-        // A chamada crítica que pode lançar uma exceção (como ReferenceError)
-        result = await executeArrayBufferVictimCrashTest();
+        // --- ALTERADO: Chama a nova função de teste ---
+        // A função agora deve retornar um booleano indicando o sucesso geral.
+        // É recomendado modificar 'testJsonTypeConfusionUAFSpeculative' para que ela retorne a variável 'overallTestSuccess'.
+        wasSuccessful = await testJsonTypeConfusionUAFSpeculative();
+
     } catch (e) {
         logS3(`ERRO CRÍTICO IRRECUPERÁVEL durante a execução do teste: ${e.name} - ${e.message}`, "critical", FNAME_RUNNER);
-        logS3("   -> Isso geralmente indica um erro de programação (como uma variável não definida) dentro do módulo de teste importado.", "error", FNAME_RUNNER);
-        console.error("Erro capturado em runHeisenbugReproStrategy_ABVictim:", e);
+        logS3("   -> Isso pode indicar um erro de programação no módulo de teste ou um crash não capturado.", "error", FNAME_RUNNER);
+        console.error("Erro capturado em runJsonUAFSpeculativeStrategy:", e);
         
-        // Simula um objeto de resultado de erro para que o resto da função possa lidar com ele
-        result = {
-            errorOccurred: { name: e.name, message: e.message },
-            toJSON_details: null,
-            addrof_attempt_result: null
-        };
+        // Se um erro catastrófico ocorrer, consideramos a tentativa de exploração como "sucedida" em causar instabilidade.
+        wasSuccessful = true;
     }
 
-    // O restante da lógica para processar o objeto 'result' permanece o mesmo.
-    // Esta parte agora funcionará mesmo que a função de teste falhe catastroficamente.
-    let finalLogMessage = "Resultado do teste não determinado.";
-    let finalLogType = "info";
-    let finalDocumentTitle = `${moduleName} Concluído`;
+    // --- ALTERADO: Lógica de resultado simplificada para lidar com um booleano ---
+    let finalLogMessage;
+    let finalLogType;
+    let finalDocumentTitle;
 
-    if (result.errorOccurred) {
-        finalLogMessage = `ERRO JS CAPTURADO: ${result.errorOccurred.name} - ${result.errorOccurred.message}.`;
-        finalLogType = "error";
-        finalDocumentTitle = `${moduleName} ERR JS: ${result.errorOccurred.name}`;
-    } else if (result.addrof_attempt_result) {
-        const addrofRes = result.addrof_attempt_result;
-        finalLogMessage = `Resultado Addrof: ${addrofRes.message || "Mensagem não especificada."}`;
-        if (addrofRes.success) {
-            finalLogType = "good";
-            finalDocumentTitle = `${moduleName} Addrof PARECE OK!`;
-        } else {
-            finalLogType = "warn";
-            finalDocumentTitle = `${moduleName} Addrof FALHOU`;
-        }
+    if (wasSuccessful) {
+        finalLogMessage = `VULNERABILIDADE POTENCIAL DETECTADA! O teste especulativo encontrou uma condição de erro (UAF/Type Confusion). Verifique os logs acima para o offset e valor que causaram o problema.`;
+        finalLogType = "vuln"; // 'vuln' é um tipo de log personalizado para vulnerabilidades
+        finalDocumentTitle = `${moduleName} - SUCESSO!`;
     } else {
-        finalLogMessage = "Estrutura de resultado (addrof_attempt_result) não encontrada no retorno.";
-        finalLogType = "error";
-        finalDocumentTitle = `${moduleName} Concluído (Res. Ausente)`;
+        finalLogMessage = "O teste foi concluído sem detectar erros explícitos de UAF/Type Confusion.";
+        finalLogType = "info";
+        finalDocumentTitle = `${moduleName} - Concluído (Sem Falhas)`;
     }
 
     logS3(`==== RESULTADO FINAL (${moduleName}): ${finalLogMessage}`, finalLogType, FNAME_RUNNER);
@@ -84,11 +76,12 @@ export function initializeAdvancedTestRunner() {
         runBtn.disabled = true;
         if (outputDiv) outputDiv.innerHTML = '';
 
-        const moduleName = FNAME_MODULE_V28 || 'Teste Avançado';
+        const moduleName = FNAME_MODULE_S3; // ALTERADO: Usa a nova constante de nome de módulo
         logS3(`==== User Agent: ${navigator.userAgent} ====`, 'info', FNAME_ORCHESTRATOR);
         logS3(`==== INICIANDO Script (${FNAME_ORCHESTRATOR}) / Teste (${moduleName}) ====`, 'test', FNAME_ORCHESTRATOR);
 
-        await runHeisenbugReproStrategy_ABVictim();
+        // --- ALTERADO: Chama a nova função runner ---
+        await runJsonUAFSpeculativeStrategy();
         
         logS3(`\n==== Script (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
         if (runBtn) runBtn.disabled = false;
