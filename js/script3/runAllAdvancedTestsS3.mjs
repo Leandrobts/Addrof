@@ -3,34 +3,27 @@
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3, getOutputAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeJsonRecursionCrashTest,
+    executeHeisenbugAddrofTest,
     FNAME_MODULE
-} from './testJsonRecursionCrash.mjs';
+} from './testHeisenbugAddrof.mjs';
 
 async function runTestStrategy() {
     const FNAME_RUNNER = `${FNAME_MODULE}_Runner`;
     logS3(`==== INICIANDO Estratégia de Teste: ${FNAME_MODULE} ====`, 'test', FNAME_RUNNER);
-    logS3("O objetivo é replicar o crash 'idx < size()' ou 'lento/sem memória'.", "info", FNAME_RUNNER);
-    logS3("Abra o console do navegador (F12) com 'Preserve Log' ATIVADO para ver os logs da sonda.", "warn", FNAME_RUNNER);
 
-    // Pausa para dar tempo de ler a mensagem
-    await PAUSE_S3(1000);
+    const result = await executeHeisenbugAddrofTest();
 
-    const result = await executeJsonRecursionCrashTest();
+    logS3(`==== Estratégia de Teste ${FNAME_MODULE} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 
-    logS3(`==== Estratégia de Teste ${FNAME_MODULE} CONCLUÍDA (do ponto de vista do runner) ====`, 'test', FNAME_RUNNER);
-
-    if (result.error) {
-        document.title = `${FNAME_MODULE}: ERRO CAPTURADO`;
-        logS3(`Resultado: Teste finalizou com um erro explícito: ${result.error}`, "error", FNAME_RUNNER);
-    } else if (result.completed) {
-        document.title = `${FNAME_MODULE}: SUCESSO (Inesperado)`;
-        logS3("Resultado: Teste completou sem travar. A condição para o crash não foi atingida com este objeto.", "good", FNAME_RUNNER);
+    if (result.success) {
+        document.title = `${FNAME_MODULE}: Addr OK!`;
+        logS3(`Resultado Final: SUCESSO. Endereço vazado: ${result.leaked_address}`, "vuln", FNAME_RUNNER);
+    } else if (result.tc_confirmed) {
+        document.title = `${FNAME_MODULE}: TC OK, Addr Fail`;
+        logS3(`Resultado Final: FALHA. ${result.message}`, "warn", FNAME_RUNNER);
     } else {
-        // Se a função retornou, mas 'completed' é false, algo estranho ocorreu.
-        // No entanto, o mais provável é que o script pare antes de chegar aqui.
-        document.title = `${FNAME_MODULE}: TRAVAMENTO PROVÁVEL`;
-        logS3("Resultado: O runner continuou, mas o teste não foi marcado como concluído. Verifique o console para os últimos logs antes do provável travamento.", "critical", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE}: FALHA GERAL`;
+        logS3(`Resultado Final: FALHA. ${result.message}`, "error", FNAME_RUNNER);
     }
 }
 
@@ -42,7 +35,7 @@ export async function runAllAdvancedTestsS3() {
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) - Foco no Heisenbug Addrof ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runTestStrategy();
 
