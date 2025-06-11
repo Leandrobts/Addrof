@@ -3,27 +3,27 @@
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3, getOutputAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeHeisenbugAddrofTest,
+    testJsonTypeConfusionUAFSpeculative,
     FNAME_MODULE
-} from './testHeisenbugAddrof.mjs';
+} from './testJsonTypeConfusionUAFSpeculative.mjs';
 
 async function runTestStrategy() {
     const FNAME_RUNNER = `${FNAME_MODULE}_Runner`;
     logS3(`==== INICIANDO Estratégia de Teste: ${FNAME_MODULE} ====`, 'test', FNAME_RUNNER);
 
-    const result = await executeHeisenbugAddrofTest();
+    const result = await testJsonTypeConfusionUAFSpeculative();
 
     logS3(`==== Estratégia de Teste ${FNAME_MODULE} CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 
     if (result.success) {
-        document.title = `${FNAME_MODULE}: Addr OK!`;
-        logS3(`Resultado Final: SUCESSO. Endereço vazado: ${result.leaked_address}`, "vuln", FNAME_RUNNER);
-    } else if (result.tc_confirmed) {
-        document.title = `${FNAME_MODULE}: TC OK, Addr Fail`;
-        logS3(`Resultado Final: FALHA. ${result.message}`, "warn", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE}: SUCESSO!`;
+        logS3(`Resultado Final: SUCESSO! Combinação vulnerável encontrada.`, "vuln", FNAME_RUNNER);
+        logS3(`   Offset: ${result.details.offset}`, "vuln", FNAME_RUNNER);
+        logS3(`   Valor: ${result.details.value}`, "vuln", FNAME_RUNNER);
+        logS3(`   Erro Desencadeado: ${result.details.error}`, "vuln", FNAME_RUNNER);
     } else {
-        document.title = `${FNAME_MODULE}: FALHA GERAL`;
-        logS3(`Resultado Final: FALHA. ${result.message}`, "error", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE}: FALHA`;
+        logS3(`Resultado Final: FALHA. Nenhuma combinação vulnerável óbvia foi encontrada com os parâmetros atuais.`, "error", FNAME_RUNNER);
     }
 }
 
@@ -35,7 +35,7 @@ export async function runAllAdvancedTestsS3() {
     if (runBtn) runBtn.disabled = true;
     if (outputDiv) outputDiv.innerHTML = '';
 
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) - Foco no Heisenbug Addrof ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) - Caça Especulativa por Type Confusion ====`, 'test', FNAME_ORCHESTRATOR);
 
     await runTestStrategy();
 
