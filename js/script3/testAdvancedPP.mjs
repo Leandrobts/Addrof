@@ -1,106 +1,98 @@
 // js/script3/testAdvancedPP.mjs
-// ATUALIZADO PARA TENTAR PROVAS DE CONCEITO (PoC) DE EXPLORAÇÃO
+// ATUALIZADO PARA TESTES MASSIVOS DE STRESS FOCADOS NO GADGET 'CALL'
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
+const STRESS_ITERATIONS = 50000; // Aumente para 100.000 ou mais para testes mais intensos
+
 /**
- * PoC 1: Tenta causar Confusão de Tipos (Type Confusion) poluindo __proto__
- * e verifica se um objeto Array pode ser tratado como um Float64Array.
+ * STRESS TEST 1: Hijack de 'call' com rápida alocação/desalocação de objetos.
+ * Objetivo: Tentar causar um Use-After-Free (UAF) no Garbage Collector.
  */
-async function testTypeConfusionPoC() {
-    const FNAME = 'TypeConfusionPoC';
-    logS3(`--- PoC 1: Tentando Confusão de Tipos (Array -> Float64Array) ---`, 'test', FNAME);
-    const originalProto = Object.prototype.__proto__;
-    let success = false;
+async function stressTest_CallHijack_With_GC_Churn() {
+    const FNAME = 'StressTest_GC_UAF';
+    logS3(`--- Stress Test 1: Hijack de 'call' + Churn de Objetos (Tentativa de UAF) ---`, 'test', FNAME);
+    logS3(`Iterações: ${STRESS_ITERATIONS}`, 'info', FNAME);
+    const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
+    let callCount = 0;
 
     try {
-        logS3('Poluindo Object.prototype.__proto__ para ser o protótipo de Float64Array...', 'info', FNAME);
-        Object.prototype.__proto__ = Float64Array.prototype;
+        const hijackFunction = function() { callCount++; };
+        Object.defineProperty(Function.prototype, 'call', { value: hijackFunction, configurable: true });
 
-        let victim = [1.1, 2.2]; // Nosso array vítima
-        logS3(`Vítima é um Array: ${Array.isArray(victim)}`, 'info', FNAME);
-
-        if (victim instanceof Float64Array) {
-            logS3('VULN: Confusão de Tipos bem-sucedida! A vítima Array agora é uma instância de Float64Array.', 'vuln', FNAME);
-            success = true;
-        } else {
-            logS3('FALHA: A confusão de tipos não funcionou como esperado.', 'warn', FNAME);
+        logS3("Iniciando loop de alocação/desalocação massiva...", 'warn', FNAME);
+        for (let i = 0; i < STRESS_ITERATIONS; i++) {
+            let tempObj = { data: new Array(100).fill(i) };
+            // Chama uma função no objeto, acionando nosso 'call' sequestrado.
+            Object.keys.call(tempObj);
+            // Ao final do loop, tempObj se torna elegível para o GC.
+            if (i % 10000 === 0) {
+                 logS3(`Progresso: ${i}/${STRESS_ITERATIONS}... Chamadas sequestradas: ${callCount}`, 'info', FNAME);
+                 await PAUSE_S3(10); // Permite que a UI respire um pouco
+            }
         }
-
-        if (success) {
-            logS3('AVISO: Tentando ler um índice fora do limite (OOB) no array confundido. ISSO PODE TRAVAR O NAVEGADOR.', 'critical', FNAME);
-            await PAUSE_S3(1000); // Pausa para o usuário ler o aviso
-
-            // Se a confusão funcionou, a estrutura interna do 'victim' pode ser mal interpretada,
-            // permitindo ler além dos seus limites originais.
-            let oob_value = victim[10]; // Tenta ler memória adjacente
-            logS3(`LEITURA OOB: Valor lido no índice 10: ${oob_value}`, 'vuln', FNAME);
-            logS3('Se o navegador não travou, a leitura OOB pode não ter atingido uma área crítica, mas a primitiva pode existir.', 'good', FNAME);
-        }
+        logS3("Loop concluído.", 'good', FNAME);
 
     } catch (e) {
-        logS3(`ERRO durante a PoC de Confusão de Tipos: ${e.message}`, 'error', FNAME);
-        logS3('Um erro (ex: RangeError) aqui pode ser um bom sinal, indicando que o motor detectou o acesso inválido.', 'info', FNAME);
+        logS3(`ERRO durante o Stress Test 1: ${e.message}`, 'error', FNAME);
     } finally {
-        logS3('Limpando a poluição do protótipo...', 'info', FNAME);
-        Object.prototype.__proto__ = originalProto; // Restauração crucial
+        logS3("Limpando e restaurando 'call'...", 'info', FNAME);
+        if (originalCallDescriptor) {
+            Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
+        }
+        logS3(`Total de chamadas sequestradas: ${callCount}`, 'info', FNAME);
     }
 }
 
-
 /**
- * PoC 2: Tenta sequestrar a função 'Function.prototype.call' para executar nosso próprio código.
+ * STRESS TEST 2: Hijack de 'call' com APIs de DOM complexas.
+ * Objetivo: Tentar causar um crash na fronteira entre JavaScript e o código nativo do navegador.
  */
-async function testCallHijackPoC() {
-    const FNAME = 'CallHijackPoC';
-    logS3(`--- PoC 2: Tentando Sequestro de Fluxo via 'Function.prototype.call' ---`, 'test', FNAME);
+async function stressTest_CallHijack_With_DOM_APIs() {
+    const FNAME = 'StressTest_DOM_API';
+    logS3(`--- Stress Test 2: Hijack de 'call' + Stress de APIs DOM ---`, 'test', FNAME);
     const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
-    let hijacked = false;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    let callCount = 0;
 
     try {
-        const hijackFunction = function(...args) {
-            // Não chame a função original aqui para evitar recursão infinita
-            logS3(`!!! Function.prototype.call SEQUESTRADO !!!`, 'escalation', FNAME);
-            logS3(`'this' recebido: ${typeof this}, Argumentos: ${args.length}`, 'escalation', FNAME);
-            hijacked = true;
-        };
-
-        logS3("Poluindo 'Function.prototype.call' com nossa função maliciosa...", 'info', FNAME);
-        Object.defineProperty(Function.prototype, 'call', {
-            value: hijackFunction,
-            writable: true,
-            configurable: true
-        });
-
-        logS3("Disparando um gatilho: 'Math.max.call(null, 1, 5, 2)'", 'info', FNAME);
-        await PAUSE_S3(500);
-
-        // Dispara a chamada. Se o hijack funcionou, nossa mensagem aparecerá.
-        try {
-            Math.max.call(null, 1, 5, 2);
-        } catch (e) {
-            logS3(`Erro esperado ao chamar gatilho (a função hijack não retorna nada): ${e.message}`, 'info', FNAME)
-        }
+        const hijackFunction = () => { callCount++; };
+        Object.defineProperty(Function.prototype, 'call', { value: hijackFunction, configurable: true });
         
-        if (!hijacked) {
-             logS3('FALHA: O sequestro de "call" não foi detectado.', 'error', FNAME);
+        logS3("Iniciando loop de criação/destruição de elementos DOM...", 'warn', FNAME);
+        for (let i = 0; i < 500; i++) { // Menos iterações, pois DOM é mais lento
+            let el = document.createElement('iframe');
+            el.src = "about:blank";
+            container.appendChild(el);
+            // Força o navegador a processar e talvez chamar callbacks internos
+            el.getBoundingClientRect.call(el);
+            container.removeChild(el);
+
+             if (i % 100 === 0) {
+                 logS3(`Progresso DOM: ${i}/500...`, 'info', FNAME);
+                 await PAUSE_S3(10);
+            }
         }
+        logS3("Loop DOM concluído.", 'good', FNAME);
 
     } catch (e) {
-        logS3(`ERRO durante a PoC de Sequestro de 'call': ${e.message}`, 'error', FNAME);
+        logS3(`ERRO durante o Stress Test 2: ${e.message}`, 'error', FNAME);
     } finally {
-        logS3("Limpando a poluição de 'call', restaurando a função original...", 'info', FNAME);
+        logS3("Limpando e restaurando 'call'...", 'info', FNAME);
+        document.body.removeChild(container);
         if (originalCallDescriptor) {
             Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
         }
     }
 }
 
+
 /**
- * Função principal que orquestra a execução das Provas de Conceito de Exploração.
+ * Função principal que orquestra a execução dos Testes Massivos de Stress.
  */
-export async function runExploitationPoCs() {
-    await testTypeConfusionPoC();
-    await PAUSE_S3(2000); // Pausa entre os testes
-    await testCallHijackPoC();
+export async function runMassiveStressTests() {
+    await stressTest_CallHijack_With_GC_Churn();
+    await PAUSE_S3(2000); // Pausa longa para o GC estabilizar
+    await stressTest_CallHijack_With_DOM_APIs();
 }
