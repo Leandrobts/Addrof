@@ -1,46 +1,83 @@
-// js/script3/runAllAdvancedTestsS3.mjs
-// CORRIGIDO - Atualizado para importar e chamar a função correta.
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak)
+import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
+import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+import {
+    executeTypedArrayVictimAddrofAndWebKitLeak_R43, 
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
+} from './testArrayBufferVictimCrash.mjs';
 
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
+async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43"; 
+    logS3(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
 
-// --- IMPORTAÇÃO CORRIGIDA ---
-// O nome da função exportada de testBuildAddrof.mjs foi corrigido.
-import { tryMemoryCorruptionCrash } from './testBuildAddrof.mjs';
+    const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
+    if (result.errorOccurred) {
+        logS3(`  RUNNER R43(L): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: MainTest ERR!`;
+    } else if (result) {
+        logS3(`  RUNNER R43(L): Completou. Melhor OOB usado: ${result.oob_value_of_best_result || 'N/A'}`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R43(L): Detalhes Sonda TC (Best): ${result.tc_probe_details ? JSON.stringify(result.tc_probe_details) : 'N/A'}`, "leak", FNAME_RUNNER);
 
-/**
- * Orquestrador principal do Script 3, focado no ataque de corrupção para crash.
- */
-export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = 'Memory_Corruption_Runner';
-    const runBtn = getRunBtnAdvancedS3();
-    
-    if (runBtn) {
-        runBtn.disabled = true;
-    }
+        const heisenbugSuccessfullyDetected = result.heisenbug_on_M2_in_best_result;
+        const addrofResult = result.addrof_result;
+        const webkitLeakResult = result.webkit_leak_result;
 
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
-    logS3('Foco: Crash por corrupção de memória (OOB Write).', 'info', FNAME_ORCHESTRATOR);
-    logS3('Este teste tentará corromper o byteLength de um ArrayBuffer vizinho.', 'warn', FNAME_ORCHESTRATOR);
+        logS3(`  RUNNER R43(L): Heisenbug TC Sonda (Best): ${heisenbugSuccessfullyDetected ? "CONFIRMADA" : "NÃO CONFIRMADA"}`, heisenbugSuccessfullyDetected ? "vuln" : "warn", FNAME_RUNNER);
 
-    await PAUSE_S3(2000); // Pausa para o usuário ler os avisos
-
-    try {
-        // --- CHAMADA DA FUNÇÃO CORRIGIDA ---
-        await tryMemoryCorruptionCrash();
-
-    } catch (error) {
-        logS3(`ERRO CRÍTICO no orquestrador: ${error.message}`, 'critical', FNAME_ORCHESTRATOR);
-        console.error("Erro capturado pelo orquestrador S3:", error);
-    } finally {
-        await PAUSE_S3(500);
-        
-        logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-        logS3(`Verifique se o navegador travou. Se não, o ataque foi mitigado.`, 'info', FNAME_ORCHESTRATOR);
-        
-        if (runBtn) {
-            runBtn.disabled = false;
+        if (addrofResult) {
+            logS3(`  RUNNER R43(L): Teste Addrof (Best): ${addrofResult.msg} (Endereço vazado: ${addrofResult.leaked_object_addr || addrofResult.leaked_object_addr_candidate_str || 'N/A'})`, addrofResult.success ? "vuln" : "warn", FNAME_RUNNER);
+        } else {
+            logS3(`  RUNNER R43(L): Teste Addrof não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
+
+        if (webkitLeakResult) {
+            logS3(`  RUNNER R43(L): Teste WebKit Base Leak (Best): ${webkitLeakResult.msg} (Base Candidata: ${webkitLeakResult.webkit_base_candidate || 'N/A'}, Ponteiro Interno Etapa2: ${webkitLeakResult.internal_ptr_stage2 || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
+        } else {
+            logS3(`  RUNNER R43(L): Teste WebKit Base Leak não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
+        }
+
+        if (webkitLeakResult?.success) {
+            document.title = `${module_name_for_title}_R43L: WebKitLeak SUCCESS!`;
+        } else if (addrofResult?.success) {
+            document.title = `${module_name_for_title}_R43L: Addrof OK, WebKitLeak Fail`;
+        } else if (heisenbugSuccessfullyDetected) {
+            document.title = `${module_name_for_title}_R43L: TC OK, Addrof/WebKitLeak Fail`;
+        } else {
+            document.title = `${module_name_for_title}_R43L: No TC Confirmed`;
+        }
+
+        if (result.iteration_results_summary && result.iteration_results_summary.length > 0) {
+            logS3(`  RUNNER R43(L): Sumário completo das iterações:`, "info", FNAME_RUNNER);
+            result.iteration_results_summary.forEach((iter_sum, index) => {
+                const tcSuccess = iter_sum.heisenbug_on_M2_confirmed_by_tc_probe;
+                const addrofSuccessThisIter = iter_sum.addrof_result_this_iter?.success ?? 'N/A'; 
+                const addrofCandidateThisIter = iter_sum.addrof_result_this_iter?.leaked_object_addr_candidate_str ?? 'N/A';
+                const webkitLeakSuccess = iter_sum.webkit_leak_result_this_iter?.success ?? 'N/A'; // WebKitLeak é por iteração agora
+                let logMsg = `    Iter ${index + 1} (OOB ${iter_sum.oob_value}): TC=${tcSuccess}, AddrofIter=${addrofSuccessThisIter}`;
+                if(addrofSuccessThisIter === false && addrofCandidateThisIter !== 'N/A') logMsg += ` (CandIter: ${addrofCandidateThisIter})`;
+                logMsg += `, WebKitLeakIter=${webkitLeakSuccess}`; // Adicionado
+                if(iter_sum.error) logMsg += `, Err: ${iter_sum.error}`;
+
+                logS3(logMsg, "info", FNAME_RUNNER);
+            });
+        }
+    } else {
+        document.title = `${module_name_for_title}_R43L: Invalid Result Obj`;
+    }
+    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
+    await PAUSE_S3(MEDIUM_PAUSE_S3);
+    logS3(`==== Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+}
+
+export async function runAllAdvancedTestsS3() {
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R43L (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    await runHeisenbugReproStrategy_TypedArrayVictim_R43();
+    logS3(`\n==== Script 3 R43L (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
+    if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
+        document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43L Done`;
     }
 }
