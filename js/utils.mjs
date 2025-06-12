@@ -232,3 +232,29 @@ export function advancedInt64ArrayToString(arr) {
     }
     return str;
 }
+
+/**
+ * Reinterpreta os bits de um número de 64-bit (double) como um BigInt de 64-bit.
+ * @param {number} d O número double a ser convertido.
+ * @returns {BigInt} A representação BigInt dos bits do double.
+ */
+export function doubleToBigInt(d) {
+    const buffer = new ArrayBuffer(8);
+    const float64View = new Float64Array(buffer);
+    const bigIntView = new BigUint64Array(buffer);
+    float64View[0] = d;
+    return bigIntView[0];
+}
+
+/**
+ * Reinterpreta os bits de um BigInt de 64-bit como um número de 64-bit (double).
+ * @param {BigInt} b O BigInt a ser convertido.
+ * @returns {number} O número double correspondente aos bits do BigInt.
+ */
+export function bigIntToDouble(b) {
+    const buffer = new ArrayBuffer(8);
+    const bigIntView = new BigUint64Array(buffer);
+    const float64View = new Float64Array(buffer);
+    bigIntView[0] = b;
+    return float64View[0];
+}
