@@ -38,7 +38,7 @@ export async function executeOffsetFuzzer_R46() {
 
         const M_VECTOR_OFFSET = JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const M_LENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-        const FUZZ_START_OFFSET = 0x04;
+        const FUZZ_START_OFFSET = 0x20;
         const FUZZ_END_OFFSET = 0x400;
         const FUZZ_STEP = 0x4;
 
