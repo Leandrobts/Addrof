@@ -1,5 +1,5 @@
 // js/script2/testAdvancedPP.mjs
-import { logS2, PAUSE_S2 } from './s2_utils.mjs';
+import { logS2, PAUSE_S2 } from './s3_utils.mjs';
 
 export async function testAdvancedPPS2() {
     const FNAME = 'testAdvancedPPS2';
