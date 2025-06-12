@@ -1,17 +1,17 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-// ATUALIZADO PARA EXECUTAR A TENTATIVA DE UAF ASSÍNCRONO
+// ATUALIZADO PARA EXECUTAR O "CALDEIRÃO" DE UAF
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
 // --- IMPORTAÇÃO ATUALIZADA ---
-import { runAdvancedUAF_Attempts } from './testAdvancedPP.mjs';
+import { runChaoticUAFCauldron } from './testAdvancedPP.mjs';
 
 /**
- * Orquestrador principal do Script 3, focado na tentativa de UAF.
+ * Orquestrador principal do Script 3, focado na tentativa de UAF via "Caldeirão".
  */
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = 'Async_UAF_Runner';
+    const FNAME_ORCHESTRATOR = 'UAF_Cauldron_Runner';
     const runBtn = getRunBtnAdvancedS3();
     
     if (runBtn) {
@@ -19,13 +19,13 @@ export async function runAllAdvancedTestsS3() {
     }
 
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
-    logS3('Foco: Tentativa de Use-After-Free (UAF) Assíncrono com Hijack de "call"', 'info', FNAME_ORCHESTRATOR);
-    logS3('AVISO: Este teste é o mais propenso a causar um CRASH. Monitore o navegador.', 'critical', FNAME_ORCHESTRATOR);
+    logS3('Foco: Tentativa de UAF no MODO CAOS. Espere instabilidade severa.', 'critical', FNAME_ORCHESTRATOR);
+    logS3('O teste rodará por ~20 segundos e tentará ativamente travar o navegador.', 'warn', FNAME_ORCHESTRATOR);
 
-    await PAUSE_S3(2000); // Pausa para o usuário ler os avisos
+    await PAUSE_S3(3000); // Pausa longa para o usuário ler os avisos
 
     try {
-        await runAdvancedUAF_Attempts();
+        await runChaoticUAFCauldron();
 
     } catch (error) {
         logS3(`ERRO CRÍTICO no orquestrador: ${error.message}`, 'critical', FNAME_ORCHESTRATOR);
@@ -34,7 +34,7 @@ export async function runAllAdvancedTestsS3() {
         await PAUSE_S3(500);
         
         logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-        logS3(`Se não houve crash, o GC do navegador é muito eficiente ou o padrão de acesso não foi o ideal.`, 'info', FNAME_ORCHESTRATOR);
+        logS3(`Se o navegador sobreviveu, ele possui um GC e um motor JS extremamente resilientes.`, 'good', FNAME_ORCHESTRATOR);
         
         if (runBtn) {
             runBtn.disabled = false;
