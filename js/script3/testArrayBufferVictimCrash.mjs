@@ -1,7 +1,7 @@
 // js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R44 - Addrof com Abuso de JIT)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object, doubleToBigInt, bigIntToDouble } from '../utils.mjs'; // NOVO: double/bigint utils
+import { AdvancedInt64, toHex, isAdvancedInt64Object, doubleToBigInt, bigIntToDouble } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
