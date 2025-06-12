@@ -1,30 +1,28 @@
 // js/script3/testAdvancedPP.mjs
+// ARQUIVO CORRIGIDO: Agora usa as funções de utilidade do Script 3 (logS3, PAUSE_S3).
+
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
 export async function testAdvancedPPS2() {
     const FNAME = 'testAdvancedPPS2';
-    logS2("--- Teste: PP Avançado (Gadgets++) ---", 'test', FNAME);
+    logS3("--- Teste: PP Avançado (Gadgets++) ---", 'test', FNAME);
 
     const propsToPollute = [
         // Object.prototype
         { name: 'constructor', proto: Object.prototype, protoName: 'Object',
           gadgetCheck: (obj, pollutedValue) => (obj.constructor === pollutedValue && typeof pollutedValue !== 'function') ? 'Object.constructor foi poluído para um valor não funcional!' : null },
         { name: '__proto__', proto: Object.prototype, protoName: 'Object',
-          // Poluir __proto__ diretamente no Object.prototype é extremamente perigoso e geralmente não é o vetor.
-          // O teste aqui verificaria se a propriedade __proto__ em uma instância é o valor poluído.
           gadgetCheck: (obj, pollutedValue) => {
             try {
-                // Tentar mudar o protótipo via __proto__ e verificar se reflete
-                // Esta parte é mais para ver se a propriedade __proto__ em si foi poluída.
                 if (obj.__proto__ === pollutedValue) return `Object.prototype.__proto__ foi poluído (valor da propriedade __proto__ em instâncias)!`;
             } catch (e) { /* pode falhar */ }
             return null;
           }},
-        { name: 'isAdminPPTest', proto: Object.prototype, protoName: 'Object', // Propriedade nova, mais segura
+        { name: 'isAdminPPTest', proto: Object.prototype, protoName: 'Object',
           gadgetCheck: (obj, pollutedValue) => obj.isAdminPPTest === pollutedValue ? 'Nova propriedade Object.prototype.isAdminPPTest poluída com sucesso!' : null },
         { name: 'valueOf', proto: Object.prototype, protoName: 'Object',
           gadgetCheck: (obj, pollutedValue) => {
-            if (obj.valueOf === pollutedValue) { // Verifica se a própria função foi substituída
+            if (obj.valueOf === pollutedValue) {
                  try { obj.valueOf(); return "Object.valueOf sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
                  catch(e) { return `Object.valueOf sobrescrito e quebrou ao ser chamado! (${e.message})`; }
             } return null;
@@ -44,35 +42,25 @@ export async function testAdvancedPPS2() {
             } return null;
           }},
 
-        // Element & Node prototypes - Foco em verificar se a *instância* herda
-        // Evitar ler/escrever diretamente em Element.prototype.innerHTML, etc.
+        // Element & Node prototypes
         { name: 'data-pp-test', proto: Element.prototype, protoName: 'Element', createTarget: () => document.createElement('div'),
           gadgetCheck: (obj, pollutedValue) => obj.getAttribute('data-pp-test') === pollutedValue ? 'Atributo data-pp-test via Element.prototype poluído!' : null,
-          // Para testar setters como innerHTML, a poluição deve ser no setter, o que é mais complexo.
-          // Aqui, testamos uma propriedade/atributo que pode ser herdado de forma mais simples.
-          // Ou, para testar se o *acesso* a innerHTML é afetado:
           polluteLogic: (targetProto, propName, pValue) => { Object.defineProperty(targetProto, propName, { value: pValue, writable: true, configurable: true }); },
           checkLogic: (instance, propName, pValue) => instance[propName] === pValue
         },
         { name: 'innerHTML', proto: Element.prototype, protoName: 'Element', createTarget: () => document.createElement('div'),
-          // Tentativa de poluir innerHTML em uma instância para ver se o protótipo pode influenciar setters/getters
-          // Isso é complexo. O teste mais simples é ver se uma *nova* propriedade é herdada.
-          // Se o objetivo é interceptar o setter/getter de innerHTML, isso requer Object.defineProperty no protótipo.
           gadgetCheck: (obj, pollutedValue) => {
-            // É difícil verificar a poluição de innerHTML no protótipo diretamente causando um XSS
-            // sem realmente definir um setter poluído no protótipo.
-            // A verificação simples obj.innerHTML === pollutedValue pode não ser significativa aqui.
             if (Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')?.value === pollutedValue) {
                 return "A propriedade 'value' do descritor de Element.prototype.innerHTML foi poluída (altamente improvável para setters/getters nativos).";
             }
             return null;
           }
         },
-         { name: 'customDataProp', proto: Node.prototype, protoName: 'Node', createTarget: () => document.createElement('div'),
+        { name: 'customDataProp', proto: Node.prototype, protoName: 'Node', createTarget: () => document.createElement('div'),
           gadgetCheck: (obj, pollutedValue) => obj.customDataProp === pollutedValue ? 'Node.prototype.customDataProp poluído!' : null },
 
 
-        // Array.prototype - Evitar sobrescrever métodos nativos se possível, ou ser muito cuidadoso.
+        // Array.prototype
         { name: 'customArrayProp', proto: Array.prototype, protoName: 'Array', createTarget: () => [],
           gadgetCheck: (obj, pollutedValue) => obj.customArrayProp === pollutedValue ? 'Array.prototype.customArrayProp poluído!' : null },
         { name: 'map', proto: Array.prototype, protoName: 'Array', createTarget: () => [],
@@ -82,7 +70,6 @@ export async function testAdvancedPPS2() {
                  catch(e) { return `Array.map sobrescrito e quebrou ao ser chamado! (${e.message})`; }
             } return null;
           }},
-        // ... outros métodos de Array (filter, forEach, join) com gadgetCheck similar ao de map
 
         // Function.prototype
         { name: 'customFuncProp', proto: Function.prototype, protoName: 'Function', createTarget: () => function f(){},
@@ -94,24 +81,23 @@ export async function testAdvancedPPS2() {
                  catch(e) { return `Function.call sobrescrito e quebrou ao ser chamado! (${e.message})`; }
             } return null;
           }},
-        // ... apply com gadgetCheck similar ao de call
     ];
 
-    const testValue = "PP_S2_Refined_" + Date.now();
+    const testValue = "PP_S3_Isolated_" + Date.now();
     let successCount = 0;
     let gadgetCount = 0;
     let gadgetMessages = [];
 
     for (const item of propsToPollute) {
         if (!item.proto) {
-            logS2(`AVISO: Protótipo não definido para ${item.name} em testAdvancedPPS2. Pulando.`, 'warn', FNAME);
+            logS3(`AVISO: Protótipo não definido para ${item.name} em testAdvancedPPS2. Pulando.`, 'warn', FNAME);
             continue;
         }
         const prop = item.name;
         const targetProto = item.proto;
         const targetProtoName = item.protoName;
 
-        let originalDescriptor = undefined; // Usar descritor para restauração mais precisa
+        let originalDescriptor = undefined;
         let wasDefined = false;
         let pollutionAttempted = false;
 
@@ -122,20 +108,12 @@ export async function testAdvancedPPS2() {
             }
         } catch (e) {
             logS3(`AVISO: Erro ao obter descritor original de ${targetProtoName}.${prop}: ${e.message}.`, 'warn', FNAME);
-            // Para protótipos DOM, isso ainda pode ser problemático.
         }
 
         try {
-            // Lógica de poluição: usar Object.defineProperty para mais controle,
-            // especialmente se a propriedade original for um acessador.
-            // Se item.polluteLogic existir, usa-o.
             if (item.polluteLogic && typeof item.polluteLogic === 'function') {
                 item.polluteLogic(targetProto, prop, testValue);
             } else {
-                // Poluição simples (pode falhar para acessadores DOM)
-                // Para evitar "Illegal invocation" ao tentar poluir propriedades como innerHTML diretamente no protótipo,
-                // é mais seguro testar com propriedades customizadas ou setters/getters definidos por nós.
-                // A poluição de acessadores nativos DOM no protótipo é muito complexa e específica do navegador.
                 if (prop === 'innerHTML' || prop === 'outerHTML' || prop === 'textContent' || prop === 'href' || prop === 'src' || prop === 'style' || prop === 'value') {
                     logS3(`INFO: Poluição direta de protótipo DOM para '${prop}' é complexa e pulada neste refinamento. Testando em instância se possível.`, 'info', FNAME);
                 } else {
@@ -154,7 +132,7 @@ export async function testAdvancedPPS2() {
                 try { obj = item.createTarget(); }
                 catch (e) {
                     logS3(`AVISO: Falha ao criar objeto alvo para ${targetProtoName}.${prop}: ${e.message}`, 'warn', FNAME);
-                    obj = {}; // Fallback
+                    obj = {};
                 }
             } else {
                 obj = {};
@@ -204,31 +182,27 @@ export async function testAdvancedPPS2() {
             }
 
         } catch (e) {
-            // Este catch captura erros durante a tentativa de poluição ou criação do objeto de teste.
             logS3(`Erro principal ao poluir/testar '${targetProtoName}.${prop}': ${e.message}`, 'error', FNAME);
-             // Se a poluição em si falhou (ex: "Illegal invocation" ao definir no protótipo DOM),
-             // a restauração ainda tentará usar o originalDescriptor.
         } finally {
-            if (pollutionAttempted) { // Só restaura se a poluição foi tentada
+            if (pollutionAttempted) {
                 try {
                     if (wasDefined && originalDescriptor) {
                         Object.defineProperty(targetProto, prop, originalDescriptor);
-                    } else if (!wasDefined && pollutionAttempted) { // Se não era definido antes, deleta
+                    } else if (!wasDefined && pollutionAttempted) {
                         delete targetProto[prop];
                     }
-                    // Adicionar verificação de restauração se necessário
                 } catch (e) {
                     logS3(`AVISO CRÍTICO: Erro INESPERADO ao limpar/restaurar ${targetProtoName}.${prop}: ${e.message}`, 'critical', FNAME);
                 }
             }
         }
-        await PAUSE_S3(10);
+        await PAUSE_S3(10); // Pausa mínima entre testes de propriedade
     }
 
     logS3(`--- Teste PP Avançado (Refinado) Concluído (${successCount} poluições/efeitos verificados, ${gadgetCount} gadgets potenciais) ---`, 'test', FNAME);
     if (gadgetCount > 0) {
         logS3(`Resumo dos Gadgets Potenciais Detectados:`, 'critical', FNAME);
-        gadgetMessages.forEach(msg => logS2(`  - ${msg}`, 'critical', FNAME));
+        gadgetMessages.forEach(msg => logS3(`  - ${msg}`, 'critical', FNAME));
     }
-    await PAUSE_S3();
+    await PAUSE_S3(); // Pausa no final da função
 }
