@@ -1,5 +1,5 @@
 // js/script3/testAdvancedPP.mjs
-import { logS2, PAUSE_S2 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
 export async function testAdvancedPPS2() {
     const FNAME = 'testAdvancedPPS2';
@@ -121,7 +121,7 @@ export async function testAdvancedPPS2() {
                 wasDefined = true;
             }
         } catch (e) {
-            logS2(`AVISO: Erro ao obter descritor original de ${targetProtoName}.${prop}: ${e.message}.`, 'warn', FNAME);
+            logS3(`AVISO: Erro ao obter descritor original de ${targetProtoName}.${prop}: ${e.message}.`, 'warn', FNAME);
             // Para protótipos DOM, isso ainda pode ser problemático.
         }
 
@@ -137,7 +137,7 @@ export async function testAdvancedPPS2() {
                 // é mais seguro testar com propriedades customizadas ou setters/getters definidos por nós.
                 // A poluição de acessadores nativos DOM no protótipo é muito complexa e específica do navegador.
                 if (prop === 'innerHTML' || prop === 'outerHTML' || prop === 'textContent' || prop === 'href' || prop === 'src' || prop === 'style' || prop === 'value') {
-                    logS2(`INFO: Poluição direta de protótipo DOM para '${prop}' é complexa e pulada neste refinamento. Testando em instância se possível.`, 'info', FNAME);
+                    logS3(`INFO: Poluição direta de protótipo DOM para '${prop}' é complexa e pulada neste refinamento. Testando em instância se possível.`, 'info', FNAME);
                 } else {
                     Object.defineProperty(targetProto, prop, {
                         value: testValue,
@@ -153,7 +153,7 @@ export async function testAdvancedPPS2() {
             if (item.createTarget) {
                 try { obj = item.createTarget(); }
                 catch (e) {
-                    logS2(`AVISO: Falha ao criar objeto alvo para ${targetProtoName}.${prop}: ${e.message}`, 'warn', FNAME);
+                    logS3(`AVISO: Falha ao criar objeto alvo para ${targetProtoName}.${prop}: ${e.message}`, 'warn', FNAME);
                     obj = {}; // Fallback
                 }
             } else {
@@ -172,13 +172,13 @@ export async function testAdvancedPPS2() {
                         checkSuccessful = true;
                     }
                 } catch (e) {
-                    logS2(`AVISO: Erro ao acessar ${prop} no objeto de teste para ${targetProtoName} após poluição: ${e.message}`, 'warn', FNAME);
+                    logS3(`AVISO: Erro ao acessar ${prop} no objeto de teste para ${targetProtoName} após poluição: ${e.message}`, 'warn', FNAME);
                 }
             }
 
 
             if (checkSuccessful) {
-                logS2(`-> VULN: Herança/Efeito PP para '${targetProtoName}.${prop}' OK (valor = testValue ou checkLogic passou).`, 'vuln', FNAME);
+                logS3(`-> VULN: Herança/Efeito PP para '${targetProtoName}.${prop}' OK (valor = testValue ou checkLogic passou).`, 'vuln', FNAME);
                 successCount++;
 
                 if (item.gadgetCheck) {
@@ -189,23 +189,23 @@ export async function testAdvancedPPS2() {
                         gadgetMsg = `Erro ao executar gadgetCheck para ${prop}: ${e.message}`;
                     }
                     if (gadgetMsg) {
-                        logS2(`-> GADGET? ${gadgetMsg}`, 'critical', FNAME);
+                        logS3(`-> GADGET? ${gadgetMsg}`, 'critical', FNAME);
                         gadgetMessages.push(`${prop}: ${gadgetMsg}`);
                         gadgetCount++;
                         const dangerousProps = ['constructor', '__proto__', 'hasOwnProperty', 'appendChild', 'addEventListener', 'map', 'call', 'apply'];
                         if (dangerousProps.includes(prop)) {
-                            logS2(` ---> *** ALERTA: Potencial Gadget PP perigoso detectado para '${prop}'! ***`, 'escalation', FNAME);
+                            logS3(` ---> *** ALERTA: Potencial Gadget PP perigoso detectado para '${prop}'! ***`, 'escalation', FNAME);
                         }
                     }
                 }
             } else if (pollutionAttempted) {
-                logS2(`-> FAIL/INFO: Poluição de '${targetProtoName}.${prop}' tentada. Verificação de herança/efeito falhou. ` +
+                logS3(`-> FAIL/INFO: Poluição de '${targetProtoName}.${prop}' tentada. Verificação de herança/efeito falhou. ` +
                       `Valor na instância: ${String(inheritedValue).substring(0,100)}`, 'good', FNAME);
             }
 
         } catch (e) {
             // Este catch captura erros durante a tentativa de poluição ou criação do objeto de teste.
-            logS2(`Erro principal ao poluir/testar '${targetProtoName}.${prop}': ${e.message}`, 'error', FNAME);
+            logS3(`Erro principal ao poluir/testar '${targetProtoName}.${prop}': ${e.message}`, 'error', FNAME);
              // Se a poluição em si falhou (ex: "Illegal invocation" ao definir no protótipo DOM),
              // a restauração ainda tentará usar o originalDescriptor.
         } finally {
@@ -218,17 +218,17 @@ export async function testAdvancedPPS2() {
                     }
                     // Adicionar verificação de restauração se necessário
                 } catch (e) {
-                    logS2(`AVISO CRÍTICO: Erro INESPERADO ao limpar/restaurar ${targetProtoName}.${prop}: ${e.message}`, 'critical', FNAME);
+                    logS3(`AVISO CRÍTICO: Erro INESPERADO ao limpar/restaurar ${targetProtoName}.${prop}: ${e.message}`, 'critical', FNAME);
                 }
             }
         }
-        await PAUSE_S2(10);
+        await PAUSE_S3(10);
     }
 
-    logS2(`--- Teste PP Avançado (Refinado) Concluído (${successCount} poluições/efeitos verificados, ${gadgetCount} gadgets potenciais) ---`, 'test', FNAME);
+    logS3(`--- Teste PP Avançado (Refinado) Concluído (${successCount} poluições/efeitos verificados, ${gadgetCount} gadgets potenciais) ---`, 'test', FNAME);
     if (gadgetCount > 0) {
-        logS2(`Resumo dos Gadgets Potenciais Detectados:`, 'critical', FNAME);
+        logS3(`Resumo dos Gadgets Potenciais Detectados:`, 'critical', FNAME);
         gadgetMessages.forEach(msg => logS2(`  - ${msg}`, 'critical', FNAME));
     }
-    await PAUSE_S2();
+    await PAUSE_S3();
 }
