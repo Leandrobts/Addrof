@@ -1,17 +1,18 @@
 // js/script3/runAllAdvancedTestsS3.mjs
-// ATUALIZADO PARA EXECUTAR O "CALDEIRÃO" DE UAF
+// ATUALIZADO PARA TENTAR CONSTRUIR O PRIMITIVO 'addrof'
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
 // --- IMPORTAÇÃO ATUALIZADA ---
-import { runChaoticUAFCauldron } from './testAdvancedPP.mjs';
+import { tryBuildAddrofPrimitive } from './testBuildAddrof.mjs';
+
 
 /**
- * Orquestrador principal do Script 3, focado na tentativa de UAF via "Caldeirão".
+ * Orquestrador principal do Script 3, focado na construção de 'addrof'.
  */
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = 'UAF_Cauldron_Runner';
+    const FNAME_ORCHESTRATOR = 'Addrof_Builder_Runner';
     const runBtn = getRunBtnAdvancedS3();
     
     if (runBtn) {
@@ -19,13 +20,13 @@ export async function runAllAdvancedTestsS3() {
     }
 
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ====`, 'test', FNAME_ORCHESTRATOR);
-    logS3('Foco: Tentativa de UAF no MODO CAOS. Espere instabilidade severa.', 'critical', FNAME_ORCHESTRATOR);
-    logS3('O teste rodará por ~20 segundos e tentará ativamente travar o navegador.', 'warn', FNAME_ORCHESTRATOR);
+    logS3('Foco: Usar primitivo OOB R/W para construir uma função "addrof" (vazar endereço de objeto).', 'info', FNAME_ORCHESTRATOR);
+    logS3('Este teste simula o próximo passo em uma exploração real.', 'warn', FNAME_ORCHESTRATOR);
 
-    await PAUSE_S3(3000); // Pausa longa para o usuário ler os avisos
+    await PAUSE_S3(2000); // Pausa para o usuário ler os avisos
 
     try {
-        await runChaoticUAFCauldron();
+        await tryBuildAddrofPrimitive();
 
     } catch (error) {
         logS3(`ERRO CRÍTICO no orquestrador: ${error.message}`, 'critical', FNAME_ORCHESTRATOR);
@@ -34,7 +35,7 @@ export async function runAllAdvancedTestsS3() {
         await PAUSE_S3(500);
         
         logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
-        logS3(`Se o navegador sobreviveu, ele possui um GC e um motor JS extremamente resilientes.`, 'good', FNAME_ORCHESTRATOR);
+        logS3(`O próximo passo seria usar o endereço vazado para criar um objeto falso (fakeobj).`, 'info', FNAME_ORCHESTRATOR);
         
         if (runBtn) {
             runBtn.disabled = false;
