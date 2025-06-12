@@ -1,65 +1,50 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 44 - JIT Leak)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 45 - Construtor de Primitiva R/W)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeAdvancedJITLeak_R44,
-    FNAME_MODULE_ADVANCED_JIT_LEAK_R44
+    executeArbReadWritePrimitiveBuilder_R45,
+    FNAME_MODULE_ARB_RW_BUILDER_R45
 } from './testArrayBufferVictimCrash.mjs';
 
-// ALTERADO: A estratégia antiga foi substituída pela nova, baseada em JIT.
-async function runAdvancedJITStrategy_R44() {
-    const FNAME_RUNNER = "runAdvancedJITStrategy_R44";
-    logS3(`==== INICIANDO Estratégia Avançada de JIT Leak (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    const result = await executeAdvancedJITLeak_R44();
+// NOVO: Runner focado em construir a primitiva de R/W arbitrária.
+async function runArbReadWriteBuilder_R45() {
+    const FNAME_RUNNER = "runArbReadWriteBuilder_R45";
+    logS3(`==== INICIANDO Estratégia de Construção de Primitiva R/W (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+    
+    const result = await executeArbReadWritePrimitiveBuilder_R45();
+    const module_name_for_title = FNAME_MODULE_ARB_RW_BUILDER_R45;
 
-    const module_name_for_title = FNAME_MODULE_ADVANCED_JIT_LEAK_R44;
+    if (!result) {
+        logS3(`  RUNNER R45: Teste retornou resultado inválido.`, "critical", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: Invalid Result!`;
+        return;
+    }
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R44(JIT): Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R45: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
-    } else if (result) {
-        logS3(`  RUNNER R44(JIT): Completou.`, "good", FNAME_RUNNER);
-
-        const addrofResult = result.addrof_result;
-        const webkitLeakResult = result.webkit_leak_result;
-
-        if (addrofResult) {
-            logS3(`  RUNNER R44(JIT): Teste Addrof: ${addrofResult.msg} (Endereço vazado: ${addrofResult.leaked_object_addr || 'N/A'})`, addrofResult.success ? "vuln" : "warn", FNAME_RUNNER);
-        } else {
-            logS3(`  RUNNER R44(JIT): Teste Addrof não produziu resultado.`, "warn", FNAME_RUNNER);
-        }
-
-        if (webkitLeakResult) {
-            logS3(`  RUNNER R44(JIT): Teste WebKit Base Leak: ${webkitLeakResult.msg} (Base Candidata: ${webkitLeakResult.webkit_base_candidate || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
-        } else {
-            logS3(`  RUNNER R44(JIT): Teste WebKit Base Leak não produziu resultado.`, "warn", FNAME_RUNNER);
-        }
-
-        // NOVO: Lógica de título simplificada para o novo fluxo.
-        if (webkitLeakResult?.success) {
-            document.title = `${module_name_for_title}: WebKitLeak SUCCESS!`;
-        } else if (addrofResult?.success) {
-            document.title = `${module_name_for_title}: Addrof OK, WebKitLeak Fail`;
-        } else {
-            document.title = `${module_name_for_title}: Addrof/WebKitLeak Fail`;
-        }
-
+    } else if (result.success) {
+        logS3(`  RUNNER R45: SUCESSO! Primitiva de Leitura/Escrita Arbitrária construída.`, "vuln", FNAME_RUNNER);
+        logS3(`  RUNNER R45: Detalhes: ${result.msg}`, "good", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: ArbR/W SUCCESS!`;
     } else {
-        document.title = `${module_name_for_title}: Invalid Result Obj`;
+        logS3(`  RUNNER R45: FALHA na construção da primitiva.`, "error", FNAME_RUNNER);
+        logS3(`  RUNNER R45: Detalhes: ${result.msg}`, "warn", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: ArbR/W Fail!`;
     }
+    
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia Avançada de JIT Leak (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Construção de Primitiva R/W (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_ADVANCED_JIT_LEAK_R44}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R44(JIT) (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_ARB_RW_BUILDER_R45}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R45 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    
     // ALTERADO: Chama a nova função runner.
-    await runAdvancedJITStrategy_R44();
-    logS3(`\n==== Script 3 R44(JIT) (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    await runArbReadWriteBuilder_R45();
+
+    logS3(`\n==== Script 3 R45 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
-    if (document.title.includes(FNAME_MODULE_ADVANCED_JIT_LEAK_R44) && !document.title.includes("SUCCESS") && !document.title.includes("Fail")) {
-        document.title = `${FNAME_MODULE_ADVANCED_JIT_LEAK_R44} Done`;
-    }
 }
