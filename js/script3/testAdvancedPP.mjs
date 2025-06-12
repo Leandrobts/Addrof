@@ -1,98 +1,80 @@
 // js/script3/testAdvancedPP.mjs
-// ATUALIZADO PARA TESTES MASSIVOS DE STRESS FOCADOS NO GADGET 'CALL'
+// ATUALIZADO PARA TENTATIVA AVANÇADA DE USE-AFTER-FREE (UAF) ASSÍNCRONO
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 
-const STRESS_ITERATIONS = 50000; // Aumente para 100.000 ou mais para testes mais intensos
+const UAF_ITERATIONS = 20000; // Menos iterações, pois cada uma é mais complexa e lenta.
 
 /**
- * STRESS TEST 1: Hijack de 'call' com rápida alocação/desalocação de objetos.
- * Objetivo: Tentar causar um Use-After-Free (UAF) no Garbage Collector.
+ * Tenta forçar uma condição de Use-After-Free usando setTimeout para criar uma corrida
+ * entre o uso de um objeto e sua coleta pelo Garbage Collector.
  */
-async function stressTest_CallHijack_With_GC_Churn() {
-    const FNAME = 'StressTest_GC_UAF';
-    logS3(`--- Stress Test 1: Hijack de 'call' + Churn de Objetos (Tentativa de UAF) ---`, 'test', FNAME);
-    logS3(`Iterações: ${STRESS_ITERATIONS}`, 'info', FNAME);
+async function advanced_UAF_Attempt_With_SetTimeout() {
+    const FNAME = 'AdvancedUAF_SetTimeout';
+    logS3(`--- Tentativa Avançada de UAF com setTimeout ---`, 'test', FNAME);
+    logS3(`Iterações: ${UAF_ITERATIONS}`, 'info', FNAME);
     const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
-    let callCount = 0;
+    let uafCount = 0;
+    let errorCount = 0;
 
+    // A função que será chamada no futuro, tentando usar a vítima.
+    const useVictim = (victim) => {
+        try {
+            // O gatilho é uma chamada de função na vítima.
+            // Se a vítima já foi liberada pelo GC, esta linha pode travar o navegador.
+            Object.keys.call(victim);
+        } catch (e) {
+            // Um erro aqui é interessante. Pode significar que 'victim' não é mais um objeto válido.
+            errorCount++;
+        }
+    };
+    
     try {
-        const hijackFunction = function() { callCount++; };
+        const hijackFunction = () => { uafCount++; };
         Object.defineProperty(Function.prototype, 'call', { value: hijackFunction, configurable: true });
 
-        logS3("Iniciando loop de alocação/desalocação massiva...", 'warn', FNAME);
-        for (let i = 0; i < STRESS_ITERATIONS; i++) {
-            let tempObj = { data: new Array(100).fill(i) };
-            // Chama uma função no objeto, acionando nosso 'call' sequestrado.
-            Object.keys.call(tempObj);
-            // Ao final do loop, tempObj se torna elegível para o GC.
-            if (i % 10000 === 0) {
-                 logS3(`Progresso: ${i}/${STRESS_ITERATIONS}... Chamadas sequestradas: ${callCount}`, 'info', FNAME);
-                 await PAUSE_S3(10); // Permite que a UI respire um pouco
+        logS3("Iniciando loop de UAF Assíncrono...", 'warn', FNAME);
+        logS3("Cada iteração agenda um 'uso' futuro e imediatamente 'libera' o objeto.", 'info', FNAME);
+
+        for (let i = 0; i < UAF_ITERATIONS; i++) {
+            // 1. ALOCAR VÍTIMA
+            let victim = { id: i, payload: new Uint8Array(256) };
+
+            // 2. AGENDAR O "USO"
+            setTimeout(() => useVictim(victim), Math.random() * 10); // Adiciona um pequeno jitter aleatório
+
+            // 3. "LIBERAR" A VÍTIMA
+            victim = null;
+            
+            // 4. PRESSIONAR O GARBAGE COLLECTOR (opcional, mas ajuda)
+            // Alocar pequenos objetos força o GC a trabalhar mais.
+            let pressure = new Array(50).fill(0);
+
+            if (i % 2000 === 0) {
+                 logS3(`Progresso: ${i}/${UAF_ITERATIONS}... Usos agendados: ${uafCount}, Erros de acesso: ${errorCount}`, 'info', FNAME);
+                 await PAUSE_S3(20); // Pausa para a UI e para os timeouts se acumularem
             }
         }
-        logS3("Loop concluído.", 'good', FNAME);
+
+        logS3("Loop de agendamento concluído. Aguardando timeouts restantes...", 'good', FNAME);
+        await PAUSE_S3(2000); // Pausa longa para garantir que a maioria dos timeouts execute.
 
     } catch (e) {
-        logS3(`ERRO durante o Stress Test 1: ${e.message}`, 'error', FNAME);
+        logS3(`ERRO CRÍTICO durante o setup do Teste de UAF: ${e.message}`, 'error', FNAME);
     } finally {
         logS3("Limpando e restaurando 'call'...", 'info', FNAME);
         if (originalCallDescriptor) {
             Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
         }
-        logS3(`Total de chamadas sequestradas: ${callCount}`, 'info', FNAME);
-    }
-}
-
-/**
- * STRESS TEST 2: Hijack de 'call' com APIs de DOM complexas.
- * Objetivo: Tentar causar um crash na fronteira entre JavaScript e o código nativo do navegador.
- */
-async function stressTest_CallHijack_With_DOM_APIs() {
-    const FNAME = 'StressTest_DOM_API';
-    logS3(`--- Stress Test 2: Hijack de 'call' + Stress de APIs DOM ---`, 'test', FNAME);
-    const originalCallDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, 'call');
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    let callCount = 0;
-
-    try {
-        const hijackFunction = () => { callCount++; };
-        Object.defineProperty(Function.prototype, 'call', { value: hijackFunction, configurable: true });
-        
-        logS3("Iniciando loop de criação/destruição de elementos DOM...", 'warn', FNAME);
-        for (let i = 0; i < 500; i++) { // Menos iterações, pois DOM é mais lento
-            let el = document.createElement('iframe');
-            el.src = "about:blank";
-            container.appendChild(el);
-            // Força o navegador a processar e talvez chamar callbacks internos
-            el.getBoundingClientRect.call(el);
-            container.removeChild(el);
-
-             if (i % 100 === 0) {
-                 logS3(`Progresso DOM: ${i}/500...`, 'info', FNAME);
-                 await PAUSE_S3(10);
-            }
-        }
-        logS3("Loop DOM concluído.", 'good', FNAME);
-
-    } catch (e) {
-        logS3(`ERRO durante o Stress Test 2: ${e.message}`, 'error', FNAME);
-    } finally {
-        logS3("Limpando e restaurando 'call'...", 'info', FNAME);
-        document.body.removeChild(container);
-        if (originalCallDescriptor) {
-            Object.defineProperty(Function.prototype, 'call', originalCallDescriptor);
-        }
+        logS3(`Total de chamadas sequestradas (pode ser menor que iterações): ${uafCount}`, 'info', FNAME);
+        logS3(`Total de erros de acesso em timeouts: ${errorCount}`, 'info', FNAME);
     }
 }
 
 
 /**
- * Função principal que orquestra a execução dos Testes Massivos de Stress.
+ * Função principal que orquestra a execução da tentativa de UAF.
  */
-export async function runMassiveStressTests() {
-    await stressTest_CallHijack_With_GC_Churn();
-    await PAUSE_S3(2000); // Pausa longa para o GC estabilizar
-    await stressTest_CallHijack_With_DOM_APIs();
+export async function runAdvancedUAF_Attempts() {
+    await advanced_UAF_Attempt_With_SetTimeout();
 }
