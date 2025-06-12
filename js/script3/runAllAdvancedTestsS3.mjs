@@ -7,7 +7,7 @@ import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 // --- IMPORTAÇÃO CORRETA ---
 // Importa diretamente a função de teste de PP Avançado do Script 2.
 // A lógica anterior de Type Confusion foi removida.
-import { testAdvancedPPS2 } from '../script2/testAdvancedPP.mjs';
+import { testAdvancedPPS2 } from '../script3/testAdvancedPP.mjs';
 
 
 /**
