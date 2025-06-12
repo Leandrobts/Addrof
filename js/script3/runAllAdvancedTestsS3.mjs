@@ -6,7 +6,6 @@ import {
     FNAME_MODULE_STABLE_FUZZER_R47
 } from './testArrayBufferVictimCrash.mjs';
 
-// NOVO: Runner para o fuzzer estável.
 async function runStableFuzzer_R47() {
     const FNAME_RUNNER = "runStableFuzzer_R47";
     logS3(`==== INICIANDO Estratégia de Fuzzing Estável (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
