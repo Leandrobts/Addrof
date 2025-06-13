@@ -1,10 +1,10 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 65 - Chamador da Conquista)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 66 - Chamador da Fênix)
 import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
 import {
     FNAME_MODULE,
-    runConquestExploitChain
+    runPhoenixExploitChain
 } from './UltimateExploit.mjs';
 
 export async function runAllAdvancedTestsS3() {
@@ -13,7 +13,7 @@ export async function runAllAdvancedTestsS3() {
     
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = true;
 
-    const result = await runConquestExploitChain();
+    const result = await runPhoenixExploitChain();
 
     if (result && result.success) {
         logS3(`  RUNNER: CADEIA DE EXPLORAÇÃO BEM-SUCEDIDA!`, "vuln", FNAME_ORCHESTRATOR);
