@@ -1,10 +1,37 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak e com teste de JIT)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43, 
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './testArrayBufferVictimCrash.mjs';
+import { AdvancedInt64 } from '../utils.mjs'; // Importação para o teste de JIT
+
+// NOVO CÓDIGO INSERIDO AQUI
+async function testJITBehavior() {
+    logS3("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
+    let test_buf = new ArrayBuffer(16);
+    let float_view = new Float64Array(test_buf);
+    let uint32_view = new Uint32Array(test_buf);
+    let some_obj = { a: 1, b: 2 }; // Um objeto qualquer
+
+    logS3("Escrevendo um objeto em um Float64Array...", 'info', 'testJITBehavior');
+    float_view[0] = some_obj;
+
+    const low = uint32_view[0];
+    const high = uint32_view[1];
+    const leaked_val = new AdvancedInt64(low, high);
+    
+    logS3(`Bits lidos: high=0x${high.toString(16)}, low=0x${low.toString(16)} (Valor completo: ${leaked_val.toString(true)})`, 'leak', 'testJITBehavior');
+
+    if (high === 0x7ff80000 && low === 0) {
+        logS3("CONFIRMADO: O JIT converteu o objeto para NaN, como esperado.", 'good', 'testJITBehavior');
+    } else {
+        logS3("INESPERADO: O JIT não converteu para NaN. O comportamento é diferente do esperado.", 'warn', 'testJITBehavior');
+    }
+    logS3("--- Teste de Comportamento do JIT Concluído ---", 'test', 'testJITBehavior');
+}
+// FIM DO NOVO CÓDIGO
 
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43"; 
@@ -74,6 +101,12 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 R43L (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    
+    // NOVO CÓDIGO INSERIDO AQUI
+    await testJITBehavior(); // Executa o teste de isolamento primeiro
+    await PAUSE_S3(500); // Pausa para ler o log do teste de JIT
+    // FIM DO NOVO CÓDIGO
+    
     await runHeisenbugReproStrategy_TypedArrayVictim_R43();
     logS3(`\n==== Script 3 R43L (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
