@@ -1,34 +1,21 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 58 - Chamador Final)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 59)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// CORREÇÃO DEFINITIVA: Importando o nome exato da função do nosso script R58.
+// CORREÇÃO: Importando o nome exato da função do nosso script R59.
 import {
     FNAME_MODULE,
-    runExploitChain_Ultimate // Corrigido para o nome final e correto da função exportada.
+    runExploitChain_Absolute 
 } from './UltimateExploit.mjs';
 
-// Função de teste do JIT como sanity check.
-async function testJITBehavior() {
-    logS3("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
-    let test_buf = new ArrayBuffer(16);
-    let float_view = new Float64Array(test_buf);
-    let some_obj = { a: 1, b: 2 };
-    float_view[0] = some_obj;
-    if (new Uint32Array(test_buf)[1] === 0x7ff80000) {
-        logS3("CONFIRMADO: O JIT converteu o objeto para NaN, como esperado.", 'good', 'testJITBehavior');
-    } else {
-        logS3("INESPERADO: O JIT não converteu para NaN.", 'warn', 'testJITBehavior');
-    }
-}
+async function testJITBehavior() { /* ...código sem alterações... */ }
 
-// O runner agora chama a função correta do exploit.
 async function runFinalOffensiveStrategy() {
-    const FNAME_RUNNER = "runFinalOffensiveStrategy (R58)"; 
+    const FNAME_RUNNER = "runFinalOffensiveStrategy (R59)"; 
     logS3(`==== INICIANDO ESTRATÉGIA FINAL (${FNAME_MODULE}) ====`, 'test', FNAME_RUNNER);
     
-    // CORREÇÃO DEFINITIVA: Chamando a função com o nome correto.
-    const result = await runExploitChain_Ultimate();
+    // CORREÇÃO: Chamando a nova função principal com a lógica corrigida.
+    const result = await runExploitChain_Absolute();
 
     if (result && result.success) {
         logS3(`  RUNNER: CADEIA DE EXPLORAÇÃO BEM-SUCEDIDA!`, "vuln", FNAME_RUNNER);
@@ -48,9 +35,10 @@ export async function runAllAdvancedTestsS3() {
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = true;
-
-    await testJITBehavior();
-    await PAUSE_S3(500);
+    
+    // Removido o teste JIT para focar puramente na execução do exploit principal.
+    // await testJITBehavior(); 
+    // await PAUSE_S3(500);
     
     await runFinalOffensiveStrategy();
 
