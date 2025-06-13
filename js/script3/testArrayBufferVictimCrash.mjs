@@ -48,7 +48,7 @@ export async function executeStableOffsetFuzzer_R47() {
         const M_LENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
         const FUZZ_START_OFFSET = 0x20;
         // ======================= A MUDANÇA CRÍTICA ESTÁ AQUI =======================
-        const FUZZ_END_OFFSET = 0x800000; // AUMENTADO de 0x800 para 0x4000 (16 KB)
+        const FUZZ_END_OFFSET = 0x4000; // AUMENTADO de 0x800 para 0x4000 (16 KB)
         // =========================================================================
         const FUZZ_STEP = 0x4;
 
