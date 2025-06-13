@@ -1,10 +1,10 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 61 - Chamador do Bypass)
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 62 - Chamador da Conquista)
+import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
 import {
     FNAME_MODULE,
-    runBypassExploitChain
+    runConquestExploitChain
 } from './UltimateExploit.mjs';
 
 export async function runAllAdvancedTestsS3() {
@@ -13,11 +13,11 @@ export async function runAllAdvancedTestsS3() {
     
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = true;
 
-    const result = await runBypassExploitChain();
+    const result = await runConquestExploitChain();
 
     if (result && result.success) {
         logS3(`  RUNNER: CADEIA DE EXPLORAÇÃO BEM-SUCEDIDA!`, "vuln", FNAME_ORCHESTRATOR);
-        logS3(`  RUNNER: Mensagem: ${result.message}`, "good", FNAME_ORCHESTRATOR);
+        logS3(`  RUNNER: Mensagem Final: ${result.message}`, "good", FNAME_ORCHESTRATOR);
     } else {
         const errorMsg = result ? result.errorOccurred : "Resultado indefinido do exploit.";
         logS3(`  RUNNER: A cadeia de exploração falhou: ${errorMsg}`, "critical", FNAME_ORCHESTRATOR);
