@@ -1,10 +1,10 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 63 - Chamador Final)
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 64 - Chamador do Cerco)
+import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
 import {
     FNAME_MODULE,
-    runFinalExploitChain
+    runSiegeExploitChain
 } from './UltimateExploit.mjs';
 
 export async function runAllAdvancedTestsS3() {
@@ -13,7 +13,7 @@ export async function runAllAdvancedTestsS3() {
     
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = true;
 
-    const result = await runFinalExploitChain();
+    const result = await runSiegeExploitChain();
 
     if (result && result.success) {
         logS3(`  RUNNER: CADEIA DE EXPLORAÇÃO BEM-SUCEDIDA!`, "vuln", FNAME_ORCHESTRATOR);
