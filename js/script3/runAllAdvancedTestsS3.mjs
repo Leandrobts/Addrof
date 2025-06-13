@@ -1,49 +1,48 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 50 - Self-Leak Scan)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisão 51 - JSCell Fuzzer)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
-    executeSelfLeakScanAndCorrupt_R50,
-    FNAME_MODULE_SELF_LEAK_SCAN_R50
+    executeJSCellFuzzer_R51,
+    FNAME_MODULE_JSCELL_FUZZER_R51
 } from './testArrayBufferVictimCrash.mjs';
 
-async function runSelfLeakScan_R50() {
-    const FNAME_RUNNER = "runSelfLeakScan_R50";
-    logS3(`==== INICIANDO Estratégia de Self-Leak e Busca (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+async function runJSCellFuzzer_R51() {
+    const FNAME_RUNNER = "runJSCellFuzzer_R51";
+    logS3(`==== INICIANDO Estratégia de Fuzzing de JSCell (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
-    const result = await executeSelfLeakScanAndCorrupt_R50();
-    const module_name_for_title = FNAME_MODULE_SELF_LEAK_SCAN_R50;
+    const result = await executeJSCellFuzzer_R51();
+    const module_name_for_title = FNAME_MODULE_JSCELL_FUZZER_R51;
 
     if (!result) {
-        logS3(`  RUNNER R50: Teste retornou resultado inválido.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R51: Teste retornou resultado inválido.`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: Invalid Result!`;
         return;
     }
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R50: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R51: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
     } else if (result.success) {
-        logS3(`  RUNNER R50: SUCESSO! Primitivas Addrof/FakeObj construídas.`, "vuln", FNAME_RUNNER);
-        logS3(`  RUNNER R50: Addrof(leaked_obj) => ${result.leaked_addr}`, "leak", FNAME_RUNNER);
-        logS3(`  RUNNER R50: FakeObj(test_addr) => ${result.fake_obj_test_result}`, "good", FNAME_RUNNER);
-        document.title = `${module_name_for_title}: Addrof/FakeObj SUCCESS!`;
+        logS3(`  RUNNER R51: SUCESSO! Offset do JSCell do DataView encontrado.`, "vuln", FNAME_RUNNER);
+        logS3(`  RUNNER R51: Detalhes: ${result.msg}`, "good", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: JSCell Found!`;
     } else {
-        logS3(`  RUNNER R50: FALHA na construção das primitivas.`, "error", FNAME_RUNNER);
-        logS3(`  RUNNER R50: Detalhes: ${result.msg}`, "warn", FNAME_RUNNER);
-        document.title = `${module_name_for_title}: Primitive Fail!`;
+        logS3(`  RUNNER R51: FALHA. Nenhum offset de JSCell válido encontrado.`, "error", FNAME_RUNNER);
+        logS3(`  RUNNER R51: Detalhes: ${result.msg}`, "warn", FNAME_RUNNER);
+        document.title = `${module_name_for_title}: JSCell Not Found!`;
     }
     
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Self-Leak e Busca (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Fuzzing de JSCell (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_SELF_LEAK_SCAN_R50}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R50 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_JSCELL_FUZZER_R51}_MainOrchestrator`;
+    logS3(`==== INICIANDO Script 3 R51 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    await runSelfLeakScan_R50();
+    await runJSCellFuzzer_R51();
 
-    logS3(`\n==== Script 3 R50 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R51 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
