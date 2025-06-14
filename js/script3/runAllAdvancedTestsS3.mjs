@@ -1,14 +1,14 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para R51 - Primitivas)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para R52 - Execução de ROP)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 
-// Importando a nova função e o nome do módulo
+// Importando a função e o nome do módulo do nosso script R52
 import {
-    runStableUAFPrimitives_R51,
+    runStableUAFPrimitives_R51 as runROPPoC_R52, // Renomeando o import para maior clareza
     FNAME_MODULE
 } from './testArrayBufferVictimCrash.mjs';
 
-// O teste do JIT permanece o mesmo
+// O teste do JIT permanece o mesmo, é uma boa verificação de sanidade.
 async function testJITBehavior() {
     logS3("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
     let test_buf = new ArrayBuffer(16);
@@ -25,39 +25,45 @@ async function testJITBehavior() {
     }
 }
 
-// O runner agora chama e interpreta a nova estratégia R51
-async function runPrimitivesBuilderStrategy_R51() {
-    const FNAME_RUNNER = "runPrimitivesBuilderStrategy_R51";
-    logS3(`==== INICIANDO Estratégia de Construção de Primitivas (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
+// ALTERADO: O runner agora chama e interpreta a nova estratégia R52 de execução de ROP.
+async function runROPExecutionStrategy_R52() {
+    // ALTERADO: Nome do runner para refletir a nova estratégia.
+    const FNAME_RUNNER = "runROPExecutionStrategy_R52";
+    logS3(`==== INICIANDO Estratégia de Execução de ROP (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
 
-    const result = await runStableUAFPrimitives_R51();
+    // ALTERADO: Chamando a função importada com seu novo nome claro.
+    const result = await runROPPoC_R52();
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R51: O teste capturou um ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
-        document.title = `${FNAME_MODULE}: BUILD FAIL!`;
+        // ALTERADO: Log para refletir o contexto R52.
+        logS3(`  RUNNER R52: O teste capturou um ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        document.title = `${FNAME_MODULE}: ROP FAIL!`;
     } else if (result && result.final_result) {
         const uafResult = result.final_result;
-        logS3(`  RUNNER R51: Módulo de construção de primitivas completou.`, "good", FNAME_RUNNER);
-        logS3(`  RUNNER R51: Mensagem: ${uafResult.message}`, uafResult.success ? "vuln" : "warn", FNAME_RUNNER);
-        document.title = uafResult.success ? `${FNAME_MODULE}: SUCCESS!` : `${FNAME_MODULE}: VALIDATION FAIL`;
+        // ALTERADO: Log para refletir o contexto R52.
+        logS3(`  RUNNER R52: Módulo de execução de ROP completou.`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R52: Mensagem: ${uafResult.message}`, uafResult.success ? "vuln" : "warn", FNAME_RUNNER);
+        document.title = uafResult.success ? `${FNAME_MODULE}: ROP READY!` : `${FNAME_MODULE}: ROP PREP FAIL`;
     } else {
-        logS3(`  RUNNER R51: Formato de resultado inválido.`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R52: Formato de resultado inválido.`, "critical", FNAME_RUNNER);
         document.title = `${FNAME_MODULE}: Invalid Result Obj`;
     }
 
     logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Construção de Primitivas (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Execução de ROP (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
+    // FNAME_MODULE é importado e atualizado automaticamente, então o nome do orquestrador estará correto.
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
 
     await testJITBehavior();
     await PAUSE_S3(500);
 
-    await runPrimitivesBuilderStrategy_R51();
+    // ALTERADO: Chamando a nova função runner.
+    await runROPExecutionStrategy_R52();
 
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
