@@ -91,11 +91,18 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
 
     add(val) {
         if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val); // Tenta converter se for número ou string
+            val = new AdvancedInt64(val);
         }
-        let low = this.low() + val.low();
-        let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
-        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
+        // Conversão para BigInt para garantir a correção matemática
+        const a = (BigInt(this.high()) << 32n) | BigInt(this.low());
+        const b = (BigInt(val.high()) << 32n) | BigInt(val.low());
+        const result = a + b;
+        
+        // Converte de volta para o formato low/high
+        const newHigh = Number((result >> 32n) & 0xFFFFFFFFn);
+        const newLow = Number(result & 0xFFFFFFFFn);
+
+        return new AdvancedInt64(newLow, newHigh);
     }
 
     sub(val) {
