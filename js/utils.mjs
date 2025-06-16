@@ -102,14 +102,16 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        // Empresta se necessário
-        let newLow = this.low() - val.low();
-        let newHigh = this.high() - val.high();
-        if (newLow < 0) {
-            newLow += (0xFFFFFFFF + 1); // Adiciona 2^32
-            newHigh -= 1; // Empresta do high
-        }
-        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+        // Conversão para BigInt para garantir a correção matemática
+        const a = (BigInt(this.high()) << 32n) | BigInt(this.low());
+        const b = (BigInt(val.high()) << 32n) | BigInt(val.low());
+        const result = a - b;
+        
+        // Converte de volta para o formato low/high
+        const newHigh = Number((result >> 32n) & 0xFFFFFFFFn);
+        const newLow = Number(result & 0xFFFFFFFFn);
+
+        return new AdvancedInt64(newLow, newHigh);
     }
 }
 
