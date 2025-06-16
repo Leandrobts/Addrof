@@ -144,7 +144,7 @@ async function triggerGC_Hyper() {
         const gc_trigger_arr = [];
         for (let i = 0; i < 1000; i++) {
             // Aloca objetos de tamanhos variados para "sujar" diferentes pools de memória
-            gc_trigger_arr.push(new ArrayBuffer(1024 * i)); 
+            gc_trigger_arr.push(new ArrayBuffer(1024 * 1024 * Math.min(i, 256))); // Limita a 256MB
             gc_trigger_arr.push(new Array(1024 * i).fill(0));
         }
     } catch (e) {
