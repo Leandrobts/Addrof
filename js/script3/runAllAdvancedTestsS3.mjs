@@ -1,10 +1,7 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v111)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v112)
 import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import { 
-    runFinalUnifiedTest, 
-    FNAME_MODULE_FINAL
-} from './testArrayBufferVictimCrash.mjs';
+import { runFinalUnifiedTest, FNAME_MODULE_FINAL } from './testArrayBufferVictimCrash.mjs';
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_FINAL}_MainOrchestrator`;
@@ -15,7 +12,7 @@ export async function runAllAdvancedTestsS3() {
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     
     if(result.success) {
-        document.title = `${FNAME_MODULE_FINAL}: WebKit Base Leaked!`;
+        document.title = `${FNAME_MODULE_FINAL}: ROP READY!`;
     } else {
         document.title = `${FNAME_MODULE_FINAL}: FAILED`;
     }
