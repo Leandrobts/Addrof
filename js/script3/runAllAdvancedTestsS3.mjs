@@ -1,4 +1,4 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 64 - WebKit Leak com Logs Verbosos)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para Revisado 65 - WebKit Leak com Logs Verbosos)
 import { logS3, PAUSE_S3, MEDIUM_PAUSE_S3 } from './s3_utils.mjs';
 import { getOutputAdvancedS3, getRunBtnAdvancedS3 } from '../dom_elements.mjs';
 import {
@@ -33,29 +33,29 @@ async function testJITBehavior() {
 }
 
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
-    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R64"; // Nome do Runner atualizado para R64
+    const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R65"; // Nome do Runner atualizado para R65
     logS3(`==== INICIANDO Estratégia de Reprodução (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
     const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43();
 
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
     if (result.errorOccurred) {
-        logS3(`  RUNNER R64: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
+        logS3(`  RUNNER R65: Teste principal capturou ERRO: ${String(result.errorOccurred)}`, "critical", FNAME_RUNNER);
         document.title = `${module_name_for_title}: MainTest ERR!`;
     } else if (result) {
-        logS3(`  RUNNER R64: Teste de L/E completou.`, "good", FNAME_RUNNER);
+        logS3(`  RUNNER R65: Teste de L/E completou.`, "good", FNAME_RUNNER);
         const webkitLeakResult = result.webkit_leak_result;
 
         if (webkitLeakResult) {
-            logS3(`  RUNNER R64: Resultado do Vazamento da Base WebKit: ${webkitLeakResult.msg}`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R65: Resultado do Vazamento da Base WebKit: ${webkitLeakResult.msg}`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
             if(webkitLeakResult.success) {
-                logS3(`  RUNNER R64: Endereço Base da WebKit Encontrado: ${webkitLeakResult.webkit_base_candidate}`, "vuln", FNAME_RUNNER);
+                logS3(`  RUNNER R65: Endereço Base da WebKit Encontrado: ${webkitLeakResult.webkit_base_candidate}`, "vuln", FNAME_RUNNER);
                 document.title = `${module_name_for_title}: WebKit Base Leaked!`;
             } else {
                  document.title = `${module_name_for_title}: WebKit Leak FAILED`;
             }
         } else {
-            logS3(`  RUNNER R64: Teste WebKit Base Leak não produziu resultado.`, "warn", FNAME_RUNNER);
+            logS3(`  RUNNER R65: Teste WebKit Base Leak não produziu resultado.`, "warn", FNAME_RUNNER);
             document.title = `${module_name_for_title}: WebKit Leak No Result`;
         }
     } else {
@@ -68,12 +68,12 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R64 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 R65 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
     await testJITBehavior();
     await PAUSE_S3(500);
     
     await runHeisenbugReproStrategy_TypedArrayVictim_R43();
-    logS3(`\n==== Script 3 R64 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R65 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
