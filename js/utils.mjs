@@ -4,15 +4,15 @@ export const KB = 1024;
 export const MB = KB * KB;
 export const GB = KB * KB * KB;
 
-export class AdvancedInt64 { 
+export class AdvancedInt64 {
     constructor(low, high) {
-        this._isAdvancedInt64 = true; 
+        this._isAdvancedInt64 = true;
         let buffer = new Uint32Array(2);
-        
+
         let is_one_arg = false;
         if (arguments.length === 1) { is_one_arg = true; }
-        if (arguments.length === 0) { 
-            low = 0; high = 0; is_one_arg = false; 
+        if (arguments.length === 0) {
+            low = 0; high = 0; is_one_arg = false;
         }
 
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
@@ -21,13 +21,13 @@ export class AdvancedInt64 {
             if (typeof (low) === 'number') {
                 if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
                 buffer[0] = low & 0xFFFFFFFF;
-                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)); 
+                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
             } else if (typeof (low) === 'string') {
                 let str = low;
-                if (str.startsWith('0x')) { str = str.slice(2); } 
+                if (str.startsWith('0x')) { str = str.slice(2); }
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
-                str = str.padStart(16, '0'); 
+                str = str.padStart(16, '0');
 
                 const highStr = str.substring(0, 8);
                 const lowStr = str.substring(8, 16);
@@ -35,10 +35,11 @@ export class AdvancedInt64 {
                 buffer[1] = parseInt(highStr, 16);
                 buffer[0] = parseInt(lowStr, 16);
 
-            } else if (low instanceof AdvancedInt64) { 
-                 buffer[0] = low.low();
-                 buffer[1] = low.high();
+            } else if (low instanceof AdvancedInt64) {
+                buffer[0] = low.low();
+                buffer[1] = low.high();
             } else {
+                // Este é o throw que você estava vendo no log
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
@@ -55,14 +56,14 @@ export class AdvancedInt64 {
     }
 
     static fromParts(low_val, high_val) {
-        const instance = Object.create(AdvancedInt64.prototype); 
+        const instance = Object.create(AdvancedInt64.prototype);
         instance._isAdvancedInt64 = true;
         instance.buffer = new Uint32Array(2);
         // Não é necessário o check_range aqui, pois estamos trabalhando com bytes brutos
         // ou valores que já deveriam ser validados (vindos de doubleToInt64, etc.).
         // O `& 0xFFFFFFFF` já garante o comportamento Uint32.
-        instance.buffer[0] = low_val & 0xFFFFFFFF; 
-        instance.buffer[1] = high_val & 0xFFFFFFFF; 
+        instance.buffer[0] = low_val & 0xFFFFFFFF;
+        instance.buffer[1] = high_val & 0xFFFFFFFF;
         return instance;
     }
 
@@ -73,18 +74,18 @@ export class AdvancedInt64 {
         if (!(other instanceof AdvancedInt64)) { return false; }
         return this.low() === other.low() && this.high() === other.high();
     }
-    
-    static Zero = AdvancedInt64.fromParts(0,0); 
+
+    static Zero = AdvancedInt64.fromParts(0, 0);
 
     toString(hex = false) {
-        if (!hex) { 
+        if (!hex) {
             if (this.high() === 0) return String(this.low());
-            return `(H:0x${this.high().toString(16)}, L:0x${this.low().toString(16)})`; 
+            return `(H:0x${this.high().toString(16)}, L:0x${this.low().toString(16)})`;
         }
         return '0x' + this.high().toString(16).padStart(8, '0') + '_' + this.low().toString(16).padStart(8, '0');
     }
-    
-    toNumber() { 
+
+    toNumber() {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
@@ -95,7 +96,7 @@ export class AdvancedInt64 {
         } else if (!(val instanceof AdvancedInt64)) {
             // Se 'val' não é AdvancedInt64 ou number, ainda tenta o construtor principal (ex: para string).
             // Idealmente, todas as entradas seriam convertidas para AdvancedInt64 antes de chamar add/sub.
-            val = new AdvancedInt64(val); 
+            val = new AdvancedInt64(val);
         }
         let low = this.low() + val.low();
         let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
@@ -106,14 +107,14 @@ export class AdvancedInt64 {
         // CORREÇÃO: Usar fromParts para converter 'val' se for um number.
         if (typeof val === 'number') {
             val = AdvancedInt64.fromParts(val & 0xFFFFFFFF, Math.floor(val / (0xFFFFFFFF + 1)));
-        } else if (!(val instanceof AdvancedInt64)) { 
+        } else if (!(val instanceof AdvancedInt64)) {
             val = new AdvancedInt64(val);
         }
         let newLow = this.low() - val.low();
         let newHigh = this.high() - val.high();
         if (newLow < 0) {
-            newLow += (0xFFFFFFFF + 1); 
-            newHigh -= 1; 
+            newLow += (0xFFFFFFFF + 1);
+            newHigh -= 1;
         }
         return AdvancedInt64.fromParts(newLow, newHigh); // Usar fromParts para o resultado
     }
@@ -130,13 +131,13 @@ export async function PAUSE(ms) {
 
 export function toHex(val, bits = 32) {
     if (isAdvancedInt64Object(val)) {
-        return val.toString(true); 
+        return val.toString(true);
     }
     if (typeof val !== 'number') {
-        return `NonNumeric(${typeof val}:${String(val)})`; 
+        return `NonNumeric(${typeof val}:${String(val)})`;
     }
-    if (isNaN(val)) { 
-        return 'ValIsNaN'; 
+    if (isNaN(val)) {
+        return 'ValIsNaN';
     }
 
     let hexStr;
@@ -147,16 +148,43 @@ export function toHex(val, bits = 32) {
             hexStr = ((val & 0xFFFF) >>> 0).toString(16);
         } else if (bits === 8) {
             hexStr = ((val & 0xFF) >>> 0).toString(16);
-        } else { 
-            hexStr = val.toString(16); 
+        } else {
+            hexStr = val.toString(16);
         }
     } else {
         hexStr = val.toString(16);
     }
-    
+
     const numChars = Math.ceil(bits / 4);
     return '0x' + hexStr.padStart(numChars, '0');
 }
+
+/**
+ * Converte uma string hexadecimal (ex: "0x7FFF00000000") em um objeto com as partes low e high (Uint32).
+ * @param {string} hexString A string hexadecimal de 64 bits.
+ * @returns {{low: number, high: number}} Um objeto contendo as partes low e high.
+ * @throws {Error} Se a string de entrada for inválida.
+ */
+export function hexStringToParts(hexString) {
+    if (typeof hexString !== 'string' || !hexString.startsWith('0x')) {
+        throw new Error('Input to hexStringToParts must be a hex string starting with "0x"');
+    }
+    let str = hexString.slice(2);
+    // Pad to 16 characters for a full 64-bit representation
+    str = str.padStart(16, '0');
+
+    const highStr = str.substring(0, 8);
+    const lowStr = str.substring(8, 16);
+
+    const high = parseInt(highStr, 16);
+    const low = parseInt(lowStr, 16);
+
+    if (isNaN(high) || isNaN(low)) {
+        throw new Error(`Failed to parse hex string "${hexString}" into low/high parts.`);
+    }
+    return { low, high };
+}
+
 
 export function stringToAdvancedInt64Array(str, nullTerminate = true) {
     if (typeof str !== 'string') {
@@ -164,7 +192,7 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
         return [];
     }
     const result = [];
-    const charsPerAdv64 = 4; 
+    const charsPerAdv64 = 4;
 
     for (let i = 0; i < str.length; i += charsPerAdv64) {
         let low = 0;
@@ -177,10 +205,10 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
 
         low = (char2_code << 16) | char1_code;
         high = (char4_code << 16) | char3_code;
-        
-        result.push(AdvancedInt64.fromParts(low, high)); 
-        
-        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break; 
+
+        result.push(AdvancedInt64.fromParts(low, high));
+
+        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break;
         if (char3_code === 0 && i + 2 < str.length && char4_code === 0 && nullTerminate) break;
         if (char2_code === 0 && i + 1 < str.length && char3_code === 0 && char4_code === 0 && nullTerminate) break;
 
