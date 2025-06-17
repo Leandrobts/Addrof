@@ -1,7 +1,6 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v108)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v109)
 import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função unificada e o nome do módulo
 import { 
     runFinalUnifiedTest, 
     FNAME_MODULE_FINAL
@@ -11,13 +10,14 @@ export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_FINAL}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    // Chama a única função de teste necessária
     const result = await runFinalUnifiedTest();
     
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     
-    if(result.success) {
-        document.title = `${FNAME_MODULE_FINAL}: SUCCESS!`;
+    if(result.success && result.webkit_base) {
+        document.title = `${FNAME_MODULE_FINAL}: WebKit Base Leaked!`;
+    } else if (result.success) {
+        document.title = `${FNAME_MODULE_FINAL}: R/W OK, Leak FAILED`;
     } else {
         document.title = `${FNAME_MODULE_FINAL}: FAILED`;
     }
