@@ -15,18 +15,6 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
             low = 0; high = 0; is_one_arg = false; 
         }
 
-        if (!is_one_arg) {
-            if (typeof (low) !== 'number' || typeof (high) !== 'number') {
-                if (low instanceof AdvancedInt64 && high === undefined) {
-                    buffer[0] = low.low();
-                    buffer[1] = low.high();
-                    this.buffer = buffer;
-                    return;
-                }
-                throw TypeError('low/high must be numbers or single AdvancedInt64 argument');
-            }
-        }
-        
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
         if (is_one_arg) {
@@ -56,8 +44,11 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
+            // Adicionado log para depuração
+            // console.log(`DEBUG: AdvancedInt64 constructor - low: ${low}, high: ${high}, check_range(low): ${check_range(low)}, check_range(high): ${check_range(high)}`);
             if (!check_range(low) || !check_range(high)) {
-                throw RangeError('low/high must be uint32 numbers');
+                // Modificado para dar mais contexto ao erro
+                throw new RangeError(`low/high must be uint32 numbers. Got low: 0x${(low >>> 0).toString(16)} (${typeof low}), high: 0x${(high >>> 0).toString(16)} (${typeof high}).`);
             }
             buffer[0] = low;
             buffer[1] = high;
@@ -91,69 +82,26 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
 
     add(val) {
         if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val);
+            val = new AdvancedInt64(val); // Tenta converter se for número ou string
         }
-        // Conversão para BigInt para garantir a correção matemática
-        const a = (BigInt(this.high()) << 32n) | BigInt(this.low());
-        const b = (BigInt(val.high()) << 32n) | BigInt(val.low());
-        const result = a + b;
-        
-        // Converte de volta para o formato low/high
-        const newHigh = Number((result >> 32n) & 0xFFFFFFFFn);
-        const newLow = Number(result & 0xFFFFFFFFn);
-
-        return new AdvancedInt64(newLow, newHigh);
+        let low = this.low() + val.low();
+        let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
+        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
     }
 
     sub(val) {
         if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        // Conversão para BigInt para garantir a correção matemática
-        const a = (BigInt(this.high()) << 32n) | BigInt(this.low());
-        const b = (BigInt(val.high()) << 32n) | BigInt(val.low());
-        const result = a - b;
-        
-        // Converte de volta para o formato low/high
-        const newHigh = Number((result >> 32n) & 0xFFFFFFFFn);
-        const newLow = Number(result & 0xFFFFFFFFn);
-
-        return new AdvancedInt64(newLow, newHigh);
-    }
-    
-    // ==================================================================
-    // == INÍCIO DAS ATUALIZAÇÕES: MÉTODOS BITWISE ADICIONADOS =========
-    // ==================================================================
-
-    /**
-     * Realiza uma operação AND bit-a-bit entre este e outro valor de 64 bits.
-     * @param {AdvancedInt64 | number | string} val O valor a ser combinado.
-     * @returns {AdvancedInt64} Um novo objeto AdvancedInt64 com o resultado da operação.
-     */
-    and(val) {
-        if (!(val instanceof AdvancedInt64)) {
-            val = new AdvancedInt64(val);
+        // Empresta se necessário
+        let newLow = this.low() - val.low();
+        let newHigh = this.high() - val.high();
+        if (newLow < 0) {
+            newLow += (0xFFFFFFFF + 1); // Adiciona 2^32
+            newHigh -= 1; // Empresta do high
         }
-        const newLow = this.low() & val.low();
-        const newHigh = this.high() & val.high();
-        // O operador >>> 0 garante que o resultado seja tratado como um inteiro de 32 bits sem sinal.
-        return new AdvancedInt64(newLow >>> 0, newHigh >>> 0);
+        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
     }
-
-    /**
-     * Realiza uma operação NOT bit-a-bit no valor de 64 bits.
-     * @returns {AdvancedInt64} Um novo objeto AdvancedInt64 com o resultado da operação.
-     */
-    not() {
-        // Aplica o operador NOT (~) a cada componente de 32 bits.
-        const newLow = ~this.low() >>> 0;
-        const newHigh = ~this.high() >>> 0;
-        return new AdvancedInt64(newLow, newHigh);
-    }
-    
-    // ==================================================================
-    // =================== FIM DAS ATUALIZAÇÕES =========================
-    // ==================================================================
 }
 
 
@@ -178,16 +126,14 @@ export function toHex(val, bits = 32) {
 
     let hexStr;
     if (val < 0) {
-        // Para 32-bit, o comportamento padrão de (val >>> 0).toString(16) lida com isso.
-        // Para outros tamanhos de bits, a conversão de complemento de dois é mais complexa.
         if (bits === 32) {
             hexStr = (val >>> 0).toString(16);
         } else if (bits === 16) {
             hexStr = ((val & 0xFFFF) >>> 0).toString(16);
         } else if (bits === 8) {
             hexStr = ((val & 0xFF) >>> 0).toString(16);
-        } else { // Para bits === 64 ou outros não explicitamente tratados
-            hexStr = val.toString(16); // Pode não ser o esperado para negativos grandes
+        } else { 
+            hexStr = val.toString(16); 
         }
     } else {
         hexStr = val.toString(16);
@@ -225,25 +171,9 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
 
     }
     if (nullTerminate && (str.length % charsPerAdv64 !== 0 || str.length === 0)) {
-        // Garante a terminação nula se a string não preencher um AdvancedInt64 completo
-        // ou se a string estiver vazia (resultando em um QWORD nulo).
-        // Se o último Adv64 já tiver zeros por causa do fim da string, isso é redundante mas inofensivo.
-        // Se a string for vazia, adiciona um QWORD nulo.
         if (result.length === 0 || 
             result[result.length-1].low() !==0 || result[result.length-1].high() !==0 ) {
-            
-            // Verifica se o último char foi nulo e se já quebrou o loop.
-            // Esta lógica de terminação nula pode precisar de refinamento para cobrir todos os casos perfeitamente.
-            // Se o último bloco foi parcialmente preenchido e terminou com \0, queremos esse \0.
-            // Se a string terminou e não era múltiplo de 4, e o último char não era \0, precisamos de um \0.
-            // A lógica atual de terminação dentro do loop já tenta lidar com isso.
-            // Se a string é vazia, e queremos um QWORD nulo:
              if (str.length === 0) result.push(AdvancedInt64.Zero);
-
-            // Se a string não preencheu o último QWORD e nullTerminate é true,
-            // os zeros já foram preenchidos por charX_code = 0.
-            // Um QWORD nulo explícito só é necessário se o último QWORD não for todo zero.
-            // E se a string já terminou com um \0 que caiu no meio de um QWORD.
         }
     }
     return result;
