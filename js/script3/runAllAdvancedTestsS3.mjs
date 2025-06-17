@@ -24,3 +24,4 @@ export async function runAllAdvancedTestsS3() {
     
     logS3(`Resultado final: ${result.message}`, result.success ? "good" : "error", FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
+}
