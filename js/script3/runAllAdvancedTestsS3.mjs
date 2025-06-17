@@ -1,27 +1,22 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v108)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para o Teste ROP)
 import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-// Importa a nova função unificada e o nome do módulo
-import { 
-    runFinalUnifiedTest, 
-    FNAME_MODULE_FINAL
-} from './testArrayBufferVictimCrash.mjs';
+import { runROPChainTest } from './testArrayBufferVictimCrash.mjs';
 
 export async function runAllAdvancedTestsS3() {
-    const FNAME_ORCHESTRATOR = `${FNAME_MODULE_FINAL}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    const FNAME_ORCHESTRATOR = "ROP_Test_MainOrchestrator";
+    logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test');
     
-    // Chama a única função de teste necessária
-    const result = await runFinalUnifiedTest();
+    const result = await runROPChainTest();
     
-    logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test');
     
     if(result.success) {
-        document.title = `${FNAME_MODULE_FINAL}: SUCCESS!`;
+        document.title = `ROP Chain Staged!`;
     } else {
-        document.title = `${FNAME_MODULE_FINAL}: FAILED`;
+        document.title = `ROP Test Failed`;
     }
     
-    logS3(`Resultado final: ${result.message}`, result.success ? "good" : "error", FNAME_ORCHESTRATOR);
+    logS3(`Resultado final: ${result.message}`, result.success ? "good" : "error");
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
