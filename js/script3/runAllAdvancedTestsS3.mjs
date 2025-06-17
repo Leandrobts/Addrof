@@ -61,19 +61,19 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     } else {
         document.title = `${module_name_for_title}: Invalid Result Obj`;
     }
-    logS3(`  Título da página final: ${document.title}`, "info", FNAME_RUNNER);
+    logS3(`  Título da página final: ${document_name}: ${document.title}`, "info", FNAME_RUNNER);
     await PAUSE_S3(MEDIUM_PAUSE_S3);
-    logS3(`==== Estratégia de Reprodução (${FNAME_RUNNER}) CONCLUÍDA ====`, 'test', FNAME_RUNNER);
+    logS3(`==== Estratégia de Reprodução (${FNAME_RUNNER}) CONCLUÍDA ====`, "test", FNAME_RUNNER);
 }
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_MainOrchestrator`;
-    logS3(`==== INICIANDO Script 3 R95 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`==== INICIANDO Script 3 R95 (${FNAME_ORCHESTRATOR}) ... ====`, "test", FNAME_ORCHESTRATOR);
     
     await testJITBehavior();
     await PAUSE_S3(500);
     
     await runHeisenbugReproStrategy_TypedArrayVictim_R43();
-    logS3(`\n==== Script 3 R95 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
+    logS3(`\n==== Script 3 R95 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, "test", FNAME_ORCHESTRATOR);
     const runBtn = getRunBtnAdvancedS3(); if (runBtn) runBtn.disabled = false;
 }
