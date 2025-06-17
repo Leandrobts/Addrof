@@ -120,23 +120,39 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
 
         return new AdvancedInt64(newLow, newHigh);
     }
+    
+    // ==================================================================
+    // == INÍCIO DAS ATUALIZAÇÕES: MÉTODOS BITWISE ADICIONADOS =========
+    // ==================================================================
 
-    // ==================================================================
-    // == INÍCIO DA ATUALIZAÇÃO: MÉTODO .not() ADICIONADO PARA CORREÇÃO ==
-    // ==================================================================
+    /**
+     * Realiza uma operação AND bit-a-bit entre este e outro valor de 64 bits.
+     * @param {AdvancedInt64 | number | string} val O valor a ser combinado.
+     * @returns {AdvancedInt64} Um novo objeto AdvancedInt64 com o resultado da operação.
+     */
+    and(val) {
+        if (!(val instanceof AdvancedInt64)) {
+            val = new AdvancedInt64(val);
+        }
+        const newLow = this.low() & val.low();
+        const newHigh = this.high() & val.high();
+        // O operador >>> 0 garante que o resultado seja tratado como um inteiro de 32 bits sem sinal.
+        return new AdvancedInt64(newLow >>> 0, newHigh >>> 0);
+    }
+
     /**
      * Realiza uma operação NOT bit-a-bit no valor de 64 bits.
      * @returns {AdvancedInt64} Um novo objeto AdvancedInt64 com o resultado da operação.
      */
     not() {
         // Aplica o operador NOT (~) a cada componente de 32 bits.
-        // O operador >>> 0 garante que o resultado seja tratado como um inteiro de 32 bits sem sinal.
         const newLow = ~this.low() >>> 0;
         const newHigh = ~this.high() >>> 0;
         return new AdvancedInt64(newLow, newHigh);
     }
+    
     // ==================================================================
-    // =================== FIM DA ATUALIZAÇÃO ===========================
+    // =================== FIM DAS ATUALIZAÇÕES =========================
     // ==================================================================
 }
 
