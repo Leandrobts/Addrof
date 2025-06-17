@@ -6,14 +6,11 @@
 export const JSC_OFFSETS = {
     JSCell: {
         STRUCTURE_POINTER_OFFSET: 0x8,    // VALIDADO
-        STRUCTURE_ID_FLATTENED_OFFSET: 0x0, // NOVO: Usaremos este para tentar ler o StructureID
+        STRUCTURE_ID_FLATTENED_OFFSET: 0x0, 
         CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: 0x4, 
         CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET: 0x5, 
         CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET: 0x6, 
         CELL_STATE_FLATTENED_OFFSET: 0x7,
-        // Seus valores originais para STRUCTURE_ID_OFFSET e FLAGS_OFFSET foram removidos
-        // para evitar confusão com os *_FLATTENED_OFFSET, que parecem mais detalhados
-        // da sua análise do construtor de Structure.
     },
     CallFrame: { // Offsets baseados na análise de CallFrame.txt
         CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee() 
@@ -27,12 +24,8 @@ export const JSC_OFFSETS = {
         TYPE_INFO_MORE_FLAGS_OFFSET: 0xA,
         TYPE_INFO_INLINE_FLAGS_OFFSET: 0xC,
         AGGREGATED_FLAGS_OFFSET: 0x10,
-        // VIRTUAL_PUT_OFFSET foi movido para aqui, pois é um offset DENTRO da Structure.
-        // No seu dump, "call qword ptr [rdx+18h]" onde rdx é Structure* sugere isso.
-        VIRTUAL_PUT_OFFSET: 0x18, // CANDIDATO FORTE PARA PONTEIRO DE FUNÇÃO VIRTUAL (ex: JSObject::put)
-        PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18, // Nota: Mesmo offset que VIRTUAL_PUT_OFFSET, isso é incomum. VERIFIQUE. Se for diferente, ajuste.
-                                                // Se o VIRTUAL_PUT_OFFSET for de uma vtable, ele estará no início da Structure (0x0) ou em ClassInfo.
-                                                // A sua nota "call qword ptr [rdx+18h]" é a pista.
+        VIRTUAL_PUT_OFFSET: 0x18, 
+        PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18, 
         PROPERTY_TABLE_OFFSET: 0x20,
         GLOBAL_OBJECT_OFFSET: 0x28,
         PROTOTYPE_OFFSET: 0x30,
@@ -59,19 +52,16 @@ export const JSC_OFFSETS = {
             JSString_STRUCTURE_ID: null,
             ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO
             JSArray_STRUCTURE_ID: null,
-            JSObject_Simple_STRUCTURE_ID: null // VÍRGULA ADICIONADA AQUI
+            JSObject_Simple_STRUCTURE_ID: null
         }
     },
     ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
         STRUCTURE_ID_OFFSET: 0x00,      // Relativo ao início do JSCell do ArrayBufferView
         FLAGS_OFFSET: 0x04,             // Relativo ao início do JSCell do ArrayBufferView
-        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, // Ponteiro para o JSArrayBuffer.
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents (redundante se já tem ASSOCIATED_ARRAYBUFFER_OFFSET?) ou diferente? Verifique.
-                                           // Geralmente, a View aponta para o JSArrayBuffer, e este aponta para Contents.
-                                           // Manteremos o seu, mas revise se ASSOCIATED_ARRAYBUFFER_OFFSET leva ao JSArrayBuffer, que por sua vez tem CONTENTS_IMPL_POINTER_OFFSET.
-        M_VECTOR_OFFSET: 0x10,          // Se CONTENTS_IMPL_POINTER_OFFSET acima for o correto, M_VECTOR_OFFSET pode ser relativo a ArrayBufferContents, não à View.
-                                           // No entanto, os logs anteriores sugerem que 0x58 (início da View) + 0x10 (M_VECTOR_OFFSET) = 0x68 funciona para você.
-        M_LENGTH_OFFSET: 0x18,          // Comprimento da view.
+        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, 
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, 
+        M_VECTOR_OFFSET: 0x10,          
+        M_LENGTH_OFFSET: 0x18,          
         M_MODE_OFFSET: 0x1C
     },
     ArrayBufferContents: {
@@ -86,8 +76,11 @@ export const JSC_OFFSETS = {
         TOP_CALL_FRAME_OFFSET: 0x9E98, // VALIDADO
     },
     // NOVO: OFFSET DA TABELA DE ESTRUTURAS. ESTE VALOR É UM PLACEHOLDER E PRECISA SER ENCONTRADO
-    // EM DUMPS DE MEMÓRIA DA PS4 12.02. ESTE É CRÍTICO!
-    STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE: 0x3000000, // <<<< ESTE VALOR PRECISA SER AJUSTADO/VALIDADO
+    STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE: 0x3000000, 
+    
+    // NOVO: ENDEREÇO BASE ASSUMIDO DA WEBKIT PARA TESTES DE LEITURA ARBITRÁRIA.
+    // ESTE É UM VALOR ESPECULATIVO E PRECISA SER ENCONTRADO EM DUMPS OU POR OUTROS MEIOS.
+    ASSUMED_WEBKIT_BASE_FOR_TEST: "0x7FFF00000000", // <<<< ESTE VALOR É CRÍTICO E PRECISA SER VALIDADO/AJUSTADO.
 };
 
 export const WEBKIT_LIBRARY_INFO = {
@@ -121,7 +114,7 @@ export const WEBKIT_LIBRARY_INFO = {
         "JSC::throwConstructorCannotBeCalledAsFunctionTypeError": "0x112BBC0",
     },
     DATA_OFFSETS: {
-        "JSC::JSArrayBufferView::s_info": "0x3AE5040",
+        "JSC::JSArrayBufferView::s_info": "0x3AE5040", // OFFSET DA SEÇÃO .data
         "JSC::DebuggerScope::s_info": "0x3AD5670",
         "JSC::Symbols::Uint32ArrayPrivateName": "0x3CC7968",
         "JSC::Symbols::Float32ArrayPrivateName": "0x3CC7990",
