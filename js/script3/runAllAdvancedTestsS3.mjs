@@ -1,21 +1,18 @@
-// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v115)
+// js/script3/runAllAdvancedTestsS3.mjs (ATUALIZADO para v116)
 import { logS3 } from './s3_utils.mjs';
 import { getRunBtnAdvancedS3 } from '../dom_elements.mjs';
-import { 
-    runFinalUnifiedTest, 
-    FNAME_MODULE_FINAL
-} from './testArrayBufferVictimCrash.mjs';
+import { runFinalIntegrationTest, FNAME_MODULE_FINAL } from './testArrayBufferVictimCrash.mjs';
 
 export async function runAllAdvancedTestsS3() {
     const FNAME_ORCHESTRATOR = `${FNAME_MODULE_FINAL}_MainOrchestrator`;
     logS3(`==== INICIANDO Script 3 (${FNAME_ORCHESTRATOR}) ... ====`, 'test', FNAME_ORCHESTRATOR);
     
-    const result = await runFinalUnifiedTest();
+    const result = await runFinalIntegrationTest();
     
     logS3(`\n==== Script 3 (${FNAME_ORCHESTRATOR}) CONCLUÍDO ====`, 'test', FNAME_ORCHESTRATOR);
     
     if(result.success) {
-        document.title = `${FNAME_MODULE_FINAL}: ADDROF OK!`;
+        document.title = `${FNAME_MODULE_FINAL}: INTEGRATION SUCCESS!`;
     } else {
         document.title = `${FNAME_MODULE_FINAL}: FAILED`;
     }
