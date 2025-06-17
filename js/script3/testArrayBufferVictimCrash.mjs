@@ -1,7 +1,7 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v123 - R83 Reutilizar Primitivas da Fase 4 na Fase 5)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Remover a re-inicialização de 'confused_array' e 'victim_array' na Fase 5.
+// - Remover a re-inicialização de 'confused_array' e 'victim_array' na Fase 5
 // - As primitivas 'addrof_func' e 'fakeobj_func' (e, portanto, suas arrays internas)
 //   serão as MESMAS que foram configuradas e verificadas na Fase 4.
 // - Isso na esperança de que a 'addrof_func' mantenha sua capacidade de vazar endereços válidos.
