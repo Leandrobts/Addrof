@@ -4,9 +4,9 @@ export const KB = 1024;
 export const MB = KB * KB;
 export const GB = KB * KB * KB;
 
-export class AdvancedInt64 { /* ... (código da classe como antes) ... */
+export class AdvancedInt64 { 
     constructor(low, high) {
-        this._isAdvancedInt64 = true; // Propriedade para identificação
+        this._isAdvancedInt64 = true; 
         let buffer = new Uint32Array(2);
         
         let is_one_arg = false;
@@ -21,12 +21,11 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
             if (typeof (low) === 'number') {
                 if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
                 buffer[0] = low & 0xFFFFFFFF;
-                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)); // Aproximação para high
+                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)); 
             } else if (typeof (low) === 'string') {
                 let str = low;
-                let _PAIR_MATCHER;
-                if (str.startsWith('0x')) { str = str.slice(2); _PAIR_MATCHER = /../g; } 
-                else { _PAIR_MATCHER = /../g; } // Não mais usado diretamente
+                // A lógica de parse da string hexadecimal já lida com 0x
+                if (str.startsWith('0x')) { str = str.slice(2); } 
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0'); // Pad para 16 hex chars (8 bytes)
@@ -37,23 +36,34 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
                 buffer[1] = parseInt(highStr, 16);
                 buffer[0] = parseInt(lowStr, 16);
 
-            } else if (low instanceof AdvancedInt64) { // Adicionado para construção a partir de outro AdvancedInt64
+            } else if (low instanceof AdvancedInt64) { 
                  buffer[0] = low.low();
                  buffer[1] = low.high();
             } else {
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
-            // Adicionado log para depuração
-            // console.log(`DEBUG: AdvancedInt64 constructor - low: ${low}, high: ${high}, check_range(low): ${check_range(low)}, check_range(high): ${check_range(high)}`);
+            // Adicionado log para depuração aprofundada
+            // console.log(`DEBUG: AdvancedInt64 constructor TWO ARGS - low: ${low} (typeof ${typeof low}), high: ${high} (typeof ${typeof high})`);
+            // console.log(`DEBUG: check_range(low): ${check_range(low)}, check_range(high): ${check_range(high)}`);
+
             if (!check_range(low) || !check_range(high)) {
-                // Modificado para dar mais contexto ao erro
-                throw new RangeError(`low/high must be uint32 numbers. Got low: 0x${(low >>> 0).toString(16)} (${typeof low}), high: 0x${(high >>> 0).toString(16)} (${typeof high}).`);
+                throw new RangeError(`low/high must be uint32 numbers. Got low: 0x${(low >>> 0).toString(16)} (Type: ${typeof low}), high: 0x${(high >>> 0).toString(16)} (Type: ${typeof high}).`);
             }
             buffer[0] = low;
             buffer[1] = high;
         }
         this.buffer = buffer;
+    }
+
+    // NOVO: Função estática auxiliar para construir AdvancedInt64
+    static fromParts(low_val, high_val) {
+        const instance = Object.create(AdvancedInt64.prototype); // Cria uma nova instância sem chamar o construtor
+        instance._isAdvancedInt64 = true;
+        instance.buffer = new Uint32Array(2);
+        instance.buffer[0] = low_val & 0xFFFFFFFF; // Garante que seja Uint32
+        instance.buffer[1] = high_val & 0xFFFFFFFF; // Garante que seja Uint32
+        return instance;
     }
 
     low() { return this.buffer[0]; }
@@ -64,43 +74,46 @@ export class AdvancedInt64 { /* ... (código da classe como antes) ... */
         return this.low() === other.low() && this.high() === other.high();
     }
     
-    static Zero = new AdvancedInt64(0,0); // Static property
+    static Zero = AdvancedInt64.fromParts(0,0); // Usar a nova função auxiliar
 
     toString(hex = false) {
-        if (!hex) { // Decimal string - pode ser impreciso para números grandes
-            // Para precisão, seria necessário BigInt ou uma biblioteca de bignum
+        if (!hex) { 
             if (this.high() === 0) return String(this.low());
-            return `(H:0x${this.high().toString(16)}, L:0x${this.low().toString(16)})`; // Aproximação
+            return `(H:0x${this.high().toString(16)}, L:0x${this.low().toString(16)})`; 
         }
-        // Hex string
         return '0x' + this.high().toString(16).padStart(8, '0') + '_' + this.low().toString(16).padStart(8, '0');
     }
     
-    toNumber() { // Pode perder precisão se o número for > 2^53 - 1
+    toNumber() { 
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
     add(val) {
-        if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val); // Tenta converter se for número ou string
+        // CORREÇÃO: Usar fromParts se val for number
+        if (typeof val === 'number') {
+            val = AdvancedInt64.fromParts(val & 0xFFFFFFFF, Math.floor(val / (0xFFFFFFFF + 1)));
+        } else if (!(val instanceof AdvancedInt64)) {
+            val = new AdvancedInt64(val); // Tenta converter se for string, etc.
         }
         let low = this.low() + val.low();
         let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
-        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
+        return AdvancedInt64.fromParts(low, high);
     }
 
     sub(val) {
-        if (!(val instanceof AdvancedInt64)) { 
+        // CORREÇÃO: Usar fromParts se val for number
+        if (typeof val === 'number') {
+            val = AdvancedInt64.fromParts(val & 0xFFFFFFFF, Math.floor(val / (0xFFFFFFFF + 1)));
+        } else if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
-        // Empresta se necessário
         let newLow = this.low() - val.low();
         let newHigh = this.high() - val.high();
         if (newLow < 0) {
-            newLow += (0xFFFFFFFF + 1); // Adiciona 2^32
-            newHigh -= 1; // Empresta do high
+            newLow += (0xFFFFFFFF + 1); 
+            newHigh -= 1; 
         }
-        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+        return AdvancedInt64.fromParts(newLow, newHigh);
     }
 }
 
@@ -115,13 +128,13 @@ export async function PAUSE(ms) {
 
 export function toHex(val, bits = 32) {
     if (isAdvancedInt64Object(val)) {
-        return val.toString(true); // toString(true) já formata como 0x...
+        return val.toString(true); 
     }
     if (typeof val !== 'number') {
-        return `NonNumeric(${typeof val}:${String(val)})`; // Melhor log para não números
+        return `NonNumeric(${typeof val}:${String(val)})`; 
     }
-    if (isNaN(val)) { // Verifica explicitamente se o tipo é 'number' mas o valor é NaN
-        return 'ValIsNaN'; // Log claro para NaN
+    if (isNaN(val)) { 
+        return 'ValIsNaN'; 
     }
 
     let hexStr;
@@ -149,7 +162,7 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
         return [];
     }
     const result = [];
-    const charsPerAdv64 = 4; // Cada AdvancedInt64 pode armazenar 4 caracteres UTF-16 (2 bytes cada)
+    const charsPerAdv64 = 4; 
 
     for (let i = 0; i < str.length; i += charsPerAdv64) {
         let low = 0;
@@ -163,7 +176,7 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
         low = (char2_code << 16) | char1_code;
         high = (char4_code << 16) | char3_code;
         
-        result.push(new AdvancedInt64(low, high));
+        result.push(AdvancedInt64.fromParts(low, high)); // Usar fromParts
         
         if (char4_code === 0 && i + 3 < str.length && nullTerminate) break; 
         if (char3_code === 0 && i + 2 < str.length && char4_code === 0 && nullTerminate) break;
@@ -171,10 +184,7 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
 
     }
     if (nullTerminate && (str.length % charsPerAdv64 !== 0 || str.length === 0)) {
-        if (result.length === 0 || 
-            result[result.length-1].low() !==0 || result[result.length-1].high() !==0 ) {
-             if (str.length === 0) result.push(AdvancedInt64.Zero);
-        }
+        if (str.length === 0) result.push(AdvancedInt64.Zero);
     }
     return result;
 }
@@ -206,11 +216,6 @@ export function advancedInt64ArrayToString(arr) {
     return str;
 }
 
-/**
- * Reinterpreta os bits de um número de 64-bit (double) como um BigInt de 64-bit.
- * @param {number} d O número double a ser convertido.
- * @returns {BigInt} A representação BigInt dos bits do double.
- */
 export function doubleToBigInt(d) {
     const buffer = new ArrayBuffer(8);
     const float64View = new Float64Array(buffer);
@@ -219,11 +224,6 @@ export function doubleToBigInt(d) {
     return bigIntView[0];
 }
 
-/**
- * Reinterpreta os bits de um BigInt de 64-bit como um número de 64-bit (double).
- * @param {BigInt} b O BigInt a ser convertido.
- * @returns {number} O número double correspondente aos bits do BigInt.
- */
 export function bigIntToDouble(b) {
     const buffer = new ArrayBuffer(8);
     const bigIntView = new BigUint64Array(buffer);
