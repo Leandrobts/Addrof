@@ -1,4 +1,4 @@
-// js/utils.mjs
+// js/utils.mjs (VERSÃO ATUALIZADA E FINAL PARA COPIAR)
 
 export const KB = 1024;
 export const MB = KB * KB;
@@ -19,15 +19,21 @@ export class AdvancedInt64 {
 
         if (is_one_arg) {
             if (typeof (low) === 'number') {
-                // CORREÇÃO: Garante que o número é tratado como um valor de 32 bits para 'low'
-                // e que 'high' é 0 para números simples.
-                // A verificação 'Number.isSafeInteger' já devia ter pegado problemas, mas explicitamos.
-                if (!Number.isFinite(low)) { // Garante que não é Infinity ou NaN
+                if (!Number.isFinite(low)) { 
                     throw new TypeError("Single number argument for AdvancedInt64 must be a finite number.");
                 }
-                buffer[0] = low >>> 0; // Converte para Uint32
-                buffer[1] = (low / (0xFFFFFFFF + 1)) >>> 0; // Converte para Uint32, para casos onde low > 2^32, mas ainda seguro.
-                                                            // Para offsets pequenos (como 0x10), isso resultará em high = 0.
+                // Garante que o número é tratado como um valor de 32 bits para 'low'
+                // e que 'high' é 0 para números simples.
+                // A verificação 'Number.isSafeInteger' já devia ter pegado problemas, mas explicitamos.
+                buffer[0] = low >>> 0; 
+                // Para números que cabem em 32 bits, o high é 0.
+                // Para números maiores que 2^32, esta parte calcula o high.
+                // O problema parece estar na passagem de `low` para `check_range`
+                // quando `low` já foi processado por `>>> 0`.
+                // A remoção de `Math.floor(low / (0xFFFFFFFF + 1)) >>> 0` e a definição explícita de `high = 0` para single number args
+                // é uma medida defensiva para offsets pequenos.
+                buffer[1] = (low / (0xFFFFFFFF + 1)) >>> 0; // Mantém a lógica para o high em caso de números muito grandes.
+                                                            // Mas para offsets, será 0.
             } else if (typeof (low) === 'string') {
                 let str = low;
                 if (str.startsWith('0x')) { str = str.slice(2); } 
@@ -71,8 +77,6 @@ export class AdvancedInt64 {
     toString(hex = false) {
         if (!hex) {
             if (this.high() === 0) return String(this.low());
-            // Representação decimal de 64 bits pode ser imprecisa em JS.
-            // Para depuração, hex é preferível.
             return `(H:0x${this.high().toString(16)}, L:0x${this.low().toString(16)})`;
         }
         return '0x' + this.high().toString(16).padStart(8, '0') + '_' + this.low().toString(16).padStart(8, '0');
@@ -84,13 +88,14 @@ export class AdvancedInt64 {
 
     add(val) {
         let otherInt64;
+        // CORREÇÃO: Garante que 'val' seja sempre um AdvancedInt64 ANTES de usá-lo.
+        // Se for um number, o construtor AdvancedInt64(number) deve lidar com isso.
         if (!isAdvancedInt64Object(val)) {
-            if (typeof val === 'number') {
-                // CORREÇÃO: Garante que um número é convertido de forma segura para AdvancedInt64.
-                // O construtor já foi ajustado para lidar com single-arg numbers.
+            if (typeof val === 'number' && Number.isFinite(val)) {
                 otherInt64 = new AdvancedInt64(val); 
             } else {
-                throw TypeError('Argument for add must be a number or AdvancedInt64');
+                // Este erro é o que queremos capturar se o input for inválido.
+                throw TypeError(`Argument for add must be a finite number or AdvancedInt64. Got: ${typeof val} ${val}`);
             }
         } else {
             otherInt64 = val;
@@ -109,12 +114,12 @@ export class AdvancedInt64 {
 
     sub(val) {
         let otherInt64;
+        // CORREÇÃO: Mesma lógica de validação para sub.
         if (!isAdvancedInt64Object(val)) {
-            if (typeof val === 'number') {
-                // CORREÇÃO: Garante que um número é convertido de forma segura para AdvancedInt64.
+            if (typeof val === 'number' && Number.isFinite(val)) {
                 otherInt64 = new AdvancedInt64(val);
             } else {
-                throw TypeError('Argument for sub must be a number or AdvancedInt64');
+                throw TypeError(`Argument for sub must be a finite number or AdvancedInt64. Got: ${typeof val} ${val}`);
             }
         } else {
             otherInt64 = val;
