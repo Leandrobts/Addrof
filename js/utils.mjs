@@ -138,7 +138,8 @@ export class AdvancedInt64 {
             low = low & 0xFFFFFFFF;
         }
 
-        return new AdvancedInt64(low, high);
+        // CORRIGIDO: Garante que as partes alta e baixa sejam uint32 válidos
+        return new AdvancedInt64(low >>> 0, high >>> 0);
     }
 
     sub(val) {
@@ -161,7 +162,8 @@ export class AdvancedInt64 {
             newHigh -= 1;
         }
 
-        return new AdvancedInt64(newLow, newHigh);
+        // CORRIGIDO: Garante que as partes alta e baixa sejam uint32 válidos, tratando 'high' negativo.
+        return new AdvancedInt64(newLow >>> 0, newHigh >>> 0);
     }
 }
 
