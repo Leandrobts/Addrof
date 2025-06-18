@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v111 - R71 - Foco na Depuração de Heap/WASM)
+// js/script3/testArrayBufferVictimCrash.mjs (v112 - R72 - Insistência na Depuração de Heap/WASM)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Confirmado que o módulo WebAssembly compila e instancia.
-// A poluição de heap persiste, sobrepondo o ponteiro RWX da instância WASM.
-// O script sugere fortemente a depuração de baixo nível como o próximo passo crucial.
+// Confirmado o sucesso das primitivas de L/E e da instanciação WASM.
+// A falha no vazamento persiste devido à poluição de heap, mesmo com Heap Feng Shui agressivo.
+// O script reitera a necessidade crítica de depuração de baixo nível.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v111_R71_DeepHeapWasmDebug";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v112_R72_CriticalDebug";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
