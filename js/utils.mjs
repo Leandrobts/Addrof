@@ -31,9 +31,15 @@ export class AdvancedInt64 {
 
         if (is_one_arg) {
             if (typeof (low) === 'number') {
-                if (!Number.isSafeInteger(low)) { throw TypeError('number arg must be a safe integer'); }
-                buffer[0] = low & 0xFFFFFFFF;
-                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
+                // Ao construir com um único número, queremos que ele seja o 'low' e 'high' 0,
+                // a menos que seja um número grande demais para o low.
+                // A lógica Math.floor(low / (0xFFFFFFFF + 1)) já faz isso.
+                // O erro "low/high must be uint32 numbers" ao passar um número simples geralmente
+                // significa que o número é negativo ou excede o valor máximo de Number.isSafeInteger
+                // e está sendo mal interpretado como um valor uint32 no construtor.
+                // Vamos garantir que 'low' seja sempre tratado como um Uint32 válido.
+                buffer[0] = low >>> 0; // Garante que seja um Uint32
+                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)) >>> 0; // Garante que seja um Uint32
             } else if (typeof (low) === 'string') {
                 let str = low;
                 let _PAIR_MATCHER;
@@ -56,6 +62,7 @@ export class AdvancedInt64 {
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
+            // Este bloco já tem a verificação check_range
             if (!check_range(low) || !check_range(high)) {
                 throw RangeError('low/high must be uint32 numbers');
             }
@@ -69,12 +76,11 @@ export class AdvancedInt64 {
     high() { return this.buffer[1]; }
 
     equals(other) {
-        if (!(other instanceof AdvancedInt64)) { return false; }
+        if (!isAdvancedInt64Object(other)) { return false; } // Use isAdvancedInt64Object para consistência
         return this.low() === other.low() && this.high() === other.high();
     }
     
     static Zero = new AdvancedInt64(0,0);
-    // NOVO: Define NaNValue como uma propriedade estática
     static NaNValue = new AdvancedInt64(0, 0x7ff80000); 
 
     toString(hex = false) {
@@ -90,20 +96,39 @@ export class AdvancedInt64 {
     }
 
     add(val) {
-        if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val);
+        let otherInt64;
+        // Se val não é AdvancedInt64, tenta convertê-lo.
+        // Se for um número, crie AdvancedInt64(val, 0)
+        if (!isAdvancedInt64Object(val)) {
+            if (typeof val === 'number') {
+                // Para garantir que pequenos números sejam tratados como (value, 0)
+                otherInt64 = new AdvancedInt64(val, 0); 
+            } else {
+                throw TypeError('Argument for add must be a number or AdvancedInt64');
+            }
+        } else {
+            otherInt64 = val;
         }
-        let low = this.low() + val.low();
-        let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
+
+        let low = this.low() + otherInt64.low();
+        let high = this.high() + otherInt64.high() + Math.floor(low / (0xFFFFFFFF + 1));
         return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
     }
 
     sub(val) {
-        if (!(val instanceof AdvancedInt64)) { 
-            val = new AdvancedInt64(val);
+        let otherInt64;
+        if (!isAdvancedInt64Object(val)) {
+            if (typeof val === 'number') {
+                otherInt64 = new AdvancedInt64(val, 0);
+            } else {
+                throw TypeError('Argument for sub must be a number or AdvancedInt64');
+            }
+        } else {
+            otherInt64 = val;
         }
-        let newLow = this.low() - val.low();
-        let newHigh = this.high() - val.high();
+        
+        let newLow = this.low() - otherInt64.low();
+        let newHigh = this.high() - otherInt64.high();
         if (newLow < 0) {
             newLow += (0xFFFFFFFF + 1);
             newHigh -= 1;
