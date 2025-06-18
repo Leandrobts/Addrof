@@ -231,10 +231,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // Depure desativando de baixo para cima (tentativa_6, depois 5, etc).
         // =================================================================
         const testes_ativos = {
-            tentativa_1_JSObject: true,
-            tentativa_2_ArrayBuffer: true,
-            tentativa_3_TypedArray: true,
-            tentativa_4_JSCFunction: true,
+            tentativa_1_JSObject: false,
+            tentativa_2_ArrayBuffer: false,
+            tentativa_3_TypedArray: false,
+            tentativa_4_JSCFunction: false,
             tentativa_5_ClassInfo: true,
             tentativa_6_VarreduraFocada: true
         };
