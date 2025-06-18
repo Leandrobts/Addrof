@@ -1,11 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R91 - Iterative Crash Debug)
+// js/script3/testArrayBufferVictimCrash.mjs (v01 -GC Crash)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Script original que causa o crash mantido na íntegra para preservar a condição.
-// 2. Adição de um objeto de configuração `testes_ativos` para habilitar/desabilitar
-//    cada tentativa de vazamento individualmente, facilitando a depuração.
-// 3. Objetivo: Desabilitar os testes um a um, de baixo para cima, para identificar
-//    exatamente qual bloco de código aciona o crash de UAF.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
