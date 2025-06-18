@@ -1,8 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R74 - Fixes, Refined Grooming & New Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R75 - Fixes, Refined Grooming & New Leak Strategies)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. CORREÇÃO DE ERRO: `RangeError` na `AdvancedInt64.add` corrigido em `utils.mjs`.
-//    Garantido que números simples passados para `add` e `sub` são tratados como `AdvancedInt64(value, 0)`.
+// 1. CORREÇÃO DE ERRO: `RangeError` e `TypeError` na `AdvancedInt64.add/sub` corrigido em `utils.mjs`.
+//    Aumentada a robustez da classe AdvancedInt64 para lidar com números primitivos.
 // 2. Heap Grooming Refinado: Maior diversidade e volume de objetos no spray, com
 //    liberação controlada de "fillers" para otimizar o layout do heap.
 // 3. Novas Tentativas de Vazamento Aprimoradas:
@@ -24,7 +24,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R74_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R75_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
