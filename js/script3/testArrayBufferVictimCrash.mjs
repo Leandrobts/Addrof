@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R73 - Fixes, Refined Grooming & New Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R74 - Fixes, Refined Grooming & New Leak Strategies)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. CORREÇÃO DE ERRO: `RangeError` na `AdvancedInt64.add` corrigido em `utils.mjs`.
@@ -24,7 +24,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R73_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R74_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
