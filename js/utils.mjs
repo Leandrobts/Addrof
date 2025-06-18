@@ -15,36 +15,19 @@ export class AdvancedInt64 {
             low = 0; high = 0; is_one_arg = false; 
         }
 
-        if (!is_one_arg) {
-            if (typeof (low) !== 'number' || typeof (high) !== 'number') {
-                if (low instanceof AdvancedInt64 && high === undefined) {
-                    buffer[0] = low.low();
-                    buffer[1] = low.high();
-                    this.buffer = buffer;
-                    return;
-                }
-                throw TypeError('low/high must be numbers or single AdvancedInt64 argument');
-            }
-        }
-        
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
         if (is_one_arg) {
             if (typeof (low) === 'number') {
-                // Ao construir com um único número, queremos que ele seja o 'low' e 'high' 0,
-                // a menos que seja um número grande demais para o low.
-                // A lógica Math.floor(low / (0xFFFFFFFF + 1)) já faz isso.
-                // O erro "low/high must be uint32 numbers" ao passar um número simples geralmente
-                // significa que o número é negativo ou excede o valor máximo de Number.isSafeInteger
-                // e está sendo mal interpretado como um valor uint32 no construtor.
-                // Vamos garantir que 'low' seja sempre tratado como um Uint32 válido.
-                buffer[0] = low >>> 0; // Garante que seja um Uint32
-                buffer[1] = Math.floor(low / (0xFFFFFFFF + 1)) >>> 0; // Garante que seja um Uint32
+                // Ao construir com um único número, queremos que ele seja o 'low' e 'high' 0
+                // Esta é a forma mais robusta de garantir que um número Javascript seja tratado como um Uint32 para 'low'.
+                buffer[0] = low >>> 0; 
+                buffer[1] = 0; // Para números simples que cabem em 32 bits, high é 0.
+                               // Se low for um BigInt ou número > MAX_SAFE_INTEGER, essa lógica pode precisar de revisão,
+                               // mas para offsets como 0x10, ela é apropriada.
             } else if (typeof (low) === 'string') {
                 let str = low;
-                let _PAIR_MATCHER;
-                if (str.startsWith('0x')) { str = str.slice(2); _PAIR_MATCHER = /../g; } 
-                else { _PAIR_MATCHER = /../g; }
+                if (str.startsWith('0x')) { str = str.slice(2); } 
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0');
@@ -62,7 +45,6 @@ export class AdvancedInt64 {
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
-            // Este bloco já tem a verificação check_range
             if (!check_range(low) || !check_range(high)) {
                 throw RangeError('low/high must be uint32 numbers');
             }
@@ -76,7 +58,7 @@ export class AdvancedInt64 {
     high() { return this.buffer[1]; }
 
     equals(other) {
-        if (!isAdvancedInt64Object(other)) { return false; } // Use isAdvancedInt64Object para consistência
+        if (!isAdvancedInt64Object(other)) { return false; }
         return this.low() === other.low() && this.high() === other.high();
     }
     
@@ -92,16 +74,18 @@ export class AdvancedInt64 {
     }
     
     toNumber() {
+        // Pode perder precisão se o número for > 2^53 - 1.
+        // Se a representação for de 64 bits completos, pode ser necessário BigInt.
+        // Mas para uso de offsets, `high` provavelmente será 0.
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
     add(val) {
         let otherInt64;
-        // Se val não é AdvancedInt64, tenta convertê-lo.
-        // Se for um número, crie AdvancedInt64(val, 0)
         if (!isAdvancedInt64Object(val)) {
             if (typeof val === 'number') {
-                // Para garantir que pequenos números sejam tratados como (value, 0)
+                // NOVO: Explicitamente cria AdvancedInt64 com number como low e 0 como high.
+                // Isso evita a ambiguidade da lógica 'is_one_arg' no construtor para números.
                 otherInt64 = new AdvancedInt64(val, 0); 
             } else {
                 throw TypeError('Argument for add must be a number or AdvancedInt64');
@@ -111,14 +95,22 @@ export class AdvancedInt64 {
         }
 
         let low = this.low() + otherInt64.low();
-        let high = this.high() + otherInt64.high() + Math.floor(low / (0xFFFFFFFF + 1));
-        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
+        let high = this.high() + otherInt64.high();
+        
+        // Trata o carry (transbordo) da adição do 'low'
+        if (low > 0xFFFFFFFF) {
+            high += Math.floor(low / (0xFFFFFFFF + 1)); // Adiciona o carry ao 'high'
+            low = low & 0xFFFFFFFF; // Mantém 'low' dentro do range Uint32
+        }
+
+        return new AdvancedInt64(low, high);
     }
 
     sub(val) {
         let otherInt64;
         if (!isAdvancedInt64Object(val)) {
             if (typeof val === 'number') {
+                // NOVO: Explicitamente cria AdvancedInt64 com number como low e 0 como high.
                 otherInt64 = new AdvancedInt64(val, 0);
             } else {
                 throw TypeError('Argument for sub must be a number or AdvancedInt64');
@@ -129,13 +121,17 @@ export class AdvancedInt64 {
         
         let newLow = this.low() - otherInt64.low();
         let newHigh = this.high() - otherInt64.high();
+        
+        // Trata o borrow (empréstimo) da subtração do 'low'
         if (newLow < 0) {
-            newLow += (0xFFFFFFFF + 1);
-            newHigh -= 1;
+            newLow += (0xFFFFFFFF + 1); // Adiciona 2^32 para tornar positivo
+            newHigh -= 1; // Empresta do 'high'
         }
-        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
+
+        return new AdvancedInt64(newLow, newHigh);
     }
 }
+
 
 export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
