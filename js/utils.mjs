@@ -8,13 +8,25 @@ export class AdvancedInt64 {
     constructor(low, high) {
         this._isAdvancedInt64 = true;
         let buffer = new Uint32Array(2);
-
+        
         let is_one_arg = false;
         if (arguments.length === 1) { is_one_arg = true; }
-        if (arguments.length === 0) {
-            low = 0; high = 0; is_one_arg = false;
+        if (arguments.length === 0) { 
+            low = 0; high = 0; is_one_arg = false; 
         }
 
+        if (!is_one_arg) {
+            if (typeof (low) !== 'number' || typeof (high) !== 'number') {
+                if (low instanceof AdvancedInt64 && high === undefined) {
+                    buffer[0] = low.low();
+                    buffer[1] = low.high();
+                    this.buffer = buffer;
+                    return;
+                }
+                throw TypeError('low/high must be numbers or single AdvancedInt64 argument');
+            }
+        }
+        
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
         if (is_one_arg) {
@@ -24,7 +36,9 @@ export class AdvancedInt64 {
                 buffer[1] = Math.floor(low / (0xFFFFFFFF + 1));
             } else if (typeof (low) === 'string') {
                 let str = low;
-                if (str.startsWith('0x')) { str = str.slice(2); }
+                let _PAIR_MATCHER;
+                if (str.startsWith('0x')) { str = str.slice(2); _PAIR_MATCHER = /../g; } 
+                else { _PAIR_MATCHER = /../g; }
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0');
@@ -36,35 +50,19 @@ export class AdvancedInt64 {
                 buffer[0] = parseInt(lowStr, 16);
 
             } else if (low instanceof AdvancedInt64) {
-                buffer[0] = low.low();
-                buffer[1] = low.high();
+                 buffer[0] = low.low();
+                 buffer[1] = low.high();
             } else {
-                // Este é o throw que você estava vendo no log
                 throw TypeError('single arg must be number, hex string or AdvancedInt64');
             }
         } else { // two args
-            // Este é o construtor de dois argumentos que o JIT está tendo problemas.
-            // A partir de agora, só deveria ser chamado por fromParts se tudo estiver correto.
-            // Se o erro ainda vier daqui, mesmo com fromParts, é um bug JIT muito profundo.
             if (!check_range(low) || !check_range(high)) {
-                throw new RangeError(`low/high must be uint32 numbers. Got low: 0x${(low >>> 0).toString(16)} (Type: ${typeof low}), high: 0x${(high >>> 0).toString(16)} (Type: ${typeof high}).`);
+                throw RangeError('low/high must be uint32 numbers');
             }
             buffer[0] = low;
             buffer[1] = high;
         }
         this.buffer = buffer;
-    }
-
-    static fromParts(low_val, high_val) {
-        const instance = Object.create(AdvancedInt64.prototype);
-        instance._isAdvancedInt64 = true;
-        instance.buffer = new Uint32Array(2);
-        // Não é necessário o check_range aqui, pois estamos trabalhando com bytes brutos
-        // ou valores que já deveriam ser validados (vindos de doubleToInt64, etc.).
-        // O `& 0xFFFFFFFF` já garante o comportamento Uint32.
-        instance.buffer[0] = low_val & 0xFFFFFFFF;
-        instance.buffer[1] = high_val & 0xFFFFFFFF;
-        return instance;
     }
 
     low() { return this.buffer[0]; }
@@ -74,8 +72,10 @@ export class AdvancedInt64 {
         if (!(other instanceof AdvancedInt64)) { return false; }
         return this.low() === other.low() && this.high() === other.high();
     }
-
-    static Zero = AdvancedInt64.fromParts(0, 0);
+    
+    static Zero = new AdvancedInt64(0,0);
+    // NOVO: Define NaNValue como uma propriedade estática
+    static NaNValue = new AdvancedInt64(0, 0x7ff80000); 
 
     toString(hex = false) {
         if (!hex) {
@@ -84,30 +84,22 @@ export class AdvancedInt64 {
         }
         return '0x' + this.high().toString(16).padStart(8, '0') + '_' + this.low().toString(16).padStart(8, '0');
     }
-
+    
     toNumber() {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
     add(val) {
-        // CORREÇÃO: Usar fromParts para converter 'val' se for um number.
-        if (typeof val === 'number') {
-            val = AdvancedInt64.fromParts(val & 0xFFFFFFFF, Math.floor(val / (0xFFFFFFFF + 1)));
-        } else if (!(val instanceof AdvancedInt64)) {
-            // Se 'val' não é AdvancedInt64 ou number, ainda tenta o construtor principal (ex: para string).
-            // Idealmente, todas as entradas seriam convertidas para AdvancedInt64 antes de chamar add/sub.
+        if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
         let low = this.low() + val.low();
         let high = this.high() + val.high() + Math.floor(low / (0xFFFFFFFF + 1));
-        return AdvancedInt64.fromParts(low, high); // Usar fromParts para o resultado
+        return new AdvancedInt64(low & 0xFFFFFFFF, high & 0xFFFFFFFF);
     }
 
     sub(val) {
-        // CORREÇÃO: Usar fromParts para converter 'val' se for um number.
-        if (typeof val === 'number') {
-            val = AdvancedInt64.fromParts(val & 0xFFFFFFFF, Math.floor(val / (0xFFFFFFFF + 1)));
-        } else if (!(val instanceof AdvancedInt64)) {
+        if (!(val instanceof AdvancedInt64)) { 
             val = new AdvancedInt64(val);
         }
         let newLow = this.low() - val.low();
@@ -116,10 +108,9 @@ export class AdvancedInt64 {
             newLow += (0xFFFFFFFF + 1);
             newHigh -= 1;
         }
-        return AdvancedInt64.fromParts(newLow, newHigh); // Usar fromParts para o resultado
+        return new AdvancedInt64(newLow & 0xFFFFFFFF, newHigh & 0xFFFFFFFF);
     }
 }
-
 
 export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
@@ -154,37 +145,10 @@ export function toHex(val, bits = 32) {
     } else {
         hexStr = val.toString(16);
     }
-
+    
     const numChars = Math.ceil(bits / 4);
     return '0x' + hexStr.padStart(numChars, '0');
 }
-
-/**
- * Converte uma string hexadecimal (ex: "0x7FFF00000000") em um objeto com as partes low e high (Uint32).
- * @param {string} hexString A string hexadecimal de 64 bits.
- * @returns {{low: number, high: number}} Um objeto contendo as partes low e high.
- * @throws {Error} Se a string de entrada for inválida.
- */
-export function hexStringToParts(hexString) {
-    if (typeof hexString !== 'string' || !hexString.startsWith('0x')) {
-        throw new Error('Input to hexStringToParts must be a hex string starting with "0x"');
-    }
-    let str = hexString.slice(2);
-    // Pad to 16 characters for a full 64-bit representation
-    str = str.padStart(16, '0');
-
-    const highStr = str.substring(0, 8);
-    const lowStr = str.substring(8, 16);
-
-    const high = parseInt(highStr, 16);
-    const low = parseInt(lowStr, 16);
-
-    if (isNaN(high) || isNaN(low)) {
-        throw new Error(`Failed to parse hex string "${hexString}" into low/high parts.`);
-    }
-    return { low, high };
-}
-
 
 export function stringToAdvancedInt64Array(str, nullTerminate = true) {
     if (typeof str !== 'string') {
@@ -205,10 +169,10 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
 
         low = (char2_code << 16) | char1_code;
         high = (char4_code << 16) | char3_code;
-
-        result.push(AdvancedInt64.fromParts(low, high));
-
-        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break;
+        
+        result.push(new AdvancedInt64(low, high));
+        
+        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break; 
         if (char3_code === 0 && i + 2 < str.length && char4_code === 0 && nullTerminate) break;
         if (char2_code === 0 && i + 1 < str.length && char3_code === 0 && char4_code === 0 && nullTerminate) break;
 
