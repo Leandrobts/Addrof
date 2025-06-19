@@ -8,25 +8,25 @@ export class AdvancedInt64 {
     constructor(low, high) {
         this._isAdvancedInt64 = true;
         let buffer = new Uint32Array(2);
-        
+
         let is_one_arg = false;
         if (arguments.length === 1) { is_one_arg = true; }
-        if (arguments.length === 0) { 
-            low = 0; high = 0; is_one_arg = false; 
+        if (arguments.length === 0) {
+            low = 0; high = 0; is_one_arg = false;
         }
 
         const check_range = (x) => Number.isInteger(x) && x >= 0 && x <= 0xFFFFFFFF;
 
         if (is_one_arg) {
             if (typeof (low) === 'number') {
-                if (!Number.isFinite(low)) { 
+                if (!Number.isFinite(low)) {
                     throw new TypeError("Single number argument for AdvancedInt64 must be a finite number.");
                 }
-                buffer[0] = low >>> 0; 
+                buffer[0] = low >>> 0;
                 buffer[1] = (low / (0xFFFFFFFF + 1)) >>> 0;
             } else if (typeof (low) === 'string') {
                 let str = low;
-                if (str.startsWith('0x')) { str = str.slice(2); } 
+                if (str.startsWith('0x')) { str = str.slice(2); }
 
                 if (str.length > 16) { throw RangeError('AdvancedInt64 string input too long'); }
                 str = str.padStart(16, '0');
@@ -60,7 +60,7 @@ export class AdvancedInt64 {
         if (!isAdvancedInt64Object(other)) { return false; }
         return this.low() === other.low() && this.high() === other.high();
     }
-    
+
     // NOVO: Método lessThanOrEqual para comparações
     lessThanOrEqual(other) {
         if (!isAdvancedInt64Object(other)) {
@@ -102,9 +102,9 @@ export class AdvancedInt64 {
         }
         return false;
     }
-    
+
     static Zero = new AdvancedInt64(0,0);
-    static NaNValue = new AdvancedInt64(0, 0x7ff80000); 
+    static NaNValue = new AdvancedInt64(0, 0x7ff80000);
 
     toString(hex = false) {
         if (!hex) {
@@ -113,7 +113,7 @@ export class AdvancedInt64 {
         }
         return '0x' + this.high().toString(16).padStart(8, '0') + '_' + this.low().toString(16).padStart(8, '0');
     }
-    
+
     toNumber() {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
@@ -122,7 +122,7 @@ export class AdvancedInt64 {
         let otherInt64;
         if (!isAdvancedInt64Object(val)) {
             if (typeof val === 'number' && Number.isFinite(val)) {
-                otherInt64 = new AdvancedInt64(val); 
+                otherInt64 = new AdvancedInt64(val);
             } else {
                 throw TypeError(`Argument for add must be a finite number or AdvancedInt64. Got: ${typeof val} ${val}`);
             }
@@ -132,7 +132,7 @@ export class AdvancedInt64 {
 
         let low = this.low() + otherInt64.low();
         let high = this.high() + otherInt64.high();
-        
+
         if (low > 0xFFFFFFFF) {
             high += Math.floor(low / (0xFFFFFFFF + 1));
             low = low & 0xFFFFFFFF;
@@ -153,10 +153,10 @@ export class AdvancedInt64 {
         } else {
             otherInt64 = val;
         }
-        
+
         let newLow = this.low() - otherInt64.low();
         let newHigh = this.high() - otherInt64.high();
-        
+
         if (newLow < 0) {
             newLow += (0xFFFFFFFF + 1);
             newHigh -= 1;
@@ -172,8 +172,25 @@ export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
 }
 
-export async function PAUSE(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+// Export PAUSE and log as a placeholder.
+// In the refactored system, the `log` function will be provided by the orchestrator.
+// The core_exploit.mjs will rely on this `log` function.
+export const PAUSE = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Placeholder for log function. This will be replaced by the actual log function
+// from run_isolated_test.mjs, but it allows core_exploit to import it without error.
+let _logFunction = console.log; // Default to console.log
+
+export function setLogFunction(fn) {
+    _logFunction = fn;
+}
+
+export function log(message, type = 'info', funcName = '') {
+    if (_logFunction) {
+        _logFunction(message, type, funcName);
+    } else {
+        console.log(`[LOG_UNSET] ${message}`);
+    }
 }
 
 export function toHex(val, bits = 32) {
@@ -201,7 +218,7 @@ export function toHex(val, bits = 32) {
     } else {
         hexStr = val.toString(16);
     }
-    
+
     const numChars = Math.ceil(bits / 4);
     return '0x' + hexStr.padStart(numChars, '0');
 }
@@ -225,10 +242,10 @@ export function stringToAdvancedInt64Array(str, nullTerminate = true) {
 
         low = (char2_code << 16) | char1_code;
         high = (char4_code << 16) | char3_code;
-        
+
         result.push(new AdvancedInt64(low, high));
-        
-        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break; 
+
+        if (char4_code === 0 && i + 3 < str.length && nullTerminate) break;
         if (char3_code === 0 && i + 2 < str.length && char4_code === 0 && nullTerminate) break;
         if (char2_code === 0 && i + 1 < str.length && char3_code === 0 && char4_code === 0 && nullTerminate) break;
 
