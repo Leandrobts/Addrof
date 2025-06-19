@@ -1,11 +1,13 @@
 // js/run_isolated_test.mjs
 // Refactored to be the main orchestrator, absorbing functionalities from other modules.
+// UPDATED with new strategy for OOB leak robustness.
 
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './script3/testArrayBufferVictimCrash.mjs';
-import { AdvancedInt64 } from './utils.mjs'; // Keep AdvancedInt64 for JIT test
+import { AdvancedInt64, setLogFunction } from './utils.mjs'; // Keep AdvancedInt64 for JIT test and import setLogFunction
+import { JSC_OFFSETS } from './config.mjs'; // Import JSC_OFFSETS for detailed logging in core_exploit
 
 // --- Local DOM Elements Management ---
 const elementsCache = {};
@@ -24,6 +26,7 @@ function getElementById(id) {
 // --- Local Logging Functionality (formerly from logger.mjs and s3_utils.mjs) ---
 const outputDivId = 'output-advanced';
 
+// Local log function that will be passed to modules
 export const log = (message, type = 'info', funcName = '') => {
     const outputDiv = getElementById(outputDivId);
     if (!outputDiv) {
@@ -52,6 +55,7 @@ export const log = (message, type = 'info', funcName = '') => {
 // --- Local Pause Functionality (formerly from utils.mjs and s3_utils.mjs) ---
 const SHORT_PAUSE = 50;
 const MEDIUM_PAUSE = 500;
+const LONG_PAUSE = 1000; // New: Longer pause option
 
 const PAUSE = async (ms = SHORT_PAUSE) => {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -86,7 +90,9 @@ async function testJITBehavior() {
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43";
     log(`==== INICIANDO Estratégia de Reprodução do Heisenbug (${FNAME_RUNNER}) ====`, 'test', FNAME_RUNNER);
-    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE); // Pass log and PAUSE to the exploit module
+
+    // Pass the local log and PAUSE functions to the exploit module
+    const result = await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE, JSC_OFFSETS);
 
     const module_name_for_title = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
 
@@ -137,6 +143,9 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
 function initializeAndRunTest() {
     const runBtn = getElementById('runIsolatedTestBtn');
     const outputDiv = getElementById('output-advanced');
+
+    // Set the log function in utils.mjs so core_exploit.mjs can use it
+    setLogFunction(log);
 
     if (!outputDiv) {
         console.error("DIV 'output-advanced' not found. Log will not be displayed on the page.");
