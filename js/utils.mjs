@@ -61,7 +61,6 @@ export class AdvancedInt64 {
         return this.low() === other.low() && this.high() === other.high();
     }
 
-    // NOVO: Método lessThanOrEqual para comparações
     lessThanOrEqual(other) {
         if (!isAdvancedInt64Object(other)) {
             throw new TypeError("Comparison target must be an AdvancedInt64 object.");
@@ -75,7 +74,6 @@ export class AdvancedInt64 {
         return false;
     }
 
-    // NOVO: Método greaterThanOrEqual para comparações
     greaterThanOrEqual(other) {
         if (!isAdvancedInt64Object(other)) {
             throw new TypeError("Comparison target must be an AdvancedInt64 object.");
@@ -89,7 +87,6 @@ export class AdvancedInt64 {
         return false;
     }
 
-    // NOVO: Método lessThan para comparações
     lessThan(other) {
         if (!isAdvancedInt64Object(other)) {
             throw new TypeError("Comparison target must be an AdvancedInt64 object.");
@@ -138,7 +135,6 @@ export class AdvancedInt64 {
             low = low & 0xFFFFFFFF;
         }
 
-        // CORRIGIDO: Garante que as partes alta e baixa sejam uint32 válidos
         return new AdvancedInt64(low >>> 0, high >>> 0);
     }
 
@@ -162,7 +158,6 @@ export class AdvancedInt64 {
             newHigh -= 1;
         }
 
-        // CORRIGIDO: Garante que as partes alta e baixa sejam uint32 válidos, tratando 'high' negativo.
         return new AdvancedInt64(newLow >>> 0, newHigh >>> 0);
     }
 }
@@ -172,26 +167,25 @@ export function isAdvancedInt64Object(obj) {
     return obj && obj._isAdvancedInt64 === true;
 }
 
-// Export PAUSE and log as a placeholder.
-// In the refactored system, the `log` function will be provided by the orchestrator.
-// The core_exploit.mjs will rely on this `log` function.
-export const PAUSE = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+export const PAUSE = async (ms) => {
+    return new Promise(resolve => setTimeout(resolve, ms));
+};
 
-// Placeholder for log function. This will be replaced by the actual log function
-// from run_isolated_test.mjs, but it allows core_exploit to import it without error.
-let _logFunction = console.log; // Default to console.log
+// Global reference for the log function, to be set by the main orchestrator
+let _globalLogFunction = console.log; // Default to console.log
 
 export function setLogFunction(fn) {
-    _logFunction = fn;
+    _globalLogFunction = fn;
 }
 
 export function log(message, type = 'info', funcName = '') {
-    if (_logFunction) {
-        _logFunction(message, type, funcName);
+    if (_globalLogFunction) {
+        _globalLogFunction(message, type, funcName);
     } else {
         console.log(`[LOG_UNSET] ${message}`);
     }
 }
+
 
 export function toHex(val, bits = 32) {
     if (isAdvancedInt64Object(val)) {
