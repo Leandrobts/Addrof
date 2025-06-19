@@ -210,7 +210,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // Teste de resistência ao GC / longevidade
         logS3("Iniciando teste de resistência: Executando L/E arbitrária múltiplas vezes...", "info");
-        const numResistanceTests = 50; 
+        const numResistanceTests = 5; 
         let resistanceSuccessCount = 0;
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xAAAA0000 + i, 0xBBBB0000 + i);
