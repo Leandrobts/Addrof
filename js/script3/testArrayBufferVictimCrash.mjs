@@ -313,7 +313,7 @@ async function arb_write_universal(address, value, byteLength) {
 
 
 // Exportar a função principal de execução do exploit
-export async function runHeisenbugReproStrategy_TypedArrayVictim_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
 
