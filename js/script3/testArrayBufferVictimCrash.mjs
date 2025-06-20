@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v129 - R60 Final - AGORA COM ARB R/W UNIVERSAL VIA FAKE ARRAYBUFFER)
+// js/script3/testArrayBufferVictimCrash.mjs (v130 - Refinando Dump e Hardcoding de Structure*)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -21,7 +21,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v129_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE_TEST_ADJ";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v130_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE_REFINED_DUMP";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
