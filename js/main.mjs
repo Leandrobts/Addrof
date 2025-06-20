@@ -4,7 +4,7 @@ import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
 } from './script3/testArrayBufferVictimCrash.mjs';
-import { AdvancedInt64, setLogFunction } from './utils.mjs'; // Keep AdvancedInt64 for JIT test and import setLogFunction
+import { AdvancedInt64, setLogFunction, PAUSE, SHORT_PAUSE, MEDIUM_PAUSE, LONG_PAUSE } from './utils.mjs'; // Keep AdvancedInt64 for JIT test and import setLogFunction, PAUSE, SHORT_PAUSE, MEDIUM_PAUSE, LONG_PAUSE
 import { JSC_OFFSETS } from './config.mjs'; // Import JSC_OFFSETS for detailed logging in core_exploit
 
 // --- Local DOM Elements Management ---
@@ -50,14 +50,14 @@ export const log = (message, type = 'info', funcName = '') => {
     }
 };
 
-// --- Local Pause Functionality (formerly from utils.mjs and s3_utils.mjs) ---
-const SHORT_PAUSE = 50;
-const MEDIUM_PAUSE = 500;
-const LONG_PAUSE = 1000; // New: Longer pause option
-
-const PAUSE = async (ms = SHORT_PAUSE) => {
-    return new Promise(resolve => setTimeout(resolve, ms));
-};
+// As constantes PAUSE, SHORT_PAUSE, MEDIUM_PAUSE, LONG_PAUSE agora são importadas de utils.mjs
+// Removidas as definições locais:
+// const SHORT_PAUSE = 50;
+// const MEDIUM_PAUSE = 500;
+// const LONG_PAUSE = 1000;
+// const PAUSE = async (ms = SHORT_PAUSE) => {
+//     return new Promise(resolve => setTimeout(resolve, ms));
+// };
 
 // --- JIT Behavior Test (moved from runAllAdvancedTestsS3.mjs) ---
 async function testJITBehavior() {
