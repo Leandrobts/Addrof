@@ -6,17 +6,17 @@
 export const JSC_OFFSETS = {
     JSCell: {
         STRUCTURE_POINTER_OFFSET: 0x8,    // VALIDADO
-        STRUCTURE_ID_FLATTENED_OFFSET: 0x0, 
-        CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: 0x4, 
-        CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET: 0x5, 
-        CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET: 0x6, 
+        STRUCTURE_ID_FLATTENED_OFFSET: 0x0,
+        CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: 0x4,
+        CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET: 0x5,
+        CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET: 0x6,
         CELL_STATE_FLATTENED_OFFSET: 0x7,
     },
     CallFrame: { // Offsets baseados na análise de CallFrame.txt
-        CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee() 
-        ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis() 
-        THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue() 
-        ARGUMENTS_POINTER_OFFSET: 0x28 // De JSC::ProtoCallFrame::argument(ulong) 
+        CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee()
+        ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis()
+        THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue()
+        ARGUMENTS_POINTER_OFFSET: 0x28 // De JSC::ProtoCallFrame::argument(ulong)
     },
     Structure: { // Offsets DENTRO da estrutura Structure
         CELL_SPECIFIC_FLAGS_OFFSET: 0x8,
@@ -39,7 +39,7 @@ export const JSC_OFFSETS = {
         EXECUTABLE_OFFSET: 0x18, // VALIDADO
         SCOPE_OFFSET: 0x20,
     },
-    JSCallee: { 
+    JSCallee: {
         GLOBAL_OBJECT_OFFSET: 0x10, // VALIDADO
     },
     ClassInfo: { // NOVO: Adicionado para a estratégia de vazamento de ClassInfo
@@ -78,6 +78,12 @@ export const JSC_OFFSETS = {
     VM: {
         TOP_CALL_FRAME_OFFSET: 0x9E98, // VALIDADO
     },
+    // NOVO: Adicione o offset do vtable da JSC::Structure para DataView aqui
+    DataView: {
+        // Offset do vtable da JSC::Structure para JSDataView.
+        // Calculado como: Endereço do vtable no IDA (0x3AD62A0) - Endereço base do módulo no IDA (0x0).
+        STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, //
+    }
 };
 
 export const WEBKIT_LIBRARY_INFO = {
