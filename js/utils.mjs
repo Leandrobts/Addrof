@@ -186,10 +186,6 @@ export function log(message, type = 'info', funcName = '') {
     }
 }
 
-// Exportando constantes de pausa para serem usadas em outros módulos
-export const SHORT_PAUSE = 50;
-export const MEDIUM_PAUSE = 500;
-export const LONG_PAUSE = 1000;
 
 export function toHex(val, bits = 32) {
     if (isAdvancedInt64Object(val)) {
