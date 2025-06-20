@@ -1,9 +1,9 @@
 // js/main.mjs
 
 import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R43, // Mantém este import, se ainda for usado internamente
+    // executeTypedArrayVictimAddrofAndWebKitLeak_R43, // REMOVIDO: Não é mais importado diretamente aqui
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT,
-    runHeisenbugReproStrategy_TypedArrayVictim_R43 // AGORA IMPORTANDO runHeisenbugReproStrategy_TypedArrayVictim_R43
+    runHeisenbugReproStrategy_TypedArrayVictim_R43 // Mantido: Importando a função principal de execução do exploit
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex } from './utils.mjs';
 import { JSC_OFFSETS } from './config.mjs';
@@ -113,8 +113,8 @@ function initializeAndRunTest() {
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
 
                 // Executar a estratégia principal que agora contém os dumps e o vazamento de ASLR
-                // Agora a função é importada diretamente, então pode ser chamada.
-                await runHeisenbugReproStrategy_TypedArrayVictim_R43();
+                // A função runHeisenbugReproStrategy_TypedArrayVictim_R43 é importada diretamente
+                await runHeisenbugReproStrategy_TypedArrayVictim_R43(log, PAUSE, JSC_OFFSETS);
             } catch (e) {
                 console.error("Critical error during isolated test execution:", e);
                 log(`[CRITICAL TEST ERROR] ${String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`, 'critical');
