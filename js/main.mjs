@@ -86,7 +86,7 @@ async function testJITBehavior() {
 }
 
 // --- NOVO: Teste Isolado da Primitiva addrof_core e fakeobj_core com objeto simples e DUMP DE MEMÓRIA ---
-// AGORA PASSANDO isAdvancedInt64Object COMO ARGUMENTO
+// isAdvancedInt64ObjectFn é passado como argumento agora
 async function testIsolatedAddrofFakeobjCoreAndDump(logFn, pauseFn, JSC_OFFSETS_PARAM, isAdvancedInt64ObjectFn) {
     const FNAME = 'testIsolatedAddrofFakeobjCoreAndDump';
     logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core / fakeobj_core, leitura de Structure*, e DUMP DE MEMÓRIA do objeto ---`, 'test', FNAME);
