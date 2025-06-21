@@ -82,7 +82,7 @@ export const JSC_OFFSETS = {
     DataView: {
         STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, // Já confirmado como o vtable do DataView
         // NOVO: Valor a testar para M_MODE_VALUE
-        M_MODE_VALUE: 0x00000009, // Teste este primeiro, é um candidato simples para "é DataView"
+        M_MODE_VALUE: 0x00000010, // Teste este primeiro, é um candidato simples para "é DataView"
         // Outros candidatos da sua lista se 0x1 não funcionar: 0x00000003, 0x00000004, etc.
         // Ou valores típicos mais altos para DataView em outras versões: 0x0000000E, 0x0000000F
     },
