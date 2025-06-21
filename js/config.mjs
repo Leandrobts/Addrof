@@ -80,10 +80,12 @@ export const JSC_OFFSETS = {
     },
     // NOVO: Adicione o offset do vtable da JSC::Structure para DataView aqui
     DataView: {
-        // Offset do vtable da JSC::Structure para JSDataView.
-        // Calculado como: Endereço do vtable no IDA (0x3AD62A0) - Endereço base do módulo no IDA (0x0).
-        STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, //
-    }
+        STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, // Já confirmado como o vtable do DataView
+        // NOVO: Valor a testar para M_MODE_VALUE
+        M_MODE_VALUE: 0x00000001, // Teste este primeiro, é um candidato simples para "é DataView"
+        // Outros candidatos da sua lista se 0x1 não funcionar: 0x00000003, 0x00000004, etc.
+        // Ou valores típicos mais altos para DataView em outras versões: 0x0000000E, 0x0000000F
+    },
 };
 
 export const WEBKIT_LIBRARY_INFO = {
