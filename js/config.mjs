@@ -65,7 +65,7 @@ export const JSC_OFFSETS = {
         CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents (redundante se já tem ASSOCIATED_ARRAYBUFFER_OFFSET?) ou diferente? Verifique.
         M_VECTOR_OFFSET: 0x10,          // Se CONTENTS_IMPL_POINTER_OFFSET acima for o correto, M_VECTOR_OFFSET pode ser relativo a ArrayBufferContents, não à View.
         M_LENGTH_OFFSET: 0x18,          // Comprimento da view.
-        M_MODE_OFFSET: 0x1C
+        M_MODE_OFFSET: 0x1C             // Offset para m_mode/TypeFlags dentro de ArrayBufferView
     },
     ArrayBufferContents: {
         SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START: 0x8,   // VALIDADO
@@ -82,9 +82,27 @@ export const JSC_OFFSETS = {
     DataView: {
         STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, // Já confirmado como o vtable do DataView
         // NOVO: Valor a testar para M_MODE_VALUE
-        M_MODE_VALUE: 0x0000000B, // Teste este primeiro, é um candidato simples para "é DataView"
-        // Outros candidatos da sua lista se 0x1 não funcionar: 0x00000003, 0x00000004, etc.
-        // Ou valores típicos mais altos para DataView em outras versões: 0x0000000E, 0x0000000F
+        // O valor 0x0000000B é um candidato inicial. Adicione outros se 0x0000000B não funcionar.
+        // Valores comuns em outras versões: 0x00000001, 0x00000003, 0x00000004, 0x0000000E, 0x0000000F
+        M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
+        M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
+            0x0000000B, // Já testado e provável (PS4 9.00)
+            0x00000001, // Um valor comum e simples
+            0x00000002,
+            0x00000003,
+            0x00000004,
+            0x00000005,
+            0x00000006,
+            0x00000007,
+            0x00000008,
+            0x00000009, 
+            0x0000000A,
+            0x0000000C,
+            0x0000000D,
+            0x0000000E,
+            0x0000000F,
+            // Adicione mais candidatos aqui se a depuração com depurador não for uma opção
+        ]
     },
 };
 
