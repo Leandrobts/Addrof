@@ -9,7 +9,7 @@
             background: #222;
             border: 1px solid #444;
             padding: 10px;
-            height: 75vh; 
+            height: 75vh;
             overflow-y: auto;
             white-space: pre-wrap;
             margin-top: 10px;
@@ -22,9 +22,19 @@
 </head>
 <body>
     <h1>Teste Isolado</h1>
+    <p>User Agent: <span id="userAgentDisplay">Detecting...</span></p>
     <button id="runIsolatedTestBtn">Start Isolated Test</button>
     <div id="output-advanced"></div>
 
     <script type="module" src="js/main.mjs"></script>
+    <script>
+        // Script para exibir o User Agent
+        document.addEventListener('DOMContentLoaded', () => {
+            const userAgentSpan = document.getElementById('userAgentDisplay');
+            if (userAgentSpan) {
+                userAgentSpan.textContent = navigator.userAgent;
+            }
+        });
+    </script>
 </body>
 </html>
