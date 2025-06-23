@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v150 - Refinamento do Spray UAF)
+// js/script3/testArrayBufferVictimCrash.mjs (v151 - Refinamento do Spray UAF e Tamanho da Vítima)
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -25,7 +25,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v150_SPRAY_REFINED";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v151_UAF_REFINEMENT";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -597,7 +597,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
 
-    logFn(`--- ${FNAME_CURRENT_TEST_BASE} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
+    logFn(`--- ${FNAME_CURRENT_TEST} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
     logFn(`Mensagem final: ${final_result.message}`, final_result.success ? 'good' : 'critical');
     if (final_result.details) {
         logFn(`Detalhes adicionais do teste: ${JSON.stringify(final_result.details)}`, "info");
