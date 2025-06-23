@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v161 - Estratégia: Vazamento ASLR Direto, OOB Persistente)
+// js/script3/testArrayBufferVictimCrash.mjs (v162 - Estratégia: Vazamento ASLR Direto, OOB Persistente)
 // =======================================================================================
 // ESTA VERSÃO FOCA EM:
 // 1. Manter o ambiente OOB persistente entre o selfTest e a exploração principal.
@@ -26,7 +26,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v161_PERSISTENT_OOB";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v162_PERSISTENT_OOB";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
