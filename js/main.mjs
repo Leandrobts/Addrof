@@ -2,7 +2,7 @@
 
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43, // Esta é a função que você está importando
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT,
+    FNAME_MODULE,
     testIsolatedAddrofFakeobjCoreAndDump_from_script3
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs';
