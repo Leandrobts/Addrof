@@ -328,7 +328,7 @@ async function deduceObjectPointerTag(logFn) {
         // Para o spray, vamos continuar usando 0x402a0000 por enquanto, pois é a tag mais comum para JSObject.
         // A falha provavelmente está na reocupação, não na tag em si.
         logFn(`[${FNAME}] Retornando a tag padrão 0x402a0000. O problema provavelmente não é a tag, mas a reocupação do heap.`, "warn", FNAME);
-        return 0x402a0000;
+        return inferred_tag_high; // Use a tag que foi realmente inferida
     }
 }
 
