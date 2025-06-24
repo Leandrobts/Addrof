@@ -133,8 +133,8 @@ function initializeAndRunTest() {
                 console.log("Isolated test concluded.");
                 log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test');
                 runBtn.disabled = false;
-                if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43L Done`;
+                if (document.title.includes(FNAME_MODULE) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
+                    document.title = `${FNAME_MODULE}_R43L Done`;
                 }
             }
         });
