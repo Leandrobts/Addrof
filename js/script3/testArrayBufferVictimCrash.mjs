@@ -23,7 +23,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "v01 - Refinando Dump e Vazamento Dinâmico de Structure";
+export const FNAME_MODULE = "v01 - Refinando Dump e Vazamento Dinâmico de Structure";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
@@ -339,8 +339,8 @@ export async function testIsolatedAddrofFakeobjCoreAndDump_from_script3(logFn, p
 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT;
-    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Implementação Final com Verificação e Robustez Máxima (Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
+    logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}:(Vazamento REAL e LIMPO de ASLR - AGORA VIA ArrayBuffer m_vector) ---`, "test");
 
     let final_result = { success: false, message: "A verificação funcional de L/E falhou.", details: {} };
     const startTime = performance.now();
