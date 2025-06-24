@@ -2,7 +2,7 @@
 
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
+    FNAME_MODULE
     // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais exportado
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs';
@@ -136,8 +136,8 @@ function initializeAndRunTest() {
                 console.log("Isolated test concluded.");
                 log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test');
                 runBtn.disabled = false;
-                if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_Done`;
+                if (document.title.includes(FNAME_MODULE) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
+                    document.title = `${FNAME_MODULE}_Done`;
                 }
             }
         });
