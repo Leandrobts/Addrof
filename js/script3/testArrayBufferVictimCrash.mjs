@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v131 - Refinando Dump e Vazamento Dinâmico de Structure*)
+// js/script3/testArrayBufferVictimCrash.mjs (v01 - Refinando Dump e Vazamento Dinâmico de Structure)
 // =======================================================================================
 // ESTRATÉGIA ATUALIZADA PARA ROBUSTEZ MÁXIMA E VAZAMENTO REAL E LIMPO DE ASLR:
 // - AGORA UTILIZA PRIMITIVAS addrof/fakeobj para construir ARB R/W UNIVERSAL.
@@ -23,7 +23,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Uncaged_StableRW_v131_R60_ARB_RW_UNIVERSAL_DYNAMIC_STRUCTURE";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "v01 - Refinando Dump e Vazamento Dinâmico de Structure";
 
 const LOCAL_SHORT_PAUSE = 50;
 const LOCAL_MEDIUM_PAUSE = 500;
