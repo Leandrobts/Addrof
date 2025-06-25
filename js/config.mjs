@@ -132,7 +132,7 @@ export const WEBKIT_LIBRARY_INFO = {
 };
 
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 0x20000, // Reduzido para 32KB para maior estabilidade
+    ALLOCATION_SIZE: 0x20000, // Reduzido para 64KB para maior estabilidade 0x8000 32KB
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
