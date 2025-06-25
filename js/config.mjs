@@ -46,15 +46,14 @@ export const JSC_OFFSETS = {
         M_CACHED_TYPE_INFO_OFFSET: 0x8, // Offset comum para m_cachedTypeInfo dentro de ClassInfo. VERIFIQUE!
     },
     ArrayBuffer: {
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO
-        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // VALIDADO
-        DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // VALIDADO
-        SHARING_MODE_OFFSET: 0x28,
-        IS_RESIZABLE_FLAGS_OFFSET: 0x30,
-
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO - Ponteiro para os dados brutos do buffer
+        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // VALIDADO - Tamanho do buffer
+        DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // VALIDADO - Cópia do ponteiro de dados (redundante?)
+        SHARING_MODE_OFFSET: 0x28, // Offset do sharing mode (ArrayBuffer)
+        IS_RESIZABLE_FLAGS_OFFSET: 0x30, // Offset de flags de redimensionamento (ArrayBuffer)
+        
         // Novos offsets identificados na análise de sub_1C01140 (possivelmente no ArrayBuffer real)
         // Estes são candidatos com base na análise de pseudocódigo.
-        // Nomes temporários para referência e teste:
         ARRAYBUFFER_REAL_PTR_POSSIBLE_M_VECTOR: 0x28, // a1[5] - base de dados no loop de limpeza/validação
         ARRAYBUFFER_FIELD_0X30: 0x30, // *((_DWORD *)a1 + 12) - usado em sub_1C01140
         ARRAYBUFFER_FIELD_0X34: 0x34, // *((_DWORD *)a1 + 13) - usado como contador/tamanho no loop
@@ -68,12 +67,18 @@ export const JSC_OFFSETS = {
         }
     },
     ArrayBufferView: { // Para TypedArrays como Uint8Array, Uint32Array, DataView
+        // Estes são offsets DENTRO da estrutura ArrayBufferView
         STRUCTURE_ID_OFFSET: 0x00,      // Relativo ao início do JSCell do ArrayBufferView
         FLAGS_OFFSET: 0x04,             // Relativo ao início do JSCell do ArrayBufferView
-        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, // Ponteiro para o JSArrayBuffer.
-        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // Ponteiro para ArrayBufferContents (redundante se já tem ASSOCIATED_ARRAYBUFFER_OFFSET?) ou diferente? Verifique.
-        M_VECTOR_OFFSET: 0x10,          // Se CONTENTS_IMPL_POINTER_OFFSET acima for o correto, M_VECTOR_OFFSET pode ser relativo a ArrayBufferContents, não à View.
-        M_LENGTH_OFFSET: 0x18,          // Comprimento da view.
+        ASSOCIATED_ARRAYBUFFER_OFFSET: 0x08, // Ponteiro para o JSArrayBuffer real que esta view usa.
+        
+        // NOTA IMPORTANTE: M_VECTOR_OFFSET, M_LENGTH_OFFSET e M_MODE_OFFSET para DataView
+        // Podem ser diferentes de ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET e SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START.
+        // Se a corrupção estiver no backing ArrayBuffer, então se refere aos offsets do ArrayBuffer.
+        // Se o DataView tem suas próprias cópias, esses offsets abaixo são usados.
+        // A hipótese é que DataView acessa esses a partir de sua própria estrutura.
+        M_VECTOR_OFFSET: 0x10,          // Ponteiro interno de dados da view (comum para TypedArrays)
+        M_LENGTH_OFFSET: 0x18,          // Comprimento da view (Number of elements * element_size)
         M_MODE_OFFSET: 0x1C             // Offset para m_mode/TypeFlags dentro de ArrayBufferView
     },
     ArrayBufferContents: {
@@ -99,9 +104,10 @@ export const JSC_OFFSETS = {
         // Valores comuns em outras versões: 0x00000001, 0x00000003, 0x00000004, 0x0000000E, 0x0000000F
         M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
-            0x0000000B, // Já testado e provável
-            0x00000001, // Novo candidato (0x1)
-            0x0000000E, // Novo candidato (0xE)
+            0x0000000B, // Já testado e provável (Bitfield: IsJSCapableBuffer | IsTypedView | IsDetached)
+            0x00000001, // Outro candidato comum (IsJSCapableBuffer)
+            0x0000000E, // Outro candidato comum (IsJSCapableBuffer | IsTypedView | IsDetached | CanBeShared)
+            0x0000000F, // Outro candidato (com IsResizable)
        ]
     },
 };
