@@ -103,6 +103,7 @@ export const JSC_OFFSETS = {
             0x0000000F,
             // Adicione mais candidatos aqui se a depuração com depurador não for uma opção
         ]
+        M_MODE_VALUE: 0x0000000B
     },
 };
 
@@ -147,7 +148,7 @@ export const WEBKIT_LIBRARY_INFO = {
 };
 
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 0x8000, // Reduzido para 32KB para maior estabilidade
+    ALLOCATION_SIZE: 0x20000, // Reduzido para 32KB para maior estabilidade
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
