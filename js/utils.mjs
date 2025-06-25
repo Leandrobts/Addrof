@@ -115,11 +115,6 @@ export class AdvancedInt64 {
         return this.high() * (0xFFFFFFFF + 1) + this.low();
     }
 
-    // ADICIONADO: Método para converter AdvancedInt64 para BigInt
-    toBigInt() {
-        return (BigInt(this.high()) << 32n) + BigInt(this.low());
-    }
-
     add(val) {
         let otherInt64;
         if (!isAdvancedInt64Object(val)) {
