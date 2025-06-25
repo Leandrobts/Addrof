@@ -136,4 +136,5 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeAndRunTest);
 } else {
     initializeAndRunTest();
-}
+    
+} 
