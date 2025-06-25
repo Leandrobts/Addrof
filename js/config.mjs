@@ -86,24 +86,8 @@ export const JSC_OFFSETS = {
         // Valores comuns em outras versões: 0x00000001, 0x00000003, 0x00000004, 0x0000000E, 0x0000000F
         M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
-            0x0000000B, // Já testado e provável (PS4 9.00)
-            0x00000001, // Um valor comum e simples
-            0x00000002,
-            0x00000003,
-            0x00000004,
-            0x00000005,
-            0x00000006,
-            0x00000007,
-            0x00000008,
-            0x00000009, 
-            0x0000000A,
-            0x0000000C,
-            0x0000000D,
-            0x0000000E,
-            0x0000000F,
-            // Adicione mais candidatos aqui se a depuração com depurador não for uma opção
-        ]
-        M_MODE_VALUE: 0x0000000B
+            0x0000000B, // Já testado e provável
+       ]
     },
 };
 
