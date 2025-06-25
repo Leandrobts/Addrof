@@ -100,8 +100,8 @@ export const JSC_OFFSETS = {
         M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
             0x0000000B, // Já testado e provável
-            0x00000001, // Candidato comum (IsJSCapableBuffer | ViewIsWritable)
-            0x0000000E, // Candidato comum (IsJSCapableBuffer | ViewIsTypedView | ViewIsWritable)
+            0x00000001, // Novo candidato (0x1)
+            0x0000000E, // Novo candidato (0xE)
        ]
     },
 };
