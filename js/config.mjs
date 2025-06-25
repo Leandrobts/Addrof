@@ -34,6 +34,10 @@ export const JSC_OFFSETS = {
     },
     JSObject: {
         BUTTERFLY_OFFSET: 0x10,
+        // Adicionando um placeholder para ClassInfo vtable offset, se for útil para referência.
+        // JSC::JSObject::s_info é o ClassInfo para JSObject genérico. A vtable estaria em ClassInfo + 0x0.
+        // Mas ClassInfo.M_CACHED_TYPE_INFO_OFFSET é 0x8. Vamos manter o 0x8.
+        CLASS_INFO_VTABLE_OFFSET: 0x8, // Candidato para o offset da vtable dentro da ClassInfo.
     },
     JSFunction: {
         EXECUTABLE_OFFSET: 0x18, // VALIDADO
@@ -100,8 +104,7 @@ export const JSC_OFFSETS = {
         M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
             0x0000000B, // Já testado e provável
-            0x00000001,
-            0x00000002,
+            0x00000001, // Novo candidato adicionado.
        ]
     },
 };
@@ -137,7 +140,7 @@ export const WEBKIT_LIBRARY_INFO = {
         "JSC::throwConstructorCannotBeCalledAsFunctionTypeError": "0x112BBC0",
     },
     DATA_OFFSETS: {
-        "JSC::JSArrayBufferView::s_info": "0x3AE5040",
+        "JSC::JSArrayBufferView::s_info": "0x3AE5040", // Offset confirmado no binário.
         "JSC::DebuggerScope::s_info": "0x3AD5670",
         "JSC::Symbols::Uint32ArrayPrivateName": "0x3CC7968",
         "JSC::Symbols::Float32ArrayPrivateName": "0x3CC7990",
