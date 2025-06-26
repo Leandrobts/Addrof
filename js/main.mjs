@@ -1,5 +1,3 @@
-// js/main.mjs
-
 import {
     executeTypedArrayVictimAddrofAndWebKitLeak_R43,
     FNAME_MODULE
