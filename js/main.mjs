@@ -103,8 +103,8 @@ function initializeAndRunTest() {
             if (outputDiv) {
                 outputDiv.innerHTML = ''; // Clear previous logs
             }
-            console.log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject...");
-            log("Starting isolated test: Attempting to Reproduce Getter Trigger in MyComplexObject...", 'test');
+            console.log("Starting isolated test");
+           
 
             try {
                 // Execute JIT test first
@@ -117,7 +117,7 @@ function initializeAndRunTest() {
                 log(`[CRITICAL TEST ERROR] ${String(e.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}\n`, 'critical');
             } finally {
                 console.log("Isolated test concluded.");
-                log("Isolated test finished. Check the console for more details, especially if the browser crashed or a RangeError occurred.\n", 'test');
+                log("Isolated test finished.\n", 'test');
                 runBtn.disabled = false;
                 if (document.title.includes(FNAME_MODULE) && !document.title.includes("SUCCESS") && !document.title.includes("Fail") && !document.title.includes("OK") && !document.title.includes("Confirmed")) {
                     document.title = `${FNAME_MODULE}_Done`;
