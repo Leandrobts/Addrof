@@ -1,8 +1,6 @@
 // js/config.mjs
 
-// Firmware: PS4 12.02 (Com base na análise dos TXT fornecidos)
-// !! OFFSETS VALIDADOS E ATUALIZADOS COM BASE NOS ARQUIVOS DE DISASSEMBLY FORNECIDOS !!
-//    É crucial continuar validando no contexto do seu exploit específico.
+// Firmware: PS4 12.02 
 export const JSC_OFFSETS = {
     JSCell: {
         STRUCTURE_POINTER_OFFSET: 0x8,    // VALIDADO
@@ -12,7 +10,7 @@ export const JSC_OFFSETS = {
         CELL_FLAGS_OR_INDEXING_TYPE_FLATTENED_OFFSET: 0x6,
         CELL_STATE_FLATTENED_OFFSET: 0x7,
     },
-    CallFrame: { // Offsets baseados na análise de CallFrame.txt
+    CallFrame: { 
         CALLEE_OFFSET: 0x8,         // De JSC::ProtoCallFrame::callee()
         ARG_COUNT_OFFSET: 0x10,     // De JSC::ProtoCallFrame::argumentCountIncludingThis()
         THIS_VALUE_OFFSET: 0x18,    // De JSC::ProtoCallFrame::thisValue()
@@ -24,8 +22,7 @@ export const JSC_OFFSETS = {
         TYPE_INFO_MORE_FLAGS_OFFSET: 0xA,
         TYPE_INFO_INLINE_FLAGS_OFFSET: 0xC,
         AGGREGATED_FLAGS_OFFSET: 0x10,
-        VIRTUAL_PUT_OFFSET: 0x18, // CANDIDATO FORTE PARA PONTEIRO DE FUNÇÃO VIRTUAL (ex: JSObject::put)
-        PROPERTY_STORAGE_CAPACITY_OFFSET: 0x18, // Nota: Mesmo offset que VIRTUAL_PUT_OFFSET, isso é incomum. VERIFIQUE. Se for diferente, ajuste.
+        VIRTUAL_PUT_OFFSET: 0x18, // CANDIDATO FORTE PARA PONTEIRO DE FUNÇÃO VIRTUAL
         PROPERTY_TABLE_OFFSET: 0x20,
         GLOBAL_OBJECT_OFFSET: 0x28,
         PROTOTYPE_OFFSET: 0x30,
@@ -43,7 +40,7 @@ export const JSC_OFFSETS = {
         GLOBAL_OBJECT_OFFSET: 0x10, // VALIDADO
     },
     ClassInfo: { // NOVO: Adicionado para a estratégia de vazamento de ClassInfo
-        M_CACHED_TYPE_INFO_OFFSET: 0x8, // Offset comum para m_cachedTypeInfo dentro de ClassInfo. VERIFIQUE!
+        M_CACHED_TYPE_INFO_OFFSET: 0x8, // Offset comum para m_cachedTypeInfo dentro de ClassInfo.
     },
     ArrayBuffer: {
         CONTENTS_IMPL_POINTER_OFFSET: 0x10, // VALIDADO - Ponteiro para os dados brutos do buffer
@@ -51,9 +48,6 @@ export const JSC_OFFSETS = {
         DATA_POINTER_COPY_OFFSET_FROM_JSARRAYBUFFER_START: 0x20, // VALIDADO - Cópia do ponteiro de dados (redundante?)
         SHARING_MODE_OFFSET: 0x28, // Offset do sharing mode (ArrayBuffer)
         IS_RESIZABLE_FLAGS_OFFSET: 0x30, // Offset de flags de redimensionamento (ArrayBuffer)
-        
-        // Novos offsets identificados na análise de sub_1C01140 (possivelmente no ArrayBuffer real)
-        // Estes são candidatos com base na análise de pseudocódigo.
         ARRAYBUFFER_REAL_PTR_POSSIBLE_M_VECTOR: 0x28, // a1[5] - base de dados no loop de limpeza/validação
         ARRAYBUFFER_FIELD_0X30: 0x30, // *((_DWORD *)a1 + 12) - usado em sub_1C01140
         ARRAYBUFFER_FIELD_0X34: 0x34, // *((_DWORD *)a1 + 13) - usado como contador/tamanho no loop
@@ -100,7 +94,7 @@ export const JSC_OFFSETS = {
         VTABLE_OFFSET_0x50_METHOD: 0x50, // Método chamado por a1->vtable + 80LL
 
         // NOVO: Valor a testar para M_MODE_VALUE
-        // O valor 0x0000000B é um candidato inicial. Adicione outros se 0x0000000B não funcionar.
+        // O valor 0x0000000B é um candidato inicial.
         // Valores comuns em outras versões: 0x00000001, 0x00000003, 0x00000004, 0x0000000E, 0x0000000F
         M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
