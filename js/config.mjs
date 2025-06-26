@@ -1,5 +1,3 @@
-// js/config.mjs
-
 // Firmware: PS4 12.02 
 export const JSC_OFFSETS = {
     JSCell: {
