@@ -94,9 +94,9 @@ export const JSC_OFFSETS = {
         // NOVO: Valor a testar para M_MODE_VALUE
         // O valor 0x0000000B é um candidato inicial.
         // Valores comuns em outras versões: 0x00000001, 0x00000003, 0x00000004, 0x0000000E, 0x0000000F
-        M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado
+        M_MODE_VALUE: 0x0000000B, // Valor padrão que será o primeiro a ser testado Já testado e provável (Bitfield: IsJSCapableBuffer | IsTypedView | IsDetached)
         M_MODE_CANDIDATES: [ // Lista de candidatos para tentativa e erro
-            0x0000000B, // Já testado e provável (Bitfield: IsJSCapableBuffer | IsTypedView | IsDetached)
+            
             0x00000001, // Outro candidato comum (IsJSCapableBuffer)
             0x0000000E, // Outro candidato comum (IsJSCapableBuffer | IsTypedView | IsDetached | CanBeShared)
             0x0000000F, // Outro candidato (com IsResizable)
